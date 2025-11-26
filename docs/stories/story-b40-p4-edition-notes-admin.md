@@ -1,7 +1,7 @@
 # Story B40-P4: Edition des notes côté Admin
 
 **Statut:** READY TO BUILD  
-**Épopée:** [EPIC-B40 – Notes & Encaissement Libre](../epics/epic-b40-caisse-notes-et-encaissement-libre.md)  
+**Épopée:** [EPIC-B40 – Notes Tickets & Bandeau KPI](../epics/epic-b40-caisse-notes-et-kpi.md)  
 **Module:** Frontend Admin  
 **Priorité:** P2
 
