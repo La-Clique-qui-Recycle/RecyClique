@@ -44,14 +44,32 @@ const CategoryDescription = styled.div`
   color: #666;
 `
 
+const ShortcutBadge = styled.div`
+  position: absolute;
+  bottom: 0.5rem;
+  left: 0.5rem;
+  background: rgba(44, 85, 48, 0.9);
+  color: white;
+  font-size: 0.75rem;
+  font-weight: bold;
+  padding: 0.125rem 0.25rem;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  pointer-events: none;
+`
+
 interface CategorySelectorProps {
   onSelect: (category: string) => void
   selectedCategory?: string
+  shortcutKeys?: { [categoryId: string]: string }
 }
 
 export const CategorySelector: React.FC<CategorySelectorProps> = ({
   onSelect,
-  selectedCategory
+  selectedCategory,
+  shortcutKeys = {}
 }) => {
   const { 
     activeCategories, 
@@ -102,11 +120,25 @@ export const CategorySelector: React.FC<CategorySelectorProps> = ({
           data-testid={`category-${category.id}`}
           data-selected={selectedCategory === category.id ? 'true' : 'false'}
           aria-pressed={selectedCategory === category.id}
-          aria-label={`Sélectionner la catégorie ${category.name}`}
+          aria-label={
+            shortcutKeys[category.id]
+              ? `Sélectionner la catégorie ${category.name}. Raccourci clavier: ${shortcutKeys[category.id].toUpperCase()}`
+              : `Sélectionner la catégorie ${category.name}`
+          }
+          style={{ position: 'relative' }}
+          tabIndex={-1}
         >
           <CategoryName>{category.name}</CategoryName>
           {category.description && (
             <CategoryDescription>{category.description}</CategoryDescription>
+          )}
+          {shortcutKeys[category.id] && (
+            <ShortcutBadge
+              aria-hidden="true"
+              data-testid={`category-shortcut-${category.id}`}
+            >
+              {shortcutKeys[category.id].toUpperCase()}
+            </ShortcutBadge>
           )}
         </CategoryButton>
       ))}

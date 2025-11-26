@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import styled from 'styled-components';
-import { Receipt, Plus, X, Eye, Calendar, User, Package, Weight } from 'lucide-react';
+import { Button } from '@mantine/core';
+import { Receipt, Plus, X, Eye, Calendar, User, Package, Weight, List } from 'lucide-react';
 import { useReception } from '../contexts/ReceptionContext';
 import { useAuthStore } from '../stores/authStore';
 import { getReceptionTickets } from '../services/api';
@@ -371,6 +372,10 @@ const Reception: React.FC = () => {
         </Title>
         <UserInfo>
           <UserName>Bonjour, {user?.first_name || user?.last_name || user?.username || 'Utilisateur'}</UserName>
+          <Button onClick={() => navigate('/reception/dashboard')} variant="light" size="sm">
+            <List size={16} />
+            Voir tous les tickets
+          </Button>
           <CloseButton onClick={handleClosePoste} disabled={isLoading}>
             <X size={20} />
             Terminer ma session

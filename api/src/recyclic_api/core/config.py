@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     BREVO_WEBHOOK_SECRET: str | None = None
     EMAIL_FROM_NAME: str = "Recyclic"
     EMAIL_FROM_ADDRESS: str = "noreply@recyclic.fr"
+
+    # Reception Live Stats Feature Flag
+    LIVE_RECEPTION_STATS_ENABLED: bool = True
     
     model_config = ConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

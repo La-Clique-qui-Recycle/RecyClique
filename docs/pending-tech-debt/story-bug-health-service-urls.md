@@ -1,8 +1,9 @@
 ---
-cleanup_status: tech_debt
-cleanup_destination: docs/pending-tech-debt/
-cleanup_date: 2025-11-17T20:53:14.830413
-original_path: docs/stories/story-bug-health-service-urls.md
+categorized_by: story-audit-and-sort
+categorized_date: 2025-11-20
+category: debt
+original_path: docs/backup-pre-cleanup/story-bug-health-service-urls.md
+rationale: mentions debt/stabilization/fix
 ---
 
 # Story (Bug): Corriger les Appels API du Service de Santé

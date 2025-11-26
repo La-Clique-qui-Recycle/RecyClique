@@ -30,7 +30,7 @@ const AdminCashRegisters = lazy(() => import('./pages/Admin/CashRegisters.tsx'))
 const AdminSites = lazy(() => import('./pages/Admin/Sites.tsx'));
 const SessionManager = lazy(() => import('./pages/Admin/SessionManager.tsx'));
 const AdminCategories = lazy(() => import('./pages/Admin/Categories.tsx'));
-const ReceptionDashboard = lazy(() => import('./pages/Admin/ReceptionDashboard.tsx'));
+const AdminReceptionDashboard = lazy(() => import('./pages/Admin/ReceptionDashboard.tsx'));
 const ReceptionReports = lazy(() => import('./pages/Admin/ReceptionReports.tsx'));
 const CashSessionDetail = lazy(() => import('./pages/Admin/CashSessionDetail.tsx'));
 const AdminSettings = lazy(() => import('./pages/Admin/Settings.tsx'));
@@ -44,6 +44,7 @@ const ForgotPassword = lazy(() => import('./pages/ForgotPassword.tsx'));
 const ResetPassword = lazy(() => import('./pages/ResetPassword.tsx'));
 const TelegramAuth = lazy(() => import('./pages/TelegramAuth.jsx'));
 const Reception = lazy(() => import('./pages/Reception.tsx'));
+const ReceptionDashboard = lazy(() => import('./pages/ReceptionDashboard.tsx'));
 const TicketForm = lazy(() => import('./pages/Reception/TicketForm.tsx'));
 const TicketDetail = lazy(() => import('./pages/Reception/TicketDetail.tsx'));
 const TicketView = lazy(() => import('./pages/Reception/TicketView.tsx'));
@@ -188,6 +189,7 @@ function App() {
             <Route path="/cash-register/sale" element={<ProtectedRoute requiredPermission="caisse.access"><Sale /></ProtectedRoute>} />
             <Route path="/cash-register/session/close" element={<ProtectedRoute requiredPermission="caisse.access"><CloseSession /></ProtectedRoute>} />
             <Route path="/reception" element={<ProtectedRoute requiredPermission="reception.access"><Reception /></ProtectedRoute>} />
+            <Route path="/reception/dashboard" element={<ProtectedRoute requiredPermission="reception.access"><ReceptionDashboard /></ProtectedRoute>} />
             <Route path="/reception/ticket" element={<ProtectedRoute requiredPermission="reception.access"><TicketForm /></ProtectedRoute>} />
             <Route path="/reception/ticket/:ticketId" element={<ProtectedRoute requiredPermission="reception.access"><TicketForm /></ProtectedRoute>} />
             <Route path="/reception/ticket/:ticketId/view" element={<ProtectedRoute requiredPermission="reception.access"><TicketView /></ProtectedRoute>} />
@@ -200,7 +202,7 @@ function App() {
               <Route index element={<DashboardHomePage />} />
               <Route path="dashboard" element={<DashboardHomePage />} />
               <Route path="cash-sessions/:id" element={<CashSessionDetail />} />
-              <Route path="reception-stats" element={<Navigate to="/" replace />} />
+              <Route path="reception-stats" element={<AdminReceptionDashboard />} />
               <Route path="reception-reports" element={<ReceptionReports />} />
               <Route path="reports" element={<ReportsHub />} />
               <Route path="reports/cash-sessions" element={<AdminReports />} />

@@ -242,6 +242,12 @@ export const exportReceptionLignesCSV = async (startDate, endDate, categoryId) =
   return { blob: response.data, filename };
 };
 
+// Reception Live Stats (B38-P2)
+export const getReceptionLiveStats = async () => {
+  const response = await api.get('/v1/reception/stats/live');
+  return response.data;
+};
+
 // Reception Categories
 export const getReceptionCategories = async () => {
   const response = await api.get('/v1/reception/categories');

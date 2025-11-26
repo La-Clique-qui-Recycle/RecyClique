@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import styled from 'styled-components';
 import { Text } from '@mantine/core';
 import CategorySelector from './CategorySelector';
@@ -9,7 +9,9 @@ import PresetButtonGrid from '../presets/PresetButtonGrid';
 import PriceCalculator from '../presets/PriceCalculator';
 import { useCategoryStore } from '../../stores/categoryStore';
 import { usePresetStore } from '../../stores/presetStore';
+import { PresetButtonWithCategory } from '../../services/presetService';
 import { keyboardShortcutHandler } from '../../utils/keyboardShortcuts';
+import { cashKeyboardShortcutHandler } from '../../utils/cashKeyboardShortcuts';
 import {
   applyDigit,
   applyDecimalPoint,
@@ -18,6 +20,8 @@ import {
 } from '../../utils/weightMask';
 import { computeLineAmount, formatLineAmount } from '../../utils/lineAmount';
 import { createAZERTYHandler } from '../../utils/azertyKeyboard';
+import { useFeatureFlag } from '../../utils/features';
+import { useCashWizardStepState, CashWizardStep } from '../../hooks/useCashWizardStepState';
 
 // Removed TwoColumnLayout - numpad is now in parent Sale.tsx
 
@@ -75,6 +79,8 @@ const CategoryName = styled.div`
 const CategoryDescription = styled.div`
   font-size: 0.85rem;
   color: #666;
+  text-align: right;
+  padding-right: 3rem; /* Espace pour éviter le badge de raccourci */
 `;
 
 const ShortcutBadge = styled.div`
@@ -93,21 +99,54 @@ const ShortcutBadge = styled.div`
   pointer-events: none;
 `;
 
-const ModeButton = styled.button<{ $active?: boolean }>`
+const ModeButton = styled.button<{ $active?: boolean, $completed?: boolean, $inactive?: boolean }>`
   padding: 0.6rem 1.25rem;
   min-height: 44px;
-  border: 2px solid ${props => props.$active ? '#2c5530' : '#ddd'};
-  background: ${props => props.$active ? '#2c5530' : 'white'};
-  color: ${props => props.$active ? 'white' : '#333'};
+  border: 2px solid ${props => {
+    if (props.$active) return '#2c5530';
+    if (props.$completed) return '#4CAF50';
+    return '#ddd';
+  }};
+  background: ${props => {
+    if (props.$active) return '#2c5530';
+    if (props.$completed) return '#e8f5e8';
+    return 'white';
+  }};
+  color: ${props => {
+    if (props.$active) return '#ffffff';
+    if (props.$completed) return '#2c5530';
+    return '#333';
+  }};
   border-radius: 6px;
   cursor: pointer;
   transition: all 0.2s;
   font-weight: 500;
   font-size: 0.9rem;
+  position: relative;
+
+  &::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 8px;
+    transform: translateY(-50%);
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: ${props => {
+      if (props.$active) return '#fff';
+      if (props.$completed) return '#4CAF50';
+      return '#ccc';
+    }};
+  }
 
   &:hover {
     border-color: #2c5530;
-    background: ${props => props.$active ? '#2c5530' : '#f0f8f0'};
+    background: ${props => {
+      if (props.$active) return '#2c5530';
+      if (props.$completed) return '#e8f5e8';
+      return '#f0f8f0';
+    }};
   }
 
   &:disabled {
@@ -271,55 +310,163 @@ export interface SaleWizardProps {
   currentMode: 'quantity' | 'price' | 'weight' | 'idle';
 }
 
-type WizardStep = 'category' | 'subcategory' | 'quantity' | 'weight' | 'price';
-
 export const SaleWizard: React.FC<SaleWizardProps> = ({ onItemComplete, numpadCallbacks, currentMode }) => {
   const { getCategoryById, activeCategories } = useCategoryStore();
   const { selectedPreset, notes, clearSelection } = usePresetStore();
+  const {
+    stepState,
+    transitionToStep,
+    handleCategorySelected,
+    handleSubcategorySelected,
+    handleWeightInputStarted,
+    handleWeightInputCompleted,
+    handleQuantityInputCompleted,
+    handlePriceInputCompleted
+  } = useCashWizardStepState();
 
-  const [currentStep, setCurrentStep] = useState<WizardStep>('category');
+  // Feature flag for cash keyboard shortcuts
+  const enableCashHotkeys = useFeatureFlag('enableCashHotkeys');
+
   const [selectedCategory, setSelectedCategory] = useState<string>('');
   const [selectedSubcategory, setSelectedSubcategory] = useState<string>('');
   const [weight, setWeight] = useState<string>('');
   const [weightError, setWeightError] = useState<string>('');
+  const [shortcutKeys, setShortcutKeys] = useState<{ [categoryId: string]: string }>({});
 
   // État local pour gérer les presets/notes par transaction (au lieu du store global)
   const [currentTransactionPreset, setCurrentTransactionPreset] = useState<PresetButtonWithCategory | null>(null);
   const [currentTransactionNotes, setCurrentTransactionNotes] = useState<string>('');
 
+
   // Initialize keyboard shortcuts when categories are available
   useEffect(() => {
-    if (activeCategories.length > 0) {
-      // Initialize shortcuts for the current step
-      const categoriesToUse = currentStep === 'category'
-        ? activeCategories.filter(category => !category.parent_id)
-        : currentStep === 'subcategory'
-          ? activeCategories.filter(category => category.parent_id === selectedCategory)
-          : [];
+    if (activeCategories.length === 0) {
+      return;
+    }
+
+    // Root categories (no parent) sorted like CategorySelector
+    const rootCategories = activeCategories
+      .filter(category => !category.parent_id)
+      .sort((a, b) => {
+        if (a.display_order !== b.display_order) {
+          return a.display_order - b.display_order;
+        }
+        return a.name.localeCompare(b.name);
+      });
+
+    // Subcategories of the currently selected category (will be sorted by AZERTY shortcut after initialization)
+    const subcategories = selectedCategory
+      ? activeCategories.filter(category => category.parent_id === selectedCategory)
+      : [];
+
+    // Handle cash keyboard shortcuts if feature flag is enabled
+    if (enableCashHotkeys) {
+      const newShortcutKeys: { [categoryId: string]: string } = {};
+
+      if (stepState.currentStep === 'category') {
+        // AZERTY mapping for root categories
+        cashKeyboardShortcutHandler.initialize(
+          rootCategories.map(cat => ({ id: cat.id, name: cat.name })),
+          handleCategorySelect
+        );
+
+        cashKeyboardShortcutHandler.getShortcuts().forEach(shortcut => {
+          newShortcutKeys[shortcut.categoryId] = shortcut.key;
+        });
+
+        setShortcutKeys(newShortcutKeys);
+
+        if (rootCategories.length > 0) {
+          cashKeyboardShortcutHandler.activate();
+        } else {
+          cashKeyboardShortcutHandler.deactivate();
+        }
+      } else if (stepState.currentStep === 'subcategory' && subcategories.length > 0) {
+        // AZERTY mapping for subcategories of the selected category
+        cashKeyboardShortcutHandler.initialize(
+          subcategories.map(cat => ({ id: cat.id, name: cat.name })),
+          handleSubcategorySelect
+        );
+
+        cashKeyboardShortcutHandler.getShortcuts().forEach(shortcut => {
+          newShortcutKeys[shortcut.categoryId] = shortcut.key;
+        });
+
+        setShortcutKeys(newShortcutKeys);
+
+        cashKeyboardShortcutHandler.activate();
+      } else {
+        // Other steps: no category shortcuts
+        cashKeyboardShortcutHandler.deactivate();
+        setShortcutKeys({});
+      }
+
+      // Deactivate legacy handler when using new cash shortcuts
+      keyboardShortcutHandler.deactivate();
+    } else {
+      // Legacy keyboardShortcutHandler (backward compatibility)
+      const categoriesForLegacy =
+        stepState.currentStep === 'category'
+          ? rootCategories
+          : stepState.currentStep === 'subcategory' && subcategories.length > 0
+            ? subcategories
+            : [];
 
       keyboardShortcutHandler.initialize(
-        categoriesToUse,
-        currentStep === 'category' ? handleCategorySelect : handleSubcategorySelect
+        categoriesForLegacy,
+        stepState.currentStep === 'category' ? handleCategorySelect : handleSubcategorySelect
       );
 
-      if (categoriesToUse.length > 0 && (currentStep === 'category' || currentStep === 'subcategory')) {
+      setShortcutKeys({});
+
+      if (
+        categoriesForLegacy.length > 0 &&
+        (stepState.currentStep === 'category' || stepState.currentStep === 'subcategory')
+      ) {
         keyboardShortcutHandler.activate();
       } else {
         keyboardShortcutHandler.deactivate();
       }
+
+      // Deactivate cash shortcuts when not using them
+      cashKeyboardShortcutHandler.deactivate();
     }
 
-    // Cleanup on unmount
+    // Cleanup on unmount / step change
     return () => {
       keyboardShortcutHandler.deactivate();
+      cashKeyboardShortcutHandler.deactivate();
     };
-  }, [activeCategories, currentStep, selectedCategory]);
+  }, [activeCategories, stepState.currentStep, selectedCategory, enableCashHotkeys]);
 
   // Use numpad state from parent - now properly separated
   const quantity = numpadCallbacks.quantityValue;
   const quantityError = numpadCallbacks.quantityError;
   const price = numpadCallbacks.priceValue;
   const priceError = numpadCallbacks.priceError;
+
+
+  // Helper function to sort categories/subcategories by AZERTY shortcut order
+  const sortByAZERTYShortcut = useCallback((items: typeof activeCategories, shortcuts: { [categoryId: string]: string }) => {
+    const keyOrder = 'AZERTYUIOPQSDFGHJKLMWXCVBN';
+    return [...items].sort((a, b) => {
+      const keyA = shortcuts[a.id]?.toUpperCase() || '';
+      const keyB = shortcuts[b.id]?.toUpperCase() || '';
+      const posA = keyOrder.indexOf(keyA);
+      const posB = keyOrder.indexOf(keyB);
+      
+      // Items with shortcuts come first, sorted by AZERTY order
+      if (posA !== -1 && posB !== -1) {
+        return posA - posB;
+      }
+      // Items without shortcuts come last, sorted by name
+      if (posA === -1 && posB === -1) {
+        return a.name.localeCompare(b.name);
+      }
+      // Items with shortcuts come before items without
+      return posA !== -1 ? -1 : 1;
+    });
+  }, []);
 
   // Keyboard handling removed - numpad in parent handles all input
 
@@ -345,7 +492,15 @@ export const SaleWizard: React.FC<SaleWizardProps> = ({ onItemComplete, numpadCa
       return false;
     }
     const num = parseFloat(value);
-    if (isNaN(num) || num < 0.01 || num > 9999.99) {
+    if (isNaN(num)) {
+      numpadCallbacks.setPriceError('Prix invalide');
+      return false;
+    }
+    if (num < 0) {
+      numpadCallbacks.setPriceError('Prix négatif interdit');
+      return false;
+    }
+    if (num < 0.01 || num > 9999.99) {
       numpadCallbacks.setPriceError('Prix doit être entre 0.01€ et 9999.99€');
       return false;
     }
@@ -359,8 +514,8 @@ export const SaleWizard: React.FC<SaleWizardProps> = ({ onItemComplete, numpadCa
       return false;
     }
     const num = parseInt(value, 10);
-    if (isNaN(num) || num <= 0 || num > 9999 || !Number.isInteger(parseFloat(value))) {
-      numpadCallbacks.setQuantityError('Quantité doit être un entier positif entre 1 et 9999');
+    if (isNaN(num) || num < 1 || num > 9999 || !Number.isInteger(parseFloat(value))) {
+      numpadCallbacks.setQuantityError('La quantité minimale est 1');
       return false;
     }
     numpadCallbacks.setQuantityError('');
@@ -370,7 +525,7 @@ export const SaleWizard: React.FC<SaleWizardProps> = ({ onItemComplete, numpadCa
   const isQuantityValid = useMemo(() => {
     if (!quantity) return false;
     const num = parseInt(quantity, 10);
-    return !isNaN(num) && num > 0 && num <= 9999 && Number.isInteger(parseFloat(quantity));
+    return !isNaN(num) && num >= 1 && num <= 9999 && Number.isInteger(parseFloat(quantity));
   }, [quantity]);
 
   const isWeightValid = useMemo(() => {
@@ -386,26 +541,35 @@ export const SaleWizard: React.FC<SaleWizardProps> = ({ onItemComplete, numpadCa
       return true;
     }
 
+    // B39-P4: Toujours permettre la saisie manuelle du prix, même avec tarif catalogue
+    // Le prix catalogue sert de valeur par défaut mais peut être modifié
+
     const cat = getCategoryById(selectedCategory);
     const hasMax = cat?.max_price != null && Number(cat.max_price) > 0;
     const hasMin = cat?.price != null;
 
-    // Si pas de max_price (prix fixe), utiliser automatiquement le prix minimum
-    if (hasMin && !hasMax) {
-      return true; // Prix minimum sera utilisé automatiquement
+    // Si pas de prix saisi et pas de preset, utiliser le prix catalogue par défaut
+    if (!price) {
+      if (hasMin && !hasMax) {
+        // Prix fixe catalogue : utiliser automatiquement comme valeur par défaut
+        return true;
+      }
+      // Pas de prix par défaut disponible
+      return false;
     }
 
-    // Sinon, validation manuelle du prix
-    if (!price) return false;
+    // Validation du prix saisi manuellement
     const num = parseFloat(price);
     if (isNaN(num) || num < 0 || num > 9999.99) return false;
 
-    // Validation entre price(min) et max_price si max_price>0
+    // Validation entre price(min) et max_price si max_price>0 (fourchette de prix)
     if (hasMax && hasMin) {
       const min = Number(cat!.price);
       const max = Number(cat!.max_price);
       return num >= min && num <= max;
     }
+
+    // Prix libre ou prix fixe modifié manuellement : toujours valide
     return true;
   }, [price, selectedCategory, getCategoryById, currentTransactionPreset]);
 
@@ -418,72 +582,276 @@ export const SaleWizard: React.FC<SaleWizardProps> = ({ onItemComplete, numpadCa
     const hasChildren = activeCategories.some(cat => cat.parent_id === categoryId);
 
     if (hasChildren) {
-      setCurrentStep('subcategory');
+      // Go to subcategory step for subcategory selection
+      transitionToStep('subcategory');
       numpadCallbacks.setMode('idle');
     } else {
-      // No children, go directly to weight
-      setCurrentStep('weight');
+      // No children, go to weight step
+      transitionToStep('weight');
       // Initialize numpad for weight input
       numpadCallbacks.setWeightValue('');
       numpadCallbacks.setWeightError('');
       numpadCallbacks.setMode('weight');
+
+      // Auto-focus sur le champ poids après sélection de catégorie (comme en Réception)
+      setTimeout(() => {
+        const weightInput = document.querySelector('[data-testid="weight-input"]');
+        if (weightInput instanceof HTMLElement) {
+          weightInput.focus();
+        }
+      }, 100);
     }
   };
 
-  // Navigation non-linéaire - permet de sauter à n'importe quelle étape
-  const goToStep = (step: WizardStep) => {
-    // Validation des prérequis pour chaque étape
-    switch (step) {
+  // Ordre de tabulation linéaire selon séquence Reception
+  const tabOrder: CashWizardStep[] = ['category', 'subcategory', 'weight', 'quantity', 'price'];
+
+  // Détermine quels domaines sont actifs (déjà renseignés) pour la navigation TAB
+  const getActiveDomains = useCallback((): CashWizardStep[] => {
+    const active: CashWizardStep[] = ['category']; // Catégorie toujours active
+    
+    // Sous-catégorie active seulement si catégorie sélectionnée ET sous-catégories existent
+    // (même si pas encore sélectionnée, elle est disponible pour navigation)
+    if (selectedCategory) {
+      const hasSubcategories = activeCategories.some(cat => cat.parent_id === selectedCategory);
+      if (hasSubcategories) {
+        active.push('subcategory');
+      }
+    }
+    
+    // Poids actif si catégorie (ou sous-catégorie si nécessaire) sélectionnée
+    // (même si pas encore renseigné, il est disponible pour navigation)
+    if (selectedCategory) {
+      const hasSubcategories = activeCategories.some(cat => cat.parent_id === selectedCategory);
+      if (!hasSubcategories || selectedSubcategory) {
+        active.push('weight');
+      }
+    }
+    
+    // Quantité active seulement si poids déjà renseigné
+    if (numpadCallbacks.weightValue && parseFloat(numpadCallbacks.weightValue) > 0) {
+      active.push('quantity');
+    }
+    
+    // Prix actif seulement si quantité déjà complétée (pas juste la valeur par défaut '1')
+    if (stepState.quantityState === 'completed') {
+      active.push('price');
+    }
+    
+    return active;
+  }, [selectedCategory, selectedSubcategory, activeCategories, numpadCallbacks.weightValue, stepState.quantityState]);
+
+  // Navigation tab uniquement entre domaines actifs
+  const navigateToNextStep = useCallback((): void => {
+    const activeDomains = getActiveDomains();
+    if (activeDomains.length === 0) return;
+    
+    const currentIndex = activeDomains.indexOf(stepState.currentStep);
+    let nextIndex: number;
+    
+    // Si on est au dernier domaine, boucler vers le premier
+    if (currentIndex === -1 || currentIndex === activeDomains.length - 1) {
+      nextIndex = 0;
+    } else {
+      nextIndex = currentIndex + 1;
+    }
+    
+    const nextStep = activeDomains[nextIndex];
+    transitionToStep(nextStep);
+    
+    switch (nextStep) {
       case 'category':
-        setCurrentStep('category');
         numpadCallbacks.setMode('idle');
         break;
       case 'subcategory':
-        if (selectedCategory && activeCategories.some(cat => cat.parent_id === selectedCategory)) {
-          setCurrentStep('subcategory');
-          numpadCallbacks.setMode('idle');
-        }
+        numpadCallbacks.setMode('idle');
         break;
       case 'weight':
-        if (selectedCategory) {
-          setCurrentStep('weight');
-          numpadCallbacks.setMode('weight');
-        }
+        numpadCallbacks.setMode('weight');
         break;
       case 'quantity':
-        if (weight) {
-          setCurrentStep('quantity');
-          numpadCallbacks.setMode('quantity');
-        }
+        numpadCallbacks.setMode('quantity');
         break;
       case 'price':
-        if (quantity) {
-          setCurrentStep('price');
-          numpadCallbacks.setMode('price');
-        }
+        numpadCallbacks.setMode('price');
         break;
     }
-    
-    // Gestion du focus pour l'accessibilité
-    setTimeout(() => {
-      const focusableElement = document.querySelector(`[data-step="${step}"] input, [data-step="${step}"] button, [data-step="${step}"] [tabindex="0"]`);
-      if (focusableElement instanceof HTMLElement) {
-        focusableElement.focus();
-      }
-    }, 100);
-  };
+  }, [stepState.currentStep, getActiveDomains, transitionToStep, numpadCallbacks]);
 
-  const handleStepNavigation = (step: WizardStep) => {
-    goToStep(step);
-  };
+  const navigateToPreviousStep = useCallback((): void => {
+    const activeDomains = getActiveDomains();
+    if (activeDomains.length === 0) return;
+    
+    const currentIndex = activeDomains.indexOf(stepState.currentStep);
+    let prevIndex: number;
+    
+    // Si on est au premier domaine, boucler vers le dernier
+    if (currentIndex === -1 || currentIndex === 0) {
+      prevIndex = activeDomains.length - 1;
+    } else {
+      prevIndex = currentIndex - 1;
+    }
+    
+    const prevStep = activeDomains[prevIndex];
+    transitionToStep(prevStep);
+    
+    switch (prevStep) {
+      case 'category':
+        numpadCallbacks.setMode('idle');
+        break;
+      case 'subcategory':
+        numpadCallbacks.setMode('idle');
+        break;
+      case 'weight':
+        numpadCallbacks.setMode('weight');
+        break;
+      case 'quantity':
+        numpadCallbacks.setMode('quantity');
+        break;
+      case 'price':
+        numpadCallbacks.setMode('price');
+        break;
+    }
+  }, [stepState.currentStep, getActiveDomains, transitionToStep, numpadCallbacks]);
+
+  // Refs pour stabiliser les valeurs dans le gestionnaire TAB (après déclaration des fonctions)
+  const stepStateRef = useRef(stepState);
+  const selectedCategoryRef = useRef(selectedCategory);
+  const selectedSubcategoryRef = useRef(selectedSubcategory);
+  const numpadCallbacksRef = useRef(numpadCallbacks);
+  const quantityRef = useRef(quantity);
+  const getActiveDomainsRef = useRef(getActiveDomains);
+  const navigateToNextStepRef = useRef(navigateToNextStep);
+  const navigateToPreviousStepRef = useRef(navigateToPreviousStep);
+  
+  // Mettre à jour les refs à chaque changement
+  useEffect(() => {
+    stepStateRef.current = stepState;
+    selectedCategoryRef.current = selectedCategory;
+    selectedSubcategoryRef.current = selectedSubcategory;
+    numpadCallbacksRef.current = numpadCallbacks;
+    quantityRef.current = quantity;
+    getActiveDomainsRef.current = getActiveDomains;
+    navigateToNextStepRef.current = navigateToNextStep;
+    navigateToPreviousStepRef.current = navigateToPreviousStep;
+  }, [stepState, selectedCategory, selectedSubcategory, numpadCallbacks, quantity, getActiveDomains, navigateToNextStep, navigateToPreviousStep]);
+
+  // Gestionnaire d'événements Tab personnalisé - navigation uniquement entre domaines actifs
+  useEffect(() => {
+    const handleTabKey = (event: KeyboardEvent) => {
+      // Ne gérer que les événements Tab
+      if (event.key !== 'Tab') {
+        return;
+      }
+
+      // Vérifier si le wizard existe dans le DOM et est visible
+      const wizardElement = document.querySelector('[data-wizard="cash"]') as HTMLElement;
+      if (!wizardElement) {
+        return; // Pas de wizard, laisser le comportement par défaut
+      }
+
+      // Vérifier si le wizard est visible (pas caché par display:none ou visibility:hidden)
+      const wizardStyle = window.getComputedStyle(wizardElement);
+      if (wizardStyle.display === 'none' || wizardStyle.visibility === 'hidden') {
+        return; // Wizard caché, laisser le comportement par défaut
+      }
+
+      // Vérifier si l'élément actif est dans le wizard
+      const activeElement = document.activeElement as HTMLElement;
+      const target = (event.target instanceof HTMLElement ? event.target : activeElement) as HTMLElement;
+      
+      // Vérifier si l'élément cible ou actif est dans le wizard
+      // Si l'élément actif est body ou html, on considère qu'on est dans le wizard si le wizard est visible
+      // Sinon, vérifier si l'élément est dans le wizard
+      const isInWizard = !activeElement || 
+                         activeElement === document.body || 
+                         activeElement === document.documentElement ||
+                         wizardElement.contains(target) || 
+                         wizardElement.contains(activeElement) ||
+                         (target && target.closest && target.closest('[data-wizard="cash"]') === wizardElement);
+
+      // Si on n'est pas dans le wizard, laisser le comportement par défaut
+      if (!isInWizard) {
+        return;
+      }
+
+      // TOUJOURS empêcher le comportement par défaut de TAB dans le wizard IMMÉDIATEMENT
+      // Appeler preventDefault AVANT toute autre logique pour garantir l'interception
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation(); // Empêcher d'autres gestionnaires d'être appelés
+
+      // Utiliser les refs pour obtenir les valeurs actuelles sans dépendre des closures
+      const currentStepState = stepStateRef.current;
+      const currentGetActiveDomains = getActiveDomainsRef.current;
+      const currentNavigateToNext = navigateToNextStepRef.current;
+      const currentNavigateToPrev = navigateToPreviousStepRef.current;
+
+      // Calculer la prochaine étape avant de naviguer
+      const activeDomains = currentGetActiveDomains();
+      if (activeDomains.length === 0) return;
+      
+      const currentIndex = activeDomains.indexOf(currentStepState.currentStep);
+      let targetStep: CashWizardStep;
+      
+      if (event.shiftKey) {
+        // Navigation arrière
+        const prevIndex = currentIndex === -1 || currentIndex === 0 
+          ? activeDomains.length - 1 
+          : currentIndex - 1;
+        targetStep = activeDomains[prevIndex];
+        currentNavigateToPrev();
+      } else {
+        // Navigation avant
+        const nextIndex = currentIndex === -1 || currentIndex === activeDomains.length - 1
+          ? 0
+          : currentIndex + 1;
+        targetStep = activeDomains[nextIndex];
+        currentNavigateToNext();
+      }
+
+      // Focus sur le premier élément focusable de l'étape cible
+      setTimeout(() => {
+        // Essayer d'abord le bouton du fil d'Ariane correspondant
+        const breadcrumbButton = document.querySelector(
+          `[role="tab"][aria-controls="step-${targetStep}"]`
+        );
+        if (breadcrumbButton instanceof HTMLButtonElement && !breadcrumbButton.disabled) {
+          breadcrumbButton.focus();
+          return;
+        }
+
+        // Sinon, chercher un élément focusable dans l'étape
+        const focusableElement = document.querySelector(
+          `[data-step="${targetStep}"] button:not([disabled]):not([tabindex="-1"]), [data-step="${targetStep}"] input:not([disabled]), [data-step="${targetStep}"] [tabindex="0"]:not([disabled])`
+        );
+        if (focusableElement instanceof HTMLElement) {
+          focusableElement.focus();
+        }
+      }, 100);
+    };
+
+    // Attacher le gestionnaire sur document avec capture phase pour intercepter tôt
+    // Utiliser capture phase pour intercepter avant les autres gestionnaires
+    document.addEventListener('keydown', handleTabKey, true);
+    return () => document.removeEventListener('keydown', handleTabKey, true);
+  }, []); // Dépendances vides - utilise les refs pour les valeurs actuelles
 
   const handleSubcategorySelect = (subcategoryId: string) => {
     setSelectedSubcategory(subcategoryId);
-    setCurrentStep('weight');
+    handleSubcategorySelected();
     // Initialize numpad for weight input
     numpadCallbacks.setWeightValue('');
     numpadCallbacks.setWeightError('');
     numpadCallbacks.setMode('weight');
+
+    // Auto-focus sur le champ poids après sélection de sous-catégorie
+    setTimeout(() => {
+      const weightInput = document.querySelector('[data-testid="weight-input"]');
+      if (weightInput instanceof HTMLElement) {
+        weightInput.focus();
+      }
+    }, 100);
   };
 
   const handleQuantityConfirm = () => {
@@ -495,30 +863,47 @@ export const SaleWizard: React.FC<SaleWizardProps> = ({ onItemComplete, numpadCa
 
     // Nouvelle logique:
     // - Toujours passer par l'étape prix pour permettre la sélection des boutons prédéfinis
-    setCurrentStep('price');
+    handleQuantityInputCompleted();
 
-    // Pré-remplir le prix si c'est un prix fixe (pas de max_price)
-    const hasMaxPrice = category?.max_price != null && Number(category.max_price) > 0;
-    if (category?.price && !hasMaxPrice) {
-      // Prix fixe : pré-remplir avec le prix minimum
-      numpadCallbacks.setPriceValue(category.price.toString());
-    } else {
-      // Prix variable : champ vide
-      numpadCallbacks.setPriceValue('');
-    }
+    // B39-P4: Ne plus pré-remplir automatiquement le prix fixe
+    // Le caissier peut maintenant modifier le prix même avec tarif catalogue
+    // Le prix catalogue servira de valeur par défaut mais sera affiché dans l'interface
+    numpadCallbacks.setPriceValue('');
 
     numpadCallbacks.setPriceError('');
     numpadCallbacks.setMode('price');
+
+    // Auto-focus sur la section prix après validation de la quantité
+    setTimeout(() => {
+      const priceInput = document.querySelector('[data-testid="price-input"]');
+      if (priceInput instanceof HTMLElement) {
+        priceInput.focus();
+      } else {
+        // Si pas d'input prix (prix prédéfini), focus sur le bouton valider
+        const validateButton = document.querySelector('[data-testid="add-item-button"]');
+        if (validateButton instanceof HTMLElement) {
+          validateButton.focus();
+        }
+      }
+    }, 100);
   };
 
   const handleWeightConfirm = (totalWeight: number) => {
     // Store the total weight in state
     setWeight(totalWeight.toString());
-    setCurrentStep('quantity');
+    handleWeightInputCompleted();
     // Initialize numpad for quantity input
-    numpadCallbacks.setQuantityValue('');
+    numpadCallbacks.setQuantityValue('1');
     numpadCallbacks.setQuantityError('');
     numpadCallbacks.setMode('quantity');
+
+    // Auto-focus sur le champ quantité après validation du poids
+    setTimeout(() => {
+      const quantityInput = document.querySelector('[data-testid="quantity-input"]');
+      if (quantityInput instanceof HTMLElement) {
+        quantityInput.focus();
+      }
+    }, 100);
   };
 
   const handlePriceConfirm = () => {
@@ -559,7 +944,8 @@ export const SaleWizard: React.FC<SaleWizardProps> = ({ onItemComplete, numpadCa
       notes: currentTransactionPreset ? currentTransactionNotes : undefined,
     });
 
-    // Reset wizard (keep preset selection for the transaction)
+    // Mark item as validated and reset wizard
+    handlePriceInputCompleted();
     resetWizard();
   };
 
@@ -568,14 +954,13 @@ export const SaleWizard: React.FC<SaleWizardProps> = ({ onItemComplete, numpadCa
     setSelectedSubcategory('');
     setWeight('');
     setWeightError('');
-    numpadCallbacks.setQuantityValue('');
+    numpadCallbacks.setQuantityValue('1');
     numpadCallbacks.setQuantityError('');
     numpadCallbacks.setPriceValue('');
     numpadCallbacks.setPriceError('');
     numpadCallbacks.setWeightValue('');
     numpadCallbacks.setWeightError('');
     numpadCallbacks.setMode('idle');
-    setCurrentStep('category');
 
     // Réinitialiser l'état local des presets/notes pour la prochaine transaction
     setCurrentTransactionPreset(null);
@@ -588,12 +973,12 @@ export const SaleWizard: React.FC<SaleWizardProps> = ({ onItemComplete, numpadCa
       if (event.key === 'Enter' && (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement)) {
         return; // Ignorer si on est dans un input
       }
-      
+
       if (event.key === 'Enter') {
         event.preventDefault();
-        if (currentStep === 'quantity' && isQuantityValid) {
+        if (stepState.currentStep === 'quantity' && isQuantityValid) {
           handleQuantityConfirm();
-        } else if (currentStep === 'price' && isPriceValid) {
+        } else if (stepState.currentStep === 'price' && isPriceValid) {
           handlePriceConfirm();
         }
       }
@@ -601,24 +986,27 @@ export const SaleWizard: React.FC<SaleWizardProps> = ({ onItemComplete, numpadCa
 
     document.addEventListener('keydown', handleEnterKey);
     return () => document.removeEventListener('keydown', handleEnterKey);
-  }, [currentStep, isQuantityValid, isPriceValid, handleQuantityConfirm, handlePriceConfirm]);
+  }, [stepState.currentStep, isQuantityValid, isPriceValid, handleQuantityConfirm, handlePriceConfirm]);
 
   const renderStepContent = () => {
-    switch (currentStep) {
+    switch (stepState.currentStep) {
       case 'category':
         return (
-          <ModeContent data-step="category">
+          <ModeContent data-step="category" id="step-category" role="tabpanel" aria-labelledby="tab-category">
             <CategorySelector
               onSelect={handleCategorySelect}
               selectedCategory={selectedCategory}
+              shortcutKeys={shortcutKeys}
             />
           </ModeContent>
         );
 
       case 'subcategory': {
-        const subcategories = activeCategories.filter(cat => cat.parent_id === selectedCategory);
+        const subcategoriesRaw = activeCategories.filter(cat => cat.parent_id === selectedCategory);
+        // Sort subcategories by AZERTY shortcut order (not by name)
+        const subcategories = sortByAZERTYShortcut(subcategoriesRaw, shortcutKeys);
         return (
-          <ModeContent data-step="subcategory">
+          <ModeContent data-step="subcategory" id="step-subcategory" role="tabpanel" aria-labelledby="tab-subcategory">
             <ModeTitle>Sélectionner la sous-catégorie</ModeTitle>
             <CategoryContainer role="group" aria-label="Sélection de sous-catégorie">
               {subcategories.map((subcat) => {
@@ -643,20 +1031,21 @@ export const SaleWizard: React.FC<SaleWizardProps> = ({ onItemComplete, numpadCa
                     data-selected={selectedSubcategory === subcat.id ? 'true' : 'false'}
                     aria-pressed={selectedSubcategory === subcat.id}
                     aria-label={
-                      subcat.shortcut_key
-                        ? `Sélectionner la sous-catégorie ${subcat.name}. Raccourci clavier: ${subcat.shortcut_key.toUpperCase()}`
+                      shortcutKeys[subcat.id]
+                        ? `Sélectionner la sous-catégorie ${subcat.name}. Raccourci clavier: ${shortcutKeys[subcat.id].toUpperCase()}`
                         : `Sélectionner la sous-catégorie ${subcat.name}`
                     }
                     style={{ position: 'relative' }}
+                    tabIndex={-1}
                   >
                     <CategoryName>{subcat.name}</CategoryName>
                     <CategoryDescription>{formatPrice()}</CategoryDescription>
-                    {subcat.shortcut_key && (
+                    {shortcutKeys[subcat.id] && (
                       <ShortcutBadge
                         aria-hidden="true"
                         data-testid={`subcategory-shortcut-${subcat.id}`}
                       >
-                        {subcat.shortcut_key.toUpperCase()}
+                        {shortcutKeys[subcat.id].toUpperCase()}
                       </ShortcutBadge>
                     )}
                   </CategoryButton>
@@ -676,7 +1065,7 @@ export const SaleWizard: React.FC<SaleWizardProps> = ({ onItemComplete, numpadCa
         const lineAmount = computeLineAmount(unitPrice, quantityNum);
 
         return (
-          <StepContent data-step="quantity">
+          <StepContent data-step="quantity" id="step-quantity" role="tabpanel" aria-labelledby="tab-quantity">
             <StepTitle>Quantité</StepTitle>
             <DisplayValue $isValid={!quantityError} data-testid="quantity-input">
               {quantity || '0'}
@@ -706,7 +1095,7 @@ export const SaleWizard: React.FC<SaleWizardProps> = ({ onItemComplete, numpadCa
 
       case 'weight':
         return (
-          <ModeContent data-step="weight">
+          <ModeContent data-step="weight" id="step-weight" role="tabpanel" aria-labelledby="tab-weight">
             <MultipleWeightEntry
               onValidate={handleWeightConfirm}
               currentWeight={numpadCallbacks.weightValue}
@@ -721,7 +1110,7 @@ export const SaleWizard: React.FC<SaleWizardProps> = ({ onItemComplete, numpadCa
 
       case 'price':
         return (
-          <StepContent data-step="price">
+          <StepContent data-step="price" id="step-price" role="tabpanel" aria-labelledby="tab-price">
             <StepTitle>Prix unitaire</StepTitle>
             <PriceStepLayout>
               <PriceColumn>
@@ -758,16 +1147,15 @@ export const SaleWizard: React.FC<SaleWizardProps> = ({ onItemComplete, numpadCa
                   );
                 })()}
 
-                {!currentTransactionPreset && (
-                  <div>
-                    <Text size="sm" fw={500} mb="xs" c="dimmed">
-                      Prix manuel
-                    </Text>
-                    <DisplayValue $isValid={!priceError} data-testid="price-input">
-                      {price || '0'} €
-                    </DisplayValue>
-                  </div>
-                )}
+                {/* B39-P4: Toujours afficher le champ prix manuel, même avec tarif catalogue */}
+                <div>
+                  <Text size="sm" fw={500} mb="xs" c="dimmed">
+                    Prix manuel
+                  </Text>
+                  <DisplayValue $isValid={!priceError} data-testid="price-input">
+                    {price || '0'} €
+                  </DisplayValue>
+                </div>
               </PriceColumn>
 
               <PriceColumn $secondary>
@@ -841,47 +1229,85 @@ export const SaleWizard: React.FC<SaleWizardProps> = ({ onItemComplete, numpadCa
   }, [selectedCategory, selectedSubcategory, quantity, weight, price, getCategoryById]);
 
   return (
-    <WizardContainer>
+    <WizardContainer data-wizard="cash">
       <div>
-        <ModeSelector>
+        <ModeSelector role="tablist" aria-label="Étapes de création d'article">
           <ModeButton
-            $active={currentStep === 'category'}
-            data-active={currentStep === 'category'}
-            onClick={() => handleStepNavigation('category')}
+            $active={stepState.categoryState === 'active'}
+            $completed={stepState.categoryState === 'completed'}
+            $inactive={stepState.categoryState === 'inactive'}
+            data-active={stepState.categoryState === 'active'}
+            data-completed={stepState.categoryState === 'completed'}
+            onClick={() => transitionToStep('category')}
+            role="tab"
+            id="tab-category"
+            aria-selected={stepState.categoryState === 'active'}
+            aria-controls="step-category"
+            aria-label={`Étape 1: Sélection de catégorie${stepState.categoryState === 'completed' ? ' - Terminée' : stepState.categoryState === 'active' ? ' - En cours' : ''}`}
           >
             Catégorie
           </ModeButton>
-          {activeCategories.some(cat => cat.parent_id === selectedCategory) && (
-            <ModeButton
-              $active={currentStep === 'subcategory'}
-              data-active={currentStep === 'subcategory'}
-              disabled={!selectedCategory}
-              onClick={() => handleStepNavigation('subcategory')}
-            >
-              Sous-catégorie
-            </ModeButton>
-          )}
           <ModeButton
-            $active={currentStep === 'weight'}
-            data-active={currentStep === 'weight'}
+            $active={stepState.subcategoryState === 'active'}
+            $completed={stepState.subcategoryState === 'completed'}
+            $inactive={stepState.subcategoryState === 'inactive'}
+            data-active={stepState.subcategoryState === 'active'}
+            data-completed={stepState.subcategoryState === 'completed'}
+            disabled={!selectedCategory || activeCategories.filter(cat => cat.parent_id === selectedCategory).length === 0}
+            onClick={() => selectedCategory && activeCategories.filter(cat => cat.parent_id === selectedCategory).length > 0 && transitionToStep('subcategory')}
+            role="tab"
+            id="tab-subcategory"
+            aria-selected={stepState.subcategoryState === 'active'}
+            aria-controls="step-subcategory"
+            aria-label={`Étape 1.5: Sélection de sous-catégorie${stepState.subcategoryState === 'completed' ? ' - Terminée' : stepState.subcategoryState === 'active' ? ' - En cours' : stepState.subcategoryState === 'inactive' ? ' - Non accessible' : ''}`}
+          >
+            Sous-catégorie
+          </ModeButton>
+          <ModeButton
+            $active={stepState.weightState === 'active'}
+            $completed={stepState.weightState === 'completed'}
+            $inactive={stepState.weightState === 'inactive'}
+            data-active={stepState.weightState === 'active'}
+            data-completed={stepState.weightState === 'completed'}
             disabled={!selectedCategory}
-            onClick={() => handleStepNavigation('weight')}
+            onClick={() => selectedCategory && transitionToStep('weight')}
+            role="tab"
+            id="tab-weight"
+            aria-selected={stepState.weightState === 'active'}
+            aria-controls="step-weight"
+            aria-label={`Étape 2: Saisie du poids${stepState.weightState === 'completed' ? ' - Terminée' : stepState.weightState === 'active' ? ' - En cours' : stepState.weightState === 'inactive' ? ' - Non accessible' : ''}`}
           >
             Poids
           </ModeButton>
           <ModeButton
-            $active={currentStep === 'quantity'}
-            data-active={currentStep === 'quantity'}
-            disabled={!weight}
-            onClick={() => handleStepNavigation('quantity')}
+            $active={stepState.quantityState === 'active'}
+            $completed={stepState.quantityState === 'completed'}
+            $inactive={stepState.quantityState === 'inactive'}
+            data-active={stepState.quantityState === 'active'}
+            data-completed={stepState.quantityState === 'completed'}
+            disabled={!numpadCallbacks.weightValue || parseFloat(numpadCallbacks.weightValue) <= 0}
+            onClick={() => numpadCallbacks.weightValue && parseFloat(numpadCallbacks.weightValue) > 0 && transitionToStep('quantity')}
+            role="tab"
+            id="tab-quantity"
+            aria-selected={stepState.quantityState === 'active'}
+            aria-controls="step-quantity"
+            aria-label={`Étape 3: Saisie de la quantité${stepState.quantityState === 'completed' ? ' - Terminée' : stepState.quantityState === 'active' ? ' - En cours' : stepState.quantityState === 'inactive' ? ' - Non accessible' : ''}`}
           >
             Quantité
           </ModeButton>
           <ModeButton
-            $active={currentStep === 'price'}
-            data-active={currentStep === 'price'}
-            disabled={!quantity}
-            onClick={() => handleStepNavigation('price')}
+            $active={stepState.priceState === 'active'}
+            $completed={stepState.priceState === 'completed'}
+            $inactive={stepState.priceState === 'inactive'}
+            data-active={stepState.priceState === 'active'}
+            data-completed={stepState.priceState === 'completed'}
+            disabled={stepState.quantityState !== 'completed'}
+            onClick={() => stepState.quantityState === 'completed' && transitionToStep('price')}
+            role="tab"
+            id="tab-price"
+            aria-selected={stepState.priceState === 'active'}
+            aria-controls="step-price"
+            aria-label={`Étape 4: Saisie du prix${stepState.priceState === 'completed' ? ' - Terminée' : stepState.priceState === 'active' ? ' - En cours' : stepState.priceState === 'inactive' ? ' - Non accessible' : ''}`}
           >
             Prix
           </ModeButton>

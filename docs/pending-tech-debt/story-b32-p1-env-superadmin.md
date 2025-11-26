@@ -1,8 +1,9 @@
 ---
-cleanup_status: tech_debt
-cleanup_destination: docs/pending-tech-debt/
-cleanup_date: 2025-11-17T20:53:14.259281
-original_path: docs/stories/story-b32-p1-env-superadmin.md
+categorized_by: story-audit-and-sort
+categorized_date: 2025-11-20
+category: debt
+original_path: docs/backup-pre-cleanup/story-b32-p1-env-superadmin.md
+rationale: mentions debt/stabilization/fix
 ---
 
 # Story (Fonctionnalité): Création du Super-Admin via le Fichier .env

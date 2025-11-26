@@ -1,8 +1,9 @@
 ---
-cleanup_status: tech_debt
-cleanup_destination: docs/pending-tech-debt/
-cleanup_date: 2025-11-17T20:53:15.567795
-original_path: docs/stories/story-tech-debt-b09-perf-reliability.md
+categorized_by: story-audit-and-sort
+categorized_date: 2025-11-20
+category: debt
+original_path: docs/backup-pre-cleanup/story-tech-debt-b09-perf-reliability.md
+rationale: mentions debt/stabilization/fix
 ---
 
 # Story (Dette Technique): Amélioration Performance et Fiabilité de l'API Catégories
