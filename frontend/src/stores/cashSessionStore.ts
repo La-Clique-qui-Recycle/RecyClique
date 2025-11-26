@@ -69,6 +69,7 @@ export interface SaleCreate {
   total_amount: number;
   donation?: number;
   payment_method?: string;
+  note?: string | null;  // Story B40-P1: Notes sur les tickets de caisse
 }
 
 interface ScrollState {
@@ -85,6 +86,7 @@ interface CashSessionState {
   currentSession: CashSession | null;
   sessions: CashSession[];
   currentSaleItems: SaleItem[];
+  currentSaleNote: string | null;  // Story B40-P1: Notes sur les tickets de caisse
   loading: boolean;
   error: string | null;
 
@@ -102,8 +104,9 @@ interface CashSessionState {
   addSaleItem: (item: Omit<SaleItem, 'id'>) => void;
   removeSaleItem: (itemId: string) => void;
   updateSaleItem: (itemId: string, newQuantity: number, newWeight: number, newPrice: number, presetId?: string, notes?: string) => void;
+  setCurrentSaleNote: (note: string | null) => void;  // Story B40-P1: Notes sur les tickets de caisse
   clearCurrentSale: () => void;
-  submitSale: (items: SaleItem[], finalization?: { donation: number; paymentMethod: 'cash'|'card'|'check'; cashGiven?: number; change?: number; }) => Promise<boolean>;
+  submitSale: (items: SaleItem[], finalization?: { donation: number; paymentMethod: 'cash'|'card'|'check'; cashGiven?: number; change?: number; note?: string; }) => Promise<boolean>;
 
   // Scroll actions
   setScrollPosition: (scrollTop: number) => void;
@@ -129,6 +132,7 @@ export const useCashSessionStore = create<CashSessionState>()(
         currentSession: null,
         sessions: [],
         currentSaleItems: [],
+        currentSaleNote: null,  // Story B40-P1: Notes sur les tickets de caisse
         loading: false,
         error: null,
         ticketScrollState: {
@@ -185,9 +189,14 @@ export const useCashSessionStore = create<CashSessionState>()(
           }));
         },
 
+        setCurrentSaleNote: (note: string | null) => {
+          set({ currentSaleNote: note });
+        },
+
         clearCurrentSale: () => {
           set({
             currentSaleItems: [],
+            currentSaleNote: null,  // Story B40-P1: Réinitialiser la note lors du clear
             ticketScrollState: {
               scrollTop: 0,
               scrollHeight: 0,
@@ -237,7 +246,7 @@ export const useCashSessionStore = create<CashSessionState>()(
           });
         },
 
-        submitSale: async (items: SaleItem[], finalization?: { donation: number; paymentMethod: 'cash'|'card'|'check'; cashGiven?: number; change?: number; }): Promise<boolean> => {
+        submitSale: async (items: SaleItem[], finalization?: { donation: number; paymentMethod: 'cash'|'card'|'check'; cashGiven?: number; change?: number; note?: string; }): Promise<boolean> => {
           const { currentSession } = get();
 
           if (!currentSession) {
@@ -286,11 +295,14 @@ export const useCashSessionStore = create<CashSessionState>()(
 
             // Étendre le payload pour inclure finalisation (don, paiement)
             // Story 1.1.2: preset_id et notes sont maintenant par item, pas au niveau vente globale
+            // Story B40-P1: note au niveau ticket (pas au niveau item)
             // Les codes de paiement sont maintenant simples (cash/card/check) pour éviter problèmes d'encodage
+            const { currentSaleNote } = get();
             const extendedPayload = {
               ...saleData,
               donation: finalization?.donation ?? 0,
               payment_method: finalization?.paymentMethod ?? 'cash',  // Envoie directement cash/card/check
+              note: finalization?.note || null,  // Story B40-P1-CORRECTION: Notes déplacées vers popup de paiement
               // preset_id et notes supprimés du niveau vente - maintenant dans chaque item
             };
 
@@ -300,6 +312,7 @@ export const useCashSessionStore = create<CashSessionState>()(
             // Clear current sale on success
             set({
               currentSaleItems: [],
+              currentSaleNote: null,  // Story B40-P1: Réinitialiser la note après soumission réussie
               loading: false
             });
 

@@ -3,14 +3,17 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Copier uniquement ce qui est nécessaire pour Alembic
+# OPTIMISATION CACHE: Copier d'abord requirements pour utiliser le cache Docker
+# Si requirements ne change pas, cette couche sera réutilisée
+COPY requirements-migrations.txt .
+
+# Installer les dépendances minimales (cette couche sera mise en cache)
+RUN pip install --no-cache-dir -r requirements-migrations.txt
+
+# Copier le reste du code (ces couches seront invalidées seulement si le code change)
 COPY alembic.ini .
 COPY migrations ./migrations
-COPY requirements-migrations.txt .
 COPY src ./src
-
-# Installer les dépendances minimales
-RUN pip install --no-cache-dir -r requirements-migrations.txt
 
 # Configurer PYTHONPATH pour que recyclic_api soit trouvé
 ENV PYTHONPATH=/app/src

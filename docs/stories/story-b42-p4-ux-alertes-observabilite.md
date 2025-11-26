@@ -1,11 +1,13 @@
 # Story B42-P4: UX, Alertes & Observabilité des sessions
 
-**Status:** Draft  
+**Status:** On Hold  
 **Epic:** [EPIC-B42 – Session glissante & anti-déconnexion](../epics/epic-b42-sliding-session.md)  
 **Module:** UX / Admin / Observabilité  
 **Priority:** P1  
 **Owner:** PO + UX + SRE  
 **Last Updated:** 2025-11-26
+
+**Blocking:** En attente de la completion de [B42-P2](../stories/story-b42-p2-backend-refresh-token.md) et [B42-P3](../stories/story-b42-p3-frontend-refresh-integration.md). L'observabilité nécessite que les mécanismes core soient implémentés.
 
 ---
 
@@ -33,6 +35,7 @@
 ## Dev Notes
 
 ### Références
+- **[RFC Sliding Session](../../architecture/sliding-session-rfc.md)** – Design complet validé
 - `frontend/src/components/...` (bannière venant de Story P3).  
 - `frontend/src/pages/Admin/Health.tsx` ou `Dashboard` – à étendre pour afficher stats.  
 - `api/src/recyclic_api/core/metrics.py` (si existant) ou introduire un module Prometheus.  

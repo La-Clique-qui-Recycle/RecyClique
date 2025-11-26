@@ -192,6 +192,56 @@ VITE_FEATURE_LIVE_RECEPTION_STATS=true  # Active la fonctionnalité
 - 📱 Notification push sur l'app mobile
 - 💬 Message sur le canal de communication interne
 
+## Gestion des Tickets de Caisse (B40-P4)
+
+### Visualisation des Détails de Ticket
+
+Dans le **Gestionnaire de Sessions** (`/admin/session-manager`), chaque session de caisse affiche la liste des ventes associées.
+
+**Pour consulter un ticket :**
+1. Cliquez sur une ligne de session pour accéder aux détails
+2. Dans la section "Journal des Ventes", cliquez sur **"Voir le ticket"**
+3. Une modal s'ouvre avec tous les détails de la vente
+
+**Informations affichées :**
+- ⏰ Heure de vente
+- 👤 Opérateur qui a effectué la vente
+- 💳 Méthode de paiement
+- 🎁 Don associé (si applicable)
+- 💰 Total de la vente
+- 📝 **Note de caisse** (si saisie par le caissier)
+- 📦 Liste détaillée des articles vendus
+
+### Édition des Notes de Ticket
+
+**Fonctionnalité :** Les administrateurs peuvent modifier les notes associées aux tickets de caisse pour ajouter des précisions ou corriger les saisies.
+
+#### Qui peut éditer ?
+- ✅ **Super Administrateur** : Accès complet
+- ✅ **Administrateur** : Peut modifier toutes les notes
+- ❌ **Utilisateur standard** : Aucun accès à l'édition
+
+#### Comment éditer une note ?
+1. Ouvrez le détail d'un ticket (voir ci-dessus)
+2. Si vous avez les droits, un bouton **"Modifier la note"** apparaît
+3. Cliquez sur le bouton pour entrer en mode édition
+4. Saisissez ou modifiez la note dans le champ texte
+5. Cliquez sur **"Sauvegarder"** pour valider
+6. Ou **"Annuler"** pour revenir sans sauvegarder
+
+#### Règles métier :
+- 📝 **Notes optionnelles** : Les tickets peuvent ne pas avoir de note
+- 🔒 **Traçabilité** : Les modifications sont automatiquement journalisées
+- ⏰ **Historique** : Console admin affiche timestamp et utilisateur des modifications
+- 🚫 **Sécurité** : Contrôle RBAC strict (Admin/SuperAdmin uniquement)
+
+#### Gestion des erreurs :
+- **Connexion perdue** : Modifications sauvegardées localement et synchronisées à la reconnexion
+- **Conflit de modification** : Système de résolution automatique des conflits
+- **Droits insuffisants** : Message d'erreur clair et bouton masqué
+
+---
+
 ## Consultation des Rapports
 
 ### Types de Rapports Disponibles

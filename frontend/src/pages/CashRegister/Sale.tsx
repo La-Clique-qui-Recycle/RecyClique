@@ -2,14 +2,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import styled from 'styled-components';
-import { useCashSessionStore } from '../../stores/cashSessionStore';
+import { useCashSessionStoreInjected, useCategoryStoreInjected, usePresetStoreInjected } from '../../providers/CashStoreProvider';
 import { useAuthStore } from '../../stores/authStore';
-import { useCategoryStore } from '../../stores/categoryStore';
-import { usePresetStore } from '../../stores/presetStore';
 import SaleWizard from '../../components/business/SaleWizard';
 import Ticket from '../../components/business/Ticket';
 import FinalizationScreen, { FinalizationData } from '../../components/business/FinalizationScreen';
 import CashSessionHeader from '../../components/business/CashSessionHeader';
+import CashKPIBanner from '../../components/business/CashKPIBanner';
 import { Numpad } from '../../components/ui/Numpad';
 import type { SaleItemData } from '../../components/business/SaleWizard';
 
@@ -115,6 +114,7 @@ const Sale: React.FC = () => {
   const [isFinalizing, setIsFinalizing] = useState<boolean>(false);
   const [finalizationData, setFinalizationData] = useState<FinalizationData | null>(null);
   const [showSuccessPopup, setShowSuccessPopup] = useState<boolean>(false);
+  const [lastTicketAmount, setLastTicketAmount] = useState<number>(0);
 
   // Numpad state - separated by step type
   const [quantityValue, setQuantityValue] = useState<string>('1');
@@ -125,19 +125,23 @@ const Sale: React.FC = () => {
   const [weightError, setWeightError] = useState<string>('');
   const [numpadMode, setNumpadMode] = useState<'quantity' | 'price' | 'weight' | 'idle'>('idle');
 
+  // Utiliser les stores injectés (réel ou virtuel selon le contexte)
+  const cashSessionStore = useCashSessionStoreInjected();
   const {
     currentSession,
     currentSaleItems,
+    currentSaleNote,  // Story B40-P1: Notes sur les tickets de caisse
     addSaleItem,
     removeSaleItem,
     updateSaleItem,
+    setCurrentSaleNote,  // Story B40-P1: Notes sur les tickets de caisse
     submitSale,
     loading
-  } = useCashSessionStore();
+  } = cashSessionStore;
 
   const { currentUser } = useAuthStore();
-  const { getCategoryById, fetchCategories } = useCategoryStore();
-  const { clearSelection, selectedPreset, notes } = usePresetStore();
+  const { getCategoryById, fetchCategories } = useCategoryStoreInjected();
+  const { clearSelection, selectedPreset, notes } = usePresetStoreInjected();
 
   // Numpad handlers - défini AVANT les useEffect qui l'utilisent
   const getCurrentValue = () => {
@@ -246,7 +250,10 @@ const Sale: React.FC = () => {
   };
 
   const handleCloseSession = () => {
-    navigate('/cash-register/session/close');
+    // Utiliser le bon chemin selon le mode (détecté depuis l'URL)
+    const isVirtual = window.location.pathname.includes('/virtual');
+    const basePath = isVirtual ? '/cash-register/virtual' : '/cash-register';
+    navigate(`${basePath}/session/close`);
   };
 
   if (!currentSession) {
@@ -269,8 +276,14 @@ const Sale: React.FC = () => {
     setFinalizationData(data);
     setIsFinalizing(false);
 
+    // Calculer le montant total avant soumission
+    const totalAmount = ticketTotal + (data.donation || 0);
+
     const success = await submitSale(currentSaleItems, data);
     if (success) {
+      // Enregistrer le montant du dernier ticket validé
+      setLastTicketAmount(totalAmount);
+
       // Effacer la sélection de preset après une vente réussie
       clearSelection();
 
@@ -280,7 +293,7 @@ const Sale: React.FC = () => {
         setShowSuccessPopup(false);
       }, 3000);
     } else {
-      const storeError = useCashSessionStore.getState().error;
+      const storeError = cashSessionStore.error;
       alert(`❌ Erreur lors de l'enregistrement de la vente: ${storeError || 'Erreur inconnue'}`);
     }
   };
@@ -290,13 +303,23 @@ const Sale: React.FC = () => {
     const currentValue = getCurrentValue();
 
     if (numpadMode === 'quantity') {
-      // Mode "remplacer" : si valeur = "1" et appui sur 2-9, remplacer au lieu d'ajouter
-      // Si appui sur "1", ajouter normalement pour permettre 11, 12, etc.
+      // Comportement spécial pour la quantité :
+      // - Par défaut : "1" est affiché
+      // - Si appui sur "1" : remplacer "1" par "1" (reste "1", prêt à ajouter)
+      // - Si appui sur 2-9 : remplacer "1" par le chiffre choisi (donc "2", "3", etc.)
+      // - Si appui sur "0" : remplacer "1" par "10"
+      // - Une fois qu'on a commencé à éditer, ajouter normalement
       let newValue: string;
-      if (currentValue === '1' && /^[2-9]$/.test(digit)) {
-        newValue = digit; // Remplacer le 1 par le nouveau chiffre (2-9)
+      if (currentValue === '1') {
+        // Si valeur = "1", remplacer par le chiffre choisi
+        if (digit === '0') {
+          newValue = '10'; // Cas spécial : "0" après "1" = "10"
+        } else {
+          newValue = digit; // Remplacer "1" par le chiffre (1-9)
+        }
       } else {
-        newValue = currentValue + digit; // Ajouter normalement (y compris pour "1")
+        // Si valeur n'est pas "1", ajouter normalement
+        newValue = currentValue + digit;
       }
 
       if (/^\d*$/.test(newValue) && parseInt(newValue || '0', 10) <= 9999) {
@@ -425,6 +448,9 @@ const Sale: React.FC = () => {
         isLoading={loading}
       />
 
+      {/* Bandeau KPI temps réel (B40-P2) */}
+      <CashKPIBanner lastTicketAmount={lastTicketAmount} />
+
       {/* Layout principal à 3 colonnes: Numpad | Action Zone | Ticket */}
       <MainLayout>
         {/* Colonne de gauche - Numpad unifié (présent à partir de Poids) */}
@@ -495,6 +521,7 @@ const Sale: React.FC = () => {
             onUpdateItem={updateSaleItem}
             onFinalizeSale={handleFinalizeSale}
             loading={loading}
+            saleNote={currentSaleNote}
           />
         </RightColumn>
       </MainLayout>
@@ -505,6 +532,8 @@ const Sale: React.FC = () => {
         totalAmount={ticketTotal}
         onCancel={handleCancelFinalization}
         onConfirm={handleConfirmFinalization}
+        saleNote={currentSaleNote}
+        onSaleNoteChange={setCurrentSaleNote}
       />
     </KioskContainer>
   );

@@ -248,6 +248,21 @@ export const getReceptionLiveStats = async () => {
   return response.data;
 };
 
+// Cash Live Stats (B40-P2)
+export const getCashLiveStats = async () => {
+  const today = new Date();
+  const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const endOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
+  
+  const params = {
+    date_from: startOfDay.toISOString(),
+    date_to: endOfDay.toISOString()
+  };
+  
+  const response = await api.get('/v1/cash-sessions/stats/summary', { params });
+  return response.data;
+};
+
 // Reception Categories
 export const getReceptionCategories = async () => {
   const response = await api.get('/v1/reception/categories');

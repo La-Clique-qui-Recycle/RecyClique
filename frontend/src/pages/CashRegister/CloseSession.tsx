@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import styled from 'styled-components';
 import { ArrowLeft, Calculator, AlertTriangle, CheckCircle } from 'lucide-react';
-import { useCashSessionStore } from '../../stores/cashSessionStore';
+import { useCashSessionStoreInjected, useCashStores } from '../../providers/CashStoreProvider';
 
 const Container = styled.div`
   max-width: 800px;
@@ -225,7 +225,8 @@ const LoadingSpinner = styled.div`
 
 export default function CloseSession() {
   const navigate = useNavigate();
-  const { currentSession, closeSession, refreshSession, loading, error } = useCashSessionStore();
+  const { cashSessionStore, isVirtualMode } = useCashStores();
+  const { currentSession, closeSession, refreshSession, loading, error } = cashSessionStore;
 
   const [actualAmount, setActualAmount] = useState<string>('');
   const [varianceComment, setVarianceComment] = useState<string>('');
@@ -278,7 +279,12 @@ export default function CloseSession() {
       });
 
       if (success) {
-        navigate('/admin');
+        // Rediriger selon le mode : virtuel → dashboard virtuel, réel → dashboard réel
+        if (isVirtualMode) {
+          navigate('/cash-register/virtual');
+        } else {
+          navigate('/caisse');
+        }
       }
     } catch (err) {
       console.error('Erreur lors de la fermeture de session:', err);

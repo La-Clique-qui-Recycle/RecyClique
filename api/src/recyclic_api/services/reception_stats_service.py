@@ -16,6 +16,20 @@ from recyclic_api.models.ligne_depot import LigneDepot
 from recyclic_api.models.sale import Sale
 from recyclic_api.models.sale_item import SaleItem
 
+# Prometheus metrics - créées au niveau du module pour éviter les duplications
+_stats_requests = Counter(
+    'reception_live_stats_requests_total',
+    'Total number of live stats requests'
+)
+_stats_duration = Histogram(
+    'reception_live_stats_duration_seconds',
+    'Time spent calculating live stats'
+)
+_stats_errors = Counter(
+    'reception_live_stats_errors_total',
+    'Total number of errors during stats calculation'
+)
+
 
 class ReceptionLiveStatsService:
     """
@@ -25,20 +39,7 @@ class ReceptionLiveStatsService:
 
     def __init__(self, db: Session) -> None:
         self.db = db
-
-        # Prometheus metrics
-        self.stats_requests = Counter(
-            'reception_live_stats_requests_total',
-            'Total number of live stats requests'
-        )
-        self.stats_duration = Histogram(
-            'reception_live_stats_duration_seconds',
-            'Time spent calculating live stats'
-        )
-        self.stats_errors = Counter(
-            'reception_live_stats_errors_total',
-            'Total number of errors during stats calculation'
-        )
+        # Les métriques Prometheus sont définies au niveau du module pour éviter les duplications
 
     async def get_live_stats(self, site_id: Optional[str] = None) -> dict:
         """
@@ -64,9 +65,9 @@ class ReceptionLiveStatsService:
         if site_id is not None and not isinstance(site_id, str):
             raise ValueError("site_id must be a string or None")
 
-        with self.stats_duration.time():
+        with _stats_duration.time():
             try:
-                self.stats_requests.inc()
+                _stats_requests.inc()
 
                 # Calculate time threshold (24 hours ago)
                 threshold_24h = datetime.now(timezone.utc) - timedelta(hours=24)
@@ -99,7 +100,7 @@ class ReceptionLiveStatsService:
                 }
 
             except Exception as e:
-                self.stats_errors.inc()
+                _stats_errors.inc()
                 # Re-raise with more context for debugging
                 raise RuntimeError(f"Failed to calculate live reception stats: {str(e)}") from e
 

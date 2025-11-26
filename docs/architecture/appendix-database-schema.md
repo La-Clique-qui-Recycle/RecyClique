@@ -85,6 +85,7 @@ CREATE TABLE sales (
     unit_price DECIMAL(8,2) NOT NULL CHECK (unit_price >= 0),
     total_amount DECIMAL(10,2) GENERATED ALWAYS AS (quantity * unit_price) STORED,
     payment_method payment_method NOT NULL,
+    note TEXT,  -- Story B40-P5: Notes sur les tickets de caisse
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );

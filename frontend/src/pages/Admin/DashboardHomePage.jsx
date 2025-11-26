@@ -90,9 +90,16 @@ const DashboardHomePage = () => {
   // Récupération simple des valeurs selon B37-12
   const fetchStats = async () => {
     try {
-      const today = new Date();
-      const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-      const endOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
+      // Calculer les dates du jour en UTC pour éviter les problèmes de fuseau horaire
+      const now = new Date();
+      const todayUTC = new Date(Date.UTC(
+        now.getUTCFullYear(),
+        now.getUTCMonth(),
+        now.getUTCDate()
+      ));
+      const startOfDay = todayUTC; // Minuit UTC du jour actuel
+      const endOfDay = new Date(todayUTC);
+      endOfDay.setUTCDate(endOfDay.getUTCDate() + 1); // Minuit UTC du jour suivant (exclusif)
       
       // 1. Statistiques financières + poids vendu
       const financialResponse = await axiosClient.get('/v1/cash-sessions/stats/summary', {
@@ -105,8 +112,8 @@ const DashboardHomePage = () => {
       // 2. Poids des matières reçues
       const receptionResponse = await axiosClient.get('/v1/stats/reception/summary', {
         params: {
-          date_from: startOfDay.toISOString(),
-          date_to: endOfDay.toISOString()
+          start_date: startOfDay.toISOString(), // Note: l'endpoint utilise start_date, pas date_from
+          end_date: endOfDay.toISOString()
         }
       });
       

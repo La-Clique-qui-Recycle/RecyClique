@@ -20,61 +20,69 @@ class CashSessionService:
     
     def create_session(self, operator_id: str, site_id: str, initial_amount: float, register_id: Optional[str] = None) -> CashSession:
         """Crée une nouvelle session de caisse."""
-        # Vérifier que l'opérateur existe
-        # Ensure UUID types for DB comparisons
-        operator_uuid = UUID(str(operator_id)) if not isinstance(operator_id, UUID) else operator_id
-        site_uuid = UUID(str(site_id)) if not isinstance(site_id, UUID) else site_id
-        register_uuid: Optional[UUID]
-        if register_id is not None:
-            register_uuid = UUID(str(register_id)) if not isinstance(register_id, UUID) else register_id
-        else:
-            register_uuid = None
+        try:
+            # Vérifier que l'opérateur existe
+            # Ensure UUID types for DB comparisons
+            operator_uuid = UUID(str(operator_id)) if not isinstance(operator_id, UUID) else operator_id
+            site_uuid = UUID(str(site_id)) if not isinstance(site_id, UUID) else site_id
+            register_uuid: Optional[UUID]
+            if register_id is not None:
+                register_uuid = UUID(str(register_id)) if not isinstance(register_id, UUID) else register_id
+            else:
+                register_uuid = None
 
-        operator = self.db.query(User).filter(User.id == operator_uuid).first()
-        if not operator:
-            raise ValueError("Opérateur non trouvé")
+            operator = self.db.query(User).filter(User.id == operator_uuid).first()
+            if not operator:
+                raise ValueError("Opérateur non trouvé")
 
-        # Déterminer le registre à utiliser si non fourni (compatibilité tests existants)
-        if register_uuid is None:
-            # Chercher un poste actif pour le site, sinon en créer un par défaut
-            default_register = (
-                self.db.query(CashRegister)
-                .filter(
-                    CashRegister.is_active.is_(True),
-                    CashRegister.site_id == site_uuid,
+            # Déterminer le registre à utiliser si non fourni (compatibilité tests existants)
+            if register_uuid is None:
+                # Chercher un poste actif pour le site, sinon en créer un par défaut
+                default_register = (
+                    self.db.query(CashRegister)
+                    .filter(
+                        CashRegister.is_active.is_(True),
+                        CashRegister.site_id == site_uuid,
+                    )
+                    .first()
                 )
-                .first()
-            )
-            if default_register is None:
-                default_register = CashRegister(name="Default Register", site_id=site_uuid, is_active=True)
-                self.db.add(default_register)
-                self.db.commit()
-                self.db.refresh(default_register)
-            register_uuid = default_register.id  # type: ignore[assignment]
+                if default_register is None:
+                    default_register = CashRegister(name="Default Register", site_id=site_uuid, is_active=True)
+                    self.db.add(default_register)
+                    self.db.commit()
+                    self.db.refresh(default_register)
+                register_uuid = default_register.id  # type: ignore[assignment]
 
-        # Unicité: pas de session ouverte pour ce registre
-        existing_register_open = self.db.query(CashSession).filter(
-            CashSession.register_id == register_uuid,
-            CashSession.status == CashSessionStatus.OPEN
-        ).first()
-        if existing_register_open:
-            raise ValueError("Une session est déjà ouverte pour ce poste de caisse")
-        
-        # Créer la session
-        cash_session = CashSession(
-            operator_id=operator_uuid,
-            site_id=site_uuid,
-            register_id=register_uuid,
-            initial_amount=initial_amount,
-            current_amount=initial_amount,
-            status=CashSessionStatus.OPEN
-        )
-        
-        self.db.add(cash_session)
-        self.db.commit()
-        self.db.refresh(cash_session)
-        
-        return cash_session
+            # Unicité: pas de session ouverte pour ce registre
+            existing_register_open = self.db.query(CashSession).filter(
+                CashSession.register_id == register_uuid,
+                CashSession.status == CashSessionStatus.OPEN
+            ).first()
+            if existing_register_open:
+                raise ValueError("Une session est déjà ouverte pour ce poste de caisse")
+
+            # Créer la session
+            cash_session = CashSession(
+                operator_id=operator_uuid,
+                site_id=site_uuid,
+                register_id=register_uuid,
+                initial_amount=initial_amount,
+                current_amount=initial_amount,
+                status=CashSessionStatus.OPEN
+            )
+
+            self.db.add(cash_session)
+            self.db.commit()
+            self.db.refresh(cash_session)
+
+            return cash_session
+        except Exception as e:
+            # Log any unexpected error in service layer
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error in CashSessionService.create_session: {e}", exc_info=True)
+            # Re-raise to let endpoint handle it properly
+            raise
     
     def get_session_by_id(self, session_id: str) -> Optional[CashSession]:
         """Récupère une session par son ID."""
@@ -299,46 +307,62 @@ class CashSessionService:
         open_sessions = query.filter(CashSession.status == CashSessionStatus.OPEN).count()
         closed_sessions = query.filter(CashSession.status == CashSessionStatus.CLOSED).count()
         
-        # Totaux des ventes (depuis CashSession pour compatibilité)
-        total_sales_result = (
-            query
-            .filter(CashSession.status == CashSessionStatus.CLOSED)
-            .with_entities(func.sum(CashSession.total_sales))
-        ).scalar()
-        total_sales = float(total_sales_result or 0.0)
-        
-        # Total des articles
-        total_items_result = (
-            query
-            .filter(CashSession.status == CashSessionStatus.CLOSED)
-            .with_entities(func.sum(CashSession.total_items))
-        ).scalar()
-        total_items = int(total_items_result or 0)
-
         # Récupérer l'ensemble des IDs de sessions filtrées
         session_ids_subq = query.with_entities(CashSession.id).subquery()
 
-        # Nombre de ventes (COUNT sur Sale)
-        number_of_sales_result = (
-            self.db.query(func.count(Sale.id))
-            .filter(Sale.cash_session_id.in_(self.db.query(session_ids_subq.c.id)))
+        # Construire la requête de base pour les ventes avec filtres de date
+        # IMPORTANT: Filtrer les ventes par leur date de création, pas seulement par session
+        # Cela garantit que les stats quotidiennes sont correctes
+        sales_query = self.db.query(Sale).filter(
+            Sale.cash_session_id.in_(self.db.query(session_ids_subq.c.id))
+        )
+        
+        # Filtrer les ventes par leur date de création si des dates sont fournies
+        # C'est crucial pour avoir les bonnes stats quotidiennes
+        if date_from:
+            if date_from.tzinfo is None:
+                date_from = date_from.replace(tzinfo=timezone.utc)
+            sales_query = sales_query.filter(Sale.created_at >= date_from)
+        if date_to:
+            if date_to.tzinfo is None:
+                date_to = date_to.replace(tzinfo=timezone.utc)
+            sales_query = sales_query.filter(Sale.created_at <= date_to)
+
+        # Nombre de ventes (COUNT sur Sale avec filtres de date)
+        number_of_sales = int(sales_query.count() or 0)
+
+        # Total des ventes (SUM sur Sale.total_amount avec filtres de date)
+        # Utiliser les ventes filtrées par date, pas le champ total_sales de la session
+        total_sales_result = (
+            sales_query
+            .with_entities(func.sum(Sale.total_amount))
             .scalar()
         )
-        number_of_sales = int(number_of_sales_result or 0)
+        total_sales = float(total_sales_result or 0.0)
 
-        # Total des dons (SUM sur Sale.donation)
+        # Total des articles (COUNT sur SaleItem avec filtres de date)
+        sale_ids_subq = sales_query.with_entities(Sale.id).subquery()
+        total_items_result = (
+            self.db.query(func.count(SaleItem.id))
+            .join(Sale, SaleItem.sale_id == Sale.id)
+            .filter(Sale.id.in_(self.db.query(sale_ids_subq.c.id)))
+            .scalar()
+        )
+        total_items = int(total_items_result or 0)
+
+        # Total des dons (SUM sur Sale.donation avec filtres de date)
         total_donations_result = (
-            self.db.query(func.sum(Sale.donation))
-            .filter(Sale.cash_session_id.in_(self.db.query(session_ids_subq.c.id)))
+            sales_query
+            .with_entities(func.sum(Sale.donation))
             .scalar()
         )
         total_donations = float(total_donations_result or 0.0)
 
-        # Poids total vendu (SUM sur SaleItem.weight)
+        # Poids total vendu (SUM sur SaleItem.weight avec filtres de date)
         total_weight_result = (
             self.db.query(func.sum(SaleItem.weight))
             .join(Sale, SaleItem.sale_id == Sale.id)
-            .filter(Sale.cash_session_id.in_(self.db.query(session_ids_subq.c.id)))
+            .filter(Sale.id.in_(self.db.query(sale_ids_subq.c.id)))
             .scalar()
         )
         total_weight_sold = float(total_weight_result or 0.0)

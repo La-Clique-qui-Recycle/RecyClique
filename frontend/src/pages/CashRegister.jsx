@@ -1,8 +1,9 @@
 import React, { useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import styled from 'styled-components';
 import { Calculator, Package, Loader2 } from 'lucide-react';
-import { useCashSessionStore } from '../stores/cashSessionStore';
+import { CashStoreProvider, useCashStores } from '../providers/CashStoreProvider';
+import CashRegisterDashboard from './CashRegister/CashRegisterDashboard';
 
 const CashRegisterContainer = styled.div`
   background: white;
@@ -43,9 +44,20 @@ const ComingSoon = styled.div`
   color: #666;
 `;
 
-function CashRegister() {
+/**
+ * Composant interne qui gère la logique de redirection
+ */
+function CashRegisterContent() {
   const navigate = useNavigate();
-  const { currentSession, fetchCurrentSession, loading } = useCashSessionStore();
+  const location = useLocation();
+  const { cashSessionStore, isVirtualMode } = useCashStores();
+  const { currentSession, fetchCurrentSession, loading } = cashSessionStore;
+
+  // Détecter le mode depuis l'URL uniquement (pas depuis le store)
+  // /caisse = toujours mode réel
+  // /cash-register/virtual = mode virtuel
+  const isVirtualRoute = location.pathname.includes('/virtual') && !location.pathname.startsWith('/caisse');
+  const basePath = isVirtualRoute ? '/cash-register/virtual' : '/cash-register';
 
   useEffect(() => {
     // Vérifier l'état de la session au chargement
@@ -57,7 +69,12 @@ function CashRegister() {
   }, [fetchCurrentSession]);
 
   useEffect(() => {
-    // Redirection conditionnelle basée sur l'état de la session
+    // En mode virtuel, toujours afficher le dashboard (pas de redirection auto)
+    if (isVirtualRoute) {
+      return; // Le dashboard virtuel s'affiche directement
+    }
+
+    // En mode réel, redirection conditionnelle basée sur l'état de la session
     if (!loading) {
       if (!currentSession) {
         // Pas de session active, rediriger vers l'ouverture de session
@@ -70,38 +87,25 @@ function CashRegister() {
         navigate('/cash-register/session/open');
       }
     }
-  }, [currentSession, loading, navigate]);
+  }, [currentSession, loading, navigate, isVirtualRoute]);
 
-  // Afficher un loader pendant la vérification de la session
-  if (loading) {
-    return (
-      <div data-testid="cashregister-container" style={{ background: 'white', padding: '2rem', borderRadius: '8px' }}>
-        <Title>
-          <Calculator size={24} data-testid="calculator-icon" />
-          Interface Caisse
-        </Title>
-        <LoadingContainer>
-          <LoadingSpinner size={48} data-testid="loading-spinner" />
-          <h2>Vérification de la session...</h2>
-          <p>Chargement en cours...</p>
-        </LoadingContainer>
-      </div>
-    );
-  }
+  // Toujours afficher le dashboard (il gère lui-même l'affichage selon le mode)
+  // Le provider force le bon mode selon l'URL
+  return <CashRegisterDashboard />;
+}
 
-  // Fallback en cas d'erreur (ne devrait normalement pas s'afficher)
+/**
+ * Composant principal avec le provider
+ * Force le mode réel pour /caisse, mode virtuel pour /cash-register/virtual
+ */
+function CashRegister() {
+  const location = useLocation();
+  const isVirtualRoute = location.pathname.includes('/virtual') && !location.pathname.startsWith('/caisse');
+  
   return (
-    <div data-testid="cashregister-container" style={{ background: 'white', padding: '2rem', borderRadius: '8px' }}>
-      <Title>
-        <Calculator size={24} data-testid="calculator-icon" />
-        Interface Caisse
-      </Title>
-      <div data-testid="coming-soon" style={{ textAlign: 'center', padding: '3rem', color: '#666' }}>
-        <Package size={48} style={{ marginBottom: '1rem', opacity: 0.5 }} data-testid="package-icon" />
-        <h2>En cours de développement</h2>
-        <p>L'interface de caisse sera bientôt disponible.</p>
-      </div>
-    </div>
+    <CashStoreProvider forceMode={isVirtualRoute ? 'virtual' : 'real'}>
+      <CashRegisterContent />
+    </CashStoreProvider>
   );
 }
 

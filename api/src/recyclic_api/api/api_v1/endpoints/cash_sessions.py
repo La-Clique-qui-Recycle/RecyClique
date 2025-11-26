@@ -146,7 +146,32 @@ async def create_cash_session(
             db=db
         )
 
-        return CashSessionResponse.model_validate(cash_session)
+        # Sérialiser la réponse - utiliser from_orm pour éviter les problèmes de lazy loading
+        try:
+            # Rafraîchir l'objet depuis la DB pour s'assurer que tous les champs sont chargés
+            db.refresh(cash_session)
+            response = CashSessionResponse.model_validate(cash_session)
+            return response
+        except Exception as serialization_error:
+            logger.error(f"Erreur lors de la sérialisation de la session {cash_session.id}: {serialization_error}", exc_info=True)
+            # Fallback: construire manuellement la réponse
+            return CashSessionResponse(
+                id=str(cash_session.id),
+                operator_id=str(cash_session.operator_id),
+                site_id=str(cash_session.site_id),
+                register_id=str(cash_session.register_id) if cash_session.register_id else None,
+                initial_amount=cash_session.initial_amount,
+                current_amount=cash_session.current_amount,
+                status=cash_session.status,
+                opened_at=cash_session.opened_at,
+                closed_at=cash_session.closed_at,
+                total_sales=cash_session.total_sales,
+                total_items=cash_session.total_items,
+                closing_amount=cash_session.closing_amount,
+                actual_amount=cash_session.actual_amount,
+                variance=cash_session.variance,
+                variance_comment=cash_session.variance_comment
+            )
     except ValueError as e:
         log_cash_session_opening(
             user_id=str(current_user.id),
@@ -159,6 +184,8 @@ async def create_cash_session(
         # Important: renvoyer un JSON cohérent
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        # Log any unexpected error before re-raising
+        logger.error(f"Unexpected error in create_cash_session: {e}", exc_info=True)
         log_cash_session_opening(
             user_id=str(current_user.id),
             username=current_user.username or "Unknown",
@@ -167,7 +194,11 @@ async def create_cash_session(
             success=False,
             db=db
         )
-        raise
+        # Ensure proper error response format
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erreur lors de la création de la session de caisse: {str(e)}"
+        )
 
 @router.get(
     "/status/{register_id}",

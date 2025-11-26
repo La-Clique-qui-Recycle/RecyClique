@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Container, Paper, Title, TextInput, Select, Button, Group, Alert, LoadingOverlay } from '@mantine/core';
 import { IconCash, IconUser, IconCurrencyEuro, IconAlertCircle, IconBuilding, IconCashRegister } from '@tabler/icons-react';
-import { useCashSessionStore } from '../../stores/cashSessionStore';
+import { useCashSessionStoreInjected, useCashStores } from '../../providers/CashStoreProvider';
 import { cashSessionService } from '../../services/cashSessionService';
 import { useAuthStore } from '../../stores/authStore';
 import { CashRegistersApi, SitesApi } from '../../generated/api';
@@ -15,13 +15,16 @@ const OpenCashSession: React.FC<OpenCashSessionProps> = ({ onSessionOpened }) =>
   const navigate = useNavigate();
   const location = useLocation();
   const { currentUser } = useAuthStore();
+  const { cashSessionStore, isVirtualMode } = useCashStores();
   const { 
     openSession, 
     loading, 
     error, 
     clearError ,
     resumeSession
-  } = useCashSessionStore();
+  } = cashSessionStore;
+  
+  const basePath = isVirtualMode ? '/cash-register/virtual' : '/cash-register';
 
   const [formData, setFormData] = useState({
     operator_id: currentUser?.id || 'test-user-id',
@@ -39,12 +42,21 @@ const OpenCashSession: React.FC<OpenCashSessionProps> = ({ onSessionOpened }) =>
   useEffect(() => {
     const tryImmediateResume = async () => {
       const st: any = location.state;
-      if (st?.intent === 'resume' && st?.register_id) {
-        const status = await cashSessionService.getRegisterSessionStatus(st.register_id);
-        if (status.is_active && status.session_id) {
-          const ok = await resumeSession(status.session_id);
-          if (ok) {
-            navigate('/cash-register/sale');
+        if (st?.intent === 'resume' && st?.register_id) {
+        if (isVirtualMode) {
+          // En mode virtuel, vérifier la session depuis le store virtuel
+          const { currentSession } = cashSessionStore;
+          if (currentSession && currentSession.status === 'open') {
+            navigate(`${basePath}/sale`);
+          }
+        } else {
+          // Mode réel : vérifier via l'API
+          const status = await cashSessionService.getRegisterSessionStatus(st.register_id);
+          if (status.is_active && status.session_id) {
+            const ok = await resumeSession(status.session_id);
+            if (ok) {
+              navigate(`${basePath}/sale`);
+            }
           }
         }
       }
@@ -72,8 +84,18 @@ const OpenCashSession: React.FC<OpenCashSessionProps> = ({ onSessionOpened }) =>
     }
   }, [formData.site_id]);
 
-  // UX-B10: Vérifier le statut de la caisse quand le register_id change
+  // UX-B10: Vérifier le statut de la caisse quand le register_id change (mode réel uniquement)
   useEffect(() => {
+    if (isVirtualMode) {
+      // En mode virtuel, vérifier depuis le store
+      const { currentSession } = cashSessionStore;
+      setRegisterStatus({
+        is_active: currentSession?.status === 'open' || false,
+        session_id: currentSession?.id || null
+      });
+      return;
+    }
+    
     const checkRegisterStatus = async () => {
       if (!formData.register_id) {
         setRegisterStatus({ is_active: false, session_id: null });
@@ -83,7 +105,7 @@ const OpenCashSession: React.FC<OpenCashSessionProps> = ({ onSessionOpened }) =>
       setRegisterStatus(status);
     };
     checkRegisterStatus();
-  }, [formData.register_id]);
+  }, [formData.register_id, isVirtualMode, cashSessionStore]);
 
   const loadSites = async () => {
     setLoadingSites(true);
@@ -207,14 +229,24 @@ const OpenCashSession: React.FC<OpenCashSessionProps> = ({ onSessionOpened }) =>
 
     try {
       // UX-B10: si une session est active pour cette caisse, reprendre
-      if (registerStatus.is_active && registerStatus.session_id) {
+      if (!isVirtualMode && registerStatus.is_active && registerStatus.session_id) {
+        // En mode réel uniquement : vérifier via l'API
         const ok = await resumeSession(registerStatus.session_id);
         if (ok) {
           if (onSessionOpened) {
             onSessionOpened(registerStatus.session_id);
           } else {
-            navigate('/cash-register/sale');
+            navigate(`${basePath}/sale`);
           }
+          return;
+        }
+      }
+      
+      // En mode virtuel, vérifier la session depuis le store
+      if (isVirtualMode) {
+        const { currentSession } = cashSessionStore;
+        if (currentSession && currentSession.status === 'open') {
+          navigate(`${basePath}/sale`);
           return;
         }
       }
@@ -231,7 +263,7 @@ const OpenCashSession: React.FC<OpenCashSessionProps> = ({ onSessionOpened }) =>
         if (onSessionOpened) {
           onSessionOpened(session.id);
         } else {
-          navigate('/cash-register/sale');
+          navigate(`${basePath}/sale`);
         }
       }
     } catch (error) {
@@ -240,7 +272,8 @@ const OpenCashSession: React.FC<OpenCashSessionProps> = ({ onSessionOpened }) =>
   };
 
   const handleCancel = () => {
-    navigate('/caisse');
+    // Retourner au dashboard approprié selon le mode
+    navigate(isVirtualMode ? '/cash-register/virtual' : '/caisse');
   };
 
   return (

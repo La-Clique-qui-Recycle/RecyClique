@@ -15,9 +15,9 @@ class CashSessionStatus(PyEnum):
 
 
 class CashSessionStep(PyEnum):
-    ENTRY = "entry"      # Phase de réception/dépôt d'objets
-    SALE = "sale"        # Phase de vente (caisse)
-    EXIT = "exit"        # Phase de clôture
+    ENTRY = "ENTRY"      # Phase de réception/dépôt d'objets
+    SALE = "SALE"        # Phase de vente (caisse)
+    EXIT = "EXIT"        # Phase de clôture
 
 
 class CashSession(Base):

@@ -25,11 +25,13 @@ describe('Sale Page', () => {
       opened_at: '2024-01-01T00:00:00Z'
     },
     currentSaleItems: [],
+    currentSaleNote: null,  // Story B40-P1: Notes sur les tickets de caisse
     loading: false,
     error: null,
     addSaleItem: vi.fn(),
     removeSaleItem: vi.fn(),
     updateSaleItem: vi.fn(),
+    setCurrentSaleNote: vi.fn(),  // Story B40-P1: Notes sur les tickets de caisse
     clearCurrentSale: vi.fn(),
     submitSale: vi.fn(),
     clearError: vi.fn()
@@ -382,6 +384,48 @@ describe('Sale Page', () => {
 
     await waitFor(() => {
       expect(mockSubmitSale).toHaveBeenCalledWith(mockItems);
+    });
+  });
+
+  // Story B40-P1: Test pour vérifier que la note est envoyée lors de la soumission
+  it('sends sale note when finalizing sale with note', async () => {
+    const mockItems = [
+      {
+        id: 'item-1',
+        category: 'EEE-1',
+        quantity: 1,
+        weight: 2,
+        price: 10,
+        total: 10
+      }
+    ];
+
+    const mockSubmitSale = vi.fn().mockResolvedValue(true);
+    const mockSetCurrentSaleNote = vi.fn();
+
+    mockUseCashSessionStore.mockReturnValue({
+      ...mockStore,
+      currentSaleItems: mockItems,
+      currentSaleNote: 'Test note for ticket',
+      setCurrentSaleNote: mockSetCurrentSaleNote,
+      submitSale: mockSubmitSale
+    });
+
+    render(<Sale />);
+
+    // Vérifier que le champ note est présent
+    const noteInput = screen.getByTestId('sale-note-input');
+    expect(noteInput).toBeInTheDocument();
+    expect((noteInput as HTMLTextAreaElement).value).toBe('Test note for ticket');
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Finaliser la vente' })[0]);
+    const confirm = screen.queryByTestId('confirm-finalization');
+    if (confirm && !(confirm as HTMLButtonElement).disabled) {
+      fireEvent.click(confirm);
+    }
+
+    await waitFor(() => {
+      expect(mockSubmitSale).toHaveBeenCalledWith(mockItems, expect.any(Object));
     });
   });
 

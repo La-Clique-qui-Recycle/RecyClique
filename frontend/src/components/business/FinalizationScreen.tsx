@@ -1,5 +1,7 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import styled from 'styled-components';
+import { Textarea } from '@mantine/core';
+import { Heart, CreditCard, StickyNote, Coins } from 'lucide-react';
 import { useFeatureFlag } from '../../utils/features';
 
 const Backdrop = styled.div<{ $open: boolean }>`
@@ -18,7 +20,15 @@ const Modal = styled.div`
   padding: 1.5rem;
   min-width: 420px;
   max-width: 95vw;
+  max-height: 90vh;
+  overflow-y: auto;
   box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+
+  @media (max-width: 480px) {
+    min-width: 95vw;
+    padding: 1rem;
+    border-radius: 12px;
+  }
 `;
 
 const Title = styled.h3`
@@ -45,6 +55,11 @@ const Form = styled.form`
 const Row = styled.div`
   display: flex;
   gap: 1rem;
+
+  @media (max-width: 768px) {
+    flex-direction: column;
+    gap: 1.25rem;
+  }
 `;
 
 const Field = styled.div`
@@ -52,6 +67,7 @@ const Field = styled.div`
   flex-direction: column;
   gap: 0.5rem;
   flex: 1;
+  position: relative;
 `;
 
 const Label = styled.label`
@@ -109,6 +125,7 @@ export interface FinalizationData {
   paymentMethod: PaymentMethod;
   cashGiven?: number;
   change?: number;
+  note?: string;
 }
 
 interface FinalizationScreenProps {
@@ -116,9 +133,20 @@ interface FinalizationScreenProps {
   totalAmount: number; // total ticket
   onCancel: () => void;
   onConfirm: (data: FinalizationData) => void;
+  saleNote?: string | null;
+  onSaleNoteChange?: (note: string | null) => void;
+  isVirtual?: boolean; // Indique si c'est en mode virtuel
 }
 
-const FinalizationScreen: React.FC<FinalizationScreenProps> = ({ open, totalAmount, onCancel, onConfirm }) => {
+const FinalizationScreen: React.FC<FinalizationScreenProps> = ({
+  open,
+  totalAmount,
+  onCancel,
+  onConfirm,
+  saleNote = null,
+  onSaleNoteChange,
+  isVirtual = false
+}) => {
   const cashChequesV2Enabled = useFeatureFlag('cashChequesV2');
   const [donation, setDonation] = useState<string>('0');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
@@ -178,6 +206,7 @@ const FinalizationScreen: React.FC<FinalizationScreenProps> = ({ open, totalAmou
       paymentMethod,
       cashGiven: paymentMethod === 'cash' ? parsedCashGiven : undefined,
       change: paymentMethod === 'cash' ? change : undefined,
+      note: saleNote || undefined,
     });
   };
 
@@ -185,6 +214,12 @@ const FinalizationScreen: React.FC<FinalizationScreenProps> = ({ open, totalAmou
     <Backdrop $open={open} role="dialog" aria-modal="true" aria-label="Finaliser la vente" data-testid="finalization-screen">
       <Modal>
         <Title>Finaliser la vente</Title>
+
+        {isVirtual && (
+          <InfoMessage style={{ backgroundColor: '#fff3cd', borderColor: '#ffeaa7' }}>
+            🎓 <strong>Mode Formation :</strong> Cette vente est simulée et ne sera pas enregistrée dans les comptes réels.
+          </InfoMessage>
+        )}
 
         {isSpecialTransaction && (
           <InfoMessage>
@@ -200,7 +235,10 @@ const FinalizationScreen: React.FC<FinalizationScreenProps> = ({ open, totalAmou
 
           <Row>
             <Field>
-              <Label htmlFor="donation">Don (€)</Label>
+              <Label htmlFor="donation">
+                <Heart size={16} style={{ marginRight: '0.5rem', color: '#e91e63' }} />
+                Don (€)
+              </Label>
               <Input
                 id="donation"
                 type="number"
@@ -209,27 +247,64 @@ const FinalizationScreen: React.FC<FinalizationScreenProps> = ({ open, totalAmou
                 value={donation}
                 onChange={(e) => setDonation(e.target.value)}
                 data-testid="donation-input"
+                placeholder="0.00"
               />
             </Field>
             <Field>
-              <Label htmlFor="payment">Moyen de paiement</Label>
+              <Label htmlFor="payment">
+                <CreditCard size={16} style={{ marginRight: '0.5rem', color: '#2c5530' }} />
+                Moyen de paiement
+              </Label>
               <Select
                 id="payment"
                 value={paymentMethod}
                 onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
                 data-testid="payment-select"
               >
-                <option value="cash">Espèces</option>
-                <option value="card">Carte</option>
-                <option value="check">Chèque</option>
+                <option value="cash">💰 Espèces</option>
+                <option value="card">💳 Carte</option>
+                <option value="check">📝 Chèque</option>
               </Select>
             </Field>
           </Row>
 
+          {onSaleNoteChange && (
+            <Field>
+              <Label htmlFor="sale-note">
+                <StickyNote size={16} style={{ marginRight: '0.5rem', color: '#ff9800' }} />
+                Note contextuelle (optionnel)
+              </Label>
+              <Textarea
+                id="sale-note"
+                data-testid="sale-note-input"
+                value={saleNote || ''}
+                onChange={(e) => {
+                  const value = e.target.value || null;
+                  onSaleNoteChange(value);
+                }}
+                placeholder="Ajouter une note contextuelle pour ce ticket (ex: client régulier, problème technique, etc.)"
+                minRows={2}
+                maxRows={4}
+                style={{
+                  marginTop: '8px',
+                  border: '2px solid #e0e0e0',
+                  borderRadius: '6px',
+                  padding: '0.75rem',
+                  fontSize: '0.95rem',
+                  lineHeight: '1.4',
+                  resize: 'vertical'
+                }}
+              />
+            </Field>
+          )}
+
           {(paymentMethod === 'cash' || (paymentMethod === 'check' && cashChequesV2Enabled)) && amountDue > 0 && (
             <Row>
               <Field>
-                <Label htmlFor="cashGiven">Montant donné (€)</Label>
+                <Label htmlFor="cashGiven">
+                  <Coins size={16} style={{ marginRight: '0.5rem', color: '#2c5530' }} />
+                  Montant donné (€)
+                </Label>
                 <Input
                   id="cashGiven"
                   type="number"
@@ -238,15 +313,24 @@ const FinalizationScreen: React.FC<FinalizationScreenProps> = ({ open, totalAmou
                   value={cashGiven}
                   onChange={(e) => setCashGiven(e.target.value)}
                   data-testid="cash-given-input"
+                  placeholder="0.00"
                 />
               </Field>
               {paymentMethod === 'cash' && (
                 <Field>
-                  <Label>Monnaie à rendre</Label>
+                  <Label>
+                    <Coins size={16} style={{ marginRight: '0.5rem', color: '#ff9800' }} />
+                    Monnaie à rendre
+                  </Label>
                   <Input
                     value={parsedCashGiven != null ? (Math.max(0, change || 0)).toFixed(2) : '0.00'}
                     readOnly
                     data-testid="change-output"
+                    style={{
+                      backgroundColor: '#f8f9fa',
+                      fontWeight: 'bold',
+                      color: change && change > 0 ? '#2c5530' : '#666'
+                    }}
                   />
                 </Field>
               )}

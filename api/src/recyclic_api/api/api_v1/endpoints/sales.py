@@ -11,7 +11,7 @@ from recyclic_api.models.sale import Sale
 from recyclic_api.models.sale_item import SaleItem
 from recyclic_api.models.cash_session import CashSession
 from recyclic_api.models.user import User, UserRole
-from recyclic_api.schemas.sale import SaleResponse, SaleCreate
+from recyclic_api.schemas.sale import SaleResponse, SaleCreate, SaleUpdate
 
 router = APIRouter()
 auth_scheme = HTTPBearer(auto_error=False)
@@ -34,6 +34,57 @@ async def get_sale(sale_id: str, db: Session = Depends(get_db)):
     if not sale:
         raise HTTPException(status_code=404, detail="Sale not found")
 
+    return sale
+
+@router.put("/{sale_id}", response_model=SaleResponse)
+async def update_sale_note(
+    sale_id: str,
+    sale_update: SaleUpdate,
+    db: Session = Depends(get_db),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(auth_scheme),
+):
+    """
+    Update sale note (admin only).
+
+    STORY-B40-P4: Edition des notes côté Admin
+    - Restricted to Admin/SuperAdmin roles
+    - Updates only the note field
+    """
+    # Enforce 401 when no Authorization header is provided
+    if credentials is None:
+        raise HTTPException(status_code=401, detail="Unauthorized", headers={"WWW-Authenticate": "Bearer"})
+
+    # Validate token and extract user_id
+    try:
+        payload = verify_token(credentials.credentials)
+        user_id = payload.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid token")
+    except Exception:
+        raise HTTPException(status_code=401, detail="Unauthorized", headers={"WWW-Authenticate": "Bearer"})
+
+    # Check user role - only admin/super-admin can edit notes
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user or user.role not in [UserRole.ADMIN, UserRole.SUPER_ADMIN]:
+        raise HTTPException(status_code=403, detail="Insufficient permissions. Admin access required.")
+
+    # Validate sale ID
+    try:
+        sale_uuid = UUID(sale_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid sale ID format")
+
+    # Find and update the sale
+    sale = db.query(Sale).filter(Sale.id == sale_uuid).first()
+    if not sale:
+        raise HTTPException(status_code=404, detail="Sale not found")
+
+    # Update only the note field
+    if sale_update.note is not None:
+        sale.note = sale_update.note
+
+    db.commit()
+    db.refresh(sale)
     return sale
 
 @router.post("/", response_model=SaleResponse)
@@ -65,12 +116,14 @@ async def create_sale(
 
     # Create the sale with operator_id for traceability
     # Story 1.1.2: preset_id et notes sont maintenant sur sale_items (par item individuel)
+    # Story B40-P5: Ajout du champ note sur le ticket de caisse
     db_sale = Sale(
         cash_session_id=sale_data.cash_session_id,
         operator_id=user_id,  # Associate sale with current operator
         total_amount=sale_data.total_amount,
         donation=sale_data.donation,
-        payment_method=sale_data.payment_method
+        payment_method=sale_data.payment_method,
+        note=sale_data.note  # Story B40-P5: Notes sur les tickets
     )
     db.add(db_sale)
     db.flush()  # Get the sale ID

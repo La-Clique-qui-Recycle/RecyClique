@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { vi } from 'vitest';
 import Ticket from '../Ticket';
 import { SaleItem } from '../../../stores/cashSessionStore';
@@ -8,6 +8,7 @@ import { SaleItem } from '../../../stores/cashSessionStore';
 const mockOnRemoveItem = vi.fn();
 const mockOnUpdateItem = vi.fn();
 const mockOnFinalizeSale = vi.fn();
+const mockOnSaleNoteChange = vi.fn();
 
 describe('Ticket Component', () => {
   const mockItems: SaleItem[] = [
@@ -129,5 +130,170 @@ describe('Ticket Component', () => {
 
     expect(screen.getByText('0.00 kg')).toBeInTheDocument();
     expect(screen.getByTestId('sale-total')).toHaveTextContent('0.00 €');
+  });
+
+  // Story B40-P1: Tests pour le champ note
+  describe('Sale Note Field', () => {
+    beforeEach(() => {
+      vi.clearAllMocks();
+    });
+
+    it('should display note input field when onSaleNoteChange is provided', () => {
+      render(
+        <Ticket
+          items={mockItems}
+          onRemoveItem={mockOnRemoveItem}
+          onUpdateItem={mockOnUpdateItem}
+          onFinalizeSale={mockOnFinalizeSale}
+          saleNote={null}
+          onSaleNoteChange={mockOnSaleNoteChange}
+        />
+      );
+
+      const noteInput = screen.getByTestId('sale-note-input');
+      expect(noteInput).toBeInTheDocument();
+      expect(noteInput).toHaveAttribute('placeholder', 'Ajouter une note pour ce ticket...');
+    });
+
+    it('should not display note input field when onSaleNoteChange is not provided', () => {
+      render(
+        <Ticket
+          items={mockItems}
+          onRemoveItem={mockOnRemoveItem}
+          onUpdateItem={mockOnUpdateItem}
+          onFinalizeSale={mockOnFinalizeSale}
+          saleNote="Test note"
+        />
+      );
+
+      const noteInput = screen.queryByTestId('sale-note-input');
+      expect(noteInput).not.toBeInTheDocument();
+    });
+
+    it('should call onSaleNoteChange when note is entered', async () => {
+      render(
+        <Ticket
+          items={mockItems}
+          onRemoveItem={mockOnRemoveItem}
+          onUpdateItem={mockOnUpdateItem}
+          onFinalizeSale={mockOnFinalizeSale}
+          saleNote={null}
+          onSaleNoteChange={mockOnSaleNoteChange}
+        />
+      );
+
+      const noteInput = screen.getByTestId('sale-note-input');
+      fireEvent.change(noteInput, { target: { value: 'Test note content' } });
+
+      await waitFor(() => {
+        expect(mockOnSaleNoteChange).toHaveBeenCalledWith('Test note content');
+      });
+    });
+
+    it('should call onSaleNoteChange with null when note is cleared', async () => {
+      render(
+        <Ticket
+          items={mockItems}
+          onRemoveItem={mockOnRemoveItem}
+          onUpdateItem={mockOnUpdateItem}
+          onFinalizeSale={mockOnFinalizeSale}
+          saleNote="Existing note"
+          onSaleNoteChange={mockOnSaleNoteChange}
+        />
+      );
+
+      const noteInput = screen.getByTestId('sale-note-input') as HTMLTextAreaElement;
+      expect(noteInput.value).toBe('Existing note');
+
+      fireEvent.change(noteInput, { target: { value: '   ' } }); // Whitespace only
+
+      await waitFor(() => {
+        expect(mockOnSaleNoteChange).toHaveBeenCalledWith(null);
+      });
+    });
+
+    it('should display existing note value in input field', () => {
+      render(
+        <Ticket
+          items={mockItems}
+          onRemoveItem={mockOnRemoveItem}
+          onUpdateItem={mockOnUpdateItem}
+          onFinalizeSale={mockOnFinalizeSale}
+          saleNote="Existing note"
+          onSaleNoteChange={mockOnSaleNoteChange}
+        />
+      );
+
+      const noteInput = screen.getByTestId('sale-note-input') as HTMLTextAreaElement;
+      expect(noteInput.value).toBe('Existing note');
+    });
+
+    it('should display note in read-only mode when onSaleNoteChange is not provided', () => {
+      render(
+        <Ticket
+          items={mockItems}
+          onRemoveItem={mockOnRemoveItem}
+          onUpdateItem={mockOnUpdateItem}
+          onFinalizeSale={mockOnFinalizeSale}
+          saleNote="Read-only note"
+        />
+      );
+
+      expect(screen.getByText('Read-only note')).toBeInTheDocument();
+      expect(screen.getByText(/^Note:/)).toBeInTheDocument();
+    });
+
+    it('should not display note section when note is null and onSaleNoteChange is not provided', () => {
+      render(
+        <Ticket
+          items={mockItems}
+          onRemoveItem={mockOnRemoveItem}
+          onUpdateItem={mockOnUpdateItem}
+          onFinalizeSale={mockOnFinalizeSale}
+          saleNote={null}
+        />
+      );
+
+      expect(screen.queryByText(/^Note:/)).not.toBeInTheDocument();
+    });
+
+    it('should persist note during wizard navigation', async () => {
+      const { rerender } = render(
+        <Ticket
+          items={mockItems}
+          onRemoveItem={mockOnRemoveItem}
+          onUpdateItem={mockOnUpdateItem}
+          onFinalizeSale={mockOnFinalizeSale}
+          saleNote="Persistent note"
+          onSaleNoteChange={mockOnSaleNoteChange}
+        />
+      );
+
+      const noteInput = screen.getByTestId('sale-note-input') as HTMLTextAreaElement;
+      expect(noteInput.value).toBe('Persistent note');
+
+      // Simulate adding more items (wizard navigation)
+      rerender(
+        <Ticket
+          items={[...mockItems, {
+            id: '3',
+            category: 'EEE-5',
+            quantity: 1,
+            weight: 1.0,
+            price: 10.0,
+            total: 10.0
+          }]}
+          onRemoveItem={mockOnRemoveItem}
+          onUpdateItem={mockOnUpdateItem}
+          onFinalizeSale={mockOnFinalizeSale}
+          saleNote="Persistent note"
+          onSaleNoteChange={mockOnSaleNoteChange}
+        />
+      );
+
+      // Note should still be there
+      const updatedNoteInput = screen.getByTestId('sale-note-input') as HTMLTextAreaElement;
+      expect(updatedNoteInput.value).toBe('Persistent note');
+    });
   });
 });
