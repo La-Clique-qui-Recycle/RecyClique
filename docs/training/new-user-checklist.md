@@ -59,6 +59,51 @@ Cette checklist vous guide pas à pas pour prendre en main le système Recyclic.
 - [ ] Je sais valider une vente
 - [ ] Je sais fermer une session de caisse
 
+### Mode Caisse Virtuelle (Formation) 🎓
+- [ ] J'ai trouvé la "Caisse Virtuelle" dans la liste des postes
+- [ ] J'ai cliqué sur le bouton "Simuler" pour accéder au mode entraînement
+- [ ] Je vois le badge "Mode virtuel" et "🏆 MODE FORMATION"
+- [ ] J'ai ouvert une session virtuelle avec un fond de caisse fictif
+- [ ] J'ai pratiqué des ventes dans l'interface d'entraînement
+- [ ] J'ai utilisé le bouton "Réinitialiser la session" pour effacer les données
+- [ ] J'ai quitté le mode virtuel pour revenir à la caisse normale
+
+#### Scénarios d'Entraînement Pratiques
+
+**Scénario Débutant :**
+- Objectif : Apprendre les bases de la saisie
+- Étapes :
+  - Ouvrir une session virtuelle (50€ de fond)
+  - Ajouter une lampe de bureau (15€)
+  - Ajouter un clavier + souris (10€)
+  - Vérifier le total (25€)
+  - Finaliser avec paiement en espèces
+
+**Scénario Intermédiaire :**
+- Objectif : Gestion de ventes plus complexes
+- Étapes :
+  - Ajouter un PC portable (200€)
+  - Ajouter un écran 22" (45€)
+  - Ajouter une table basse (35€)
+  - Ajouter un manteau femme (12€)
+  - Total : 292€
+  - Finaliser avec paiement par carte
+
+**Scénario Avancé :**
+- Objectif : Gestion complète avec dons
+- Étapes :
+  - Vente d'électroménager : Lave-linge (150€) + Four (100€) + Fauteuils (50€)
+  - Ajouter un don de 5€
+  - Total : 305€
+  - Vérifier la remise de monnaie
+  - Exporter la session pour analyse
+
+**Astuces pour l'Entraînement :**
+- Utilisez "Nouvelle vente d'entraînement" pour recommencer
+- Exportez vos sessions pour garder une trace de vos progrès
+- Comparez vos résultats avec les prix réels du catalogue
+- Pratiquez les raccourcis clavier en mode virtuel
+
 ### Cas Pratiques
 - [ ] J'ai traité au moins 5 ventes fictives
 - [ ] J'ai testé l'annulation d'un article
@@ -117,6 +162,7 @@ Cette checklist vous guide pas à pas pour prendre en main le système Recyclic.
 ### Test de Compétences de Base
 - [ ] Je peux enregistrer un dépôt via le bot sans aide
 - [ ] Je peux traiter une vente complète sans assistance
+- [ ] Je sais utiliser le mode caisse virtuelle pour m'entraîner
 - [ ] Je sais résoudre les 3 erreurs les plus courantes
 - [ ] Je connais au moins 2 raccourcis utiles
 
@@ -131,6 +177,9 @@ Cette checklist vous guide pas à pas pour prendre en main le système Recyclic.
 ### Documentation
 - [ ] J'ai repéré l'emplacement des guides utilisateur
 - [ ] Je sais accéder au FAQ et Troubleshooting
+- [ ] Je sais utiliser le mode caisse virtuelle pour m'entraîner
+- [ ] Je connais les scénarios d'entraînement (débutant, intermédiaire, avancé)
+- [ ] Je sais exporter mes sessions d'entraînement pour analyse
 - [ ] Je connais les numéros de support à contacter
 - [ ] Je sais comment demander une formation complémentaire
 

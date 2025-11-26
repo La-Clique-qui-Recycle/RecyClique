@@ -10,9 +10,9 @@ class CashSessionStatus(str, Enum):
 
 
 class CashSessionStep(str, Enum):
-    ENTRY = "entry"      # Phase de réception/dépôt d'objets
-    SALE = "sale"        # Phase de vente (caisse)
-    EXIT = "exit"        # Phase de clôture
+    ENTRY = "ENTRY"      # Phase de réception/dépôt d'objets
+    SALE = "SALE"        # Phase de vente (caisse)
+    EXIT = "EXIT"        # Phase de clôture
 
 
 class CashSessionBase(BaseModel):
@@ -150,7 +150,7 @@ class CashSessionStats(BaseModel):
 class SaleDetail(BaseModel):
     """Schéma pour les détails d'une vente dans une session."""
     model_config = ConfigDict(from_attributes=True)
-    
+
     id: str = Field(..., description="ID de la vente")
     total_amount: float = Field(..., description="Montant total de la vente")
     donation: Optional[float] = Field(None, description="Montant du don")
@@ -158,6 +158,7 @@ class SaleDetail(BaseModel):
     created_at: datetime = Field(..., description="Date et heure de la vente")
     operator_id: Optional[str] = Field(None, description="ID de l'opérateur")
     operator_name: Optional[str] = Field(None, description="Nom de l'opérateur")
+    note: Optional[str] = Field(None, description="Note associée à la vente")  # Story B40-P4: Notes dans liste sessions
     
     @field_validator('id', 'operator_id', mode='before')
     @classmethod

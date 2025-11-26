@@ -1,5 +1,6 @@
 import React from 'react'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { BrowserRouter } from 'react-router-dom'
 import { vi } from 'vitest'
 import CashSessionDetail from '../../../pages/Admin/CashSessionDetail'
@@ -31,6 +32,32 @@ Object.defineProperty(window, 'localStorage', {
   value: mockLocalStorage,
 })
 
+// Mock de useAuthStore
+const mockUseAuthStore = vi.fn()
+vi.mock('../../../stores/authStore', () => ({
+  useAuthStore: mockUseAuthStore,
+}))
+
+// Mock des services
+vi.mock('../../../services/salesService', () => ({
+  getSaleDetail: vi.fn(),
+  updateSaleNote: vi.fn(),
+}))
+
+vi.mock('../../../services/categoriesService', () => ({
+  getCategories: vi.fn(),
+}))
+
+vi.mock('../../../services/usersService', () => ({
+  getUsers: vi.fn(),
+}))
+
+vi.mock('../../../services/presetService', () => ({
+  presetService: {
+    getPresets: vi.fn(),
+  },
+}))
+
 const mockSessionData = {
   id: 'test-session-id',
   operator_id: 'operator-id',
@@ -51,7 +78,8 @@ const mockSessionData = {
       donation: 5.0,
       payment_method: 'cash',
       created_at: '2025-01-27T11:00:00Z',
-      operator_id: 'operator-id'
+      operator_id: 'operator-id',
+      note: 'Vente avec don pour association locale'
     },
     {
       id: 'sale-2',
@@ -59,7 +87,8 @@ const mockSessionData = {
       donation: 0.0,
       payment_method: 'card',
       created_at: '2025-01-27T12:00:00Z',
-      operator_id: 'operator-id'
+      operator_id: 'operator-id',
+      note: null
     }
   ]
 }
@@ -272,10 +301,722 @@ describe('CashSessionDetail', () => {
     })
 
     renderWithRouter(<CashSessionDetail />)
-    
+
     await waitFor(() => {
       // Vérifier que les dates sont formatées (format français)
       expect(screen.getByText(/27\/01\/2025/)).toBeInTheDocument()
+    })
+  })
+
+  // Tests pour B40-P4: Edition des notes côté Admin
+  describe('Note Editing (B40-P4)', () => {
+    const mockSaleDetail = {
+      id: 'sale-1',
+      cash_session_id: 'test-session-id',
+      total_amount: 25.0,
+      donation: 5.0,
+      payment_method: 'cash',
+      created_at: '2025-01-27T11:00:00Z',
+      operator_id: 'operator-id',
+      note: 'Vente avec don pour association locale',
+      items: []
+    }
+
+    beforeEach(() => {
+      mockUseAuthStore.mockReturnValue({
+        currentUser: { id: 'admin-id', role: 'admin' },
+      })
+
+      vi.mocked(require('../../../services/salesService').getSaleDetail).mockResolvedValue(mockSaleDetail)
+      vi.mocked(require('../../../services/categoriesService').getCategories).mockResolvedValue([])
+      vi.mocked(require('../../../services/usersService').getUsers).mockResolvedValue([])
+      vi.mocked(require('../../../services/presetService').presetService.getPresets).mockResolvedValue([])
+    })
+
+    it('should display note field in ticket modal', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockSessionData,
+      })
+
+      const user = userEvent.setup()
+      renderWithRouter(<CashSessionDetail />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Journal des Ventes (2 ventes)')).toBeInTheDocument()
+      })
+
+      // Ouvrir la modal du ticket
+      const viewTicketButton = screen.getAllByText('Voir le ticket')[0]
+      await user.click(viewTicketButton)
+
+      await waitFor(() => {
+        expect(screen.getByText('Ticket de Caisse')).toBeInTheDocument()
+      })
+
+      // Vérifier que la note est affichée
+      expect(screen.getByText('Note:')).toBeInTheDocument()
+      expect(screen.getByText('Vente avec don pour association locale')).toBeInTheDocument()
+    })
+
+    it('should show edit button for admin users', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockSessionData,
+      })
+
+      const user = userEvent.setup()
+      renderWithRouter(<CashSessionDetail />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Journal des Ventes (2 ventes)')).toBeInTheDocument()
+      })
+
+      // Ouvrir la modal du ticket
+      const viewTicketButton = screen.getAllByText('Voir le ticket')[0]
+      await user.click(viewTicketButton)
+
+      await waitFor(() => {
+        expect(screen.getByText('Modifier la note')).toBeInTheDocument()
+      })
+    })
+
+    it('should hide edit button for non-admin users', async () => {
+      mockUseAuthStore.mockReturnValue({
+        currentUser: { id: 'user-id', role: 'user' },
+      })
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockSessionData,
+      })
+
+      const user = userEvent.setup()
+      renderWithRouter(<CashSessionDetail />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Journal des Ventes (2 ventes)')).toBeInTheDocument()
+      })
+
+      // Ouvrir la modal du ticket
+      const viewTicketButton = screen.getAllByText('Voir le ticket')[0]
+      await user.click(viewTicketButton)
+
+      await waitFor(() => {
+        expect(screen.getByText('Ticket de Caisse')).toBeInTheDocument()
+      })
+
+      // Vérifier que le bouton d'édition n'est pas présent
+      expect(screen.queryByText('Modifier la note')).not.toBeInTheDocument()
+    })
+
+    it('should enter edit mode when edit button is clicked', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockSessionData,
+      })
+
+      const user = userEvent.setup()
+      renderWithRouter(<CashSessionDetail />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Journal des Ventes (2 ventes)')).toBeInTheDocument()
+      })
+
+      // Ouvrir la modal du ticket
+      const viewTicketButton = screen.getAllByText('Voir le ticket')[0]
+      await user.click(viewTicketButton)
+
+      await waitFor(() => {
+        expect(screen.getByText('Modifier la note')).toBeInTheDocument()
+      })
+
+      // Cliquer sur modifier
+      const editButton = screen.getByText('Modifier la note')
+      await user.click(editButton)
+
+      // Vérifier que le mode édition est activé
+      expect(screen.getByDisplayValue('Vente avec don pour association locale')).toBeInTheDocument()
+      expect(screen.getByText('Sauvegarder')).toBeInTheDocument()
+      expect(screen.getByText('Annuler')).toBeInTheDocument()
+    })
+
+    it('should save note changes successfully', async () => {
+      const updatedSale = { ...mockSaleDetail, note: 'Note mise à jour' }
+      vi.mocked(require('../../../services/salesService').updateSaleNote).mockResolvedValue(updatedSale)
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockSessionData,
+      })
+
+      const user = userEvent.setup()
+      renderWithRouter(<CashSessionDetail />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Journal des Ventes (2 ventes)')).toBeInTheDocument()
+      })
+
+      // Ouvrir la modal du ticket
+      const viewTicketButton = screen.getAllByText('Voir le ticket')[0]
+      await user.click(viewTicketButton)
+
+      await waitFor(() => {
+        expect(screen.getByText('Modifier la note')).toBeInTheDocument()
+      })
+
+      // Entrer en mode édition
+      const editButton = screen.getByText('Modifier la note')
+      await user.click(editButton)
+
+      // Modifier la note
+      const textarea = screen.getByDisplayValue('Vente avec don pour association locale')
+      await user.clear(textarea)
+      await user.type(textarea, 'Note mise à jour')
+
+      // Sauvegarder
+      const saveButton = screen.getByText('Sauvegarder')
+      await user.click(saveButton)
+
+      // Vérifier que l'API a été appelée
+      expect(vi.mocked(require('../../../services/salesService').updateSaleNote)).toHaveBeenCalledWith('sale-1', 'Note mise à jour')
+
+      // Vérifier que la note mise à jour est affichée
+      await waitFor(() => {
+        expect(screen.getByText('Note mise à jour')).toBeInTheDocument()
+      })
+    })
+
+    it('should cancel note editing', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockSessionData,
+      })
+
+      const user = userEvent.setup()
+      renderWithRouter(<CashSessionDetail />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Journal des Ventes (2 ventes)')).toBeInTheDocument()
+      })
+
+      // Ouvrir la modal du ticket
+      const viewTicketButton = screen.getAllByText('Voir le ticket')[0]
+      await user.click(viewTicketButton)
+
+      await waitFor(() => {
+        expect(screen.getByText('Modifier la note')).toBeInTheDocument()
+      })
+
+      // Entrer en mode édition
+      const editButton = screen.getByText('Modifier la note')
+      await user.click(editButton)
+
+      // Modifier la note
+      const textarea = screen.getByDisplayValue('Vente avec don pour association locale')
+      await user.clear(textarea)
+      await user.type(textarea, 'Note modifiée')
+
+      // Annuler
+      const cancelButton = screen.getByText('Annuler')
+      await user.click(cancelButton)
+
+      // Vérifier que la note originale est toujours affichée
+      expect(screen.getByText('Vente avec don pour association locale')).toBeInTheDocument()
+      expect(screen.queryByDisplayValue('Note modifiée')).not.toBeInTheDocument()
+    })
+
+    it('should display "Aucune note" when note is null', async () => {
+      const saleWithoutNote = { ...mockSaleDetail, note: null }
+      vi.mocked(require('../../../services/salesService').getSaleDetail).mockResolvedValue(saleWithoutNote)
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockSessionData,
+      })
+
+      const user = userEvent.setup()
+      renderWithRouter(<CashSessionDetail />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Journal des Ventes (2 ventes)')).toBeInTheDocument()
+      })
+
+      // Ouvrir la modal du ticket
+      const viewTicketButton = screen.getAllByText('Voir le ticket')[0]
+      await user.click(viewTicketButton)
+
+      await waitFor(() => {
+        expect(screen.getByText('Aucune note')).toBeInTheDocument()
+      })
+    })
+  })
+
+  // Story B40-P4: Tests for notes functionality
+  describe('Notes Column and Functionality', () => {
+    beforeEach(() => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(mockSessionData),
+      })
+
+      mockUseAuthStore.mockReturnValue({
+        currentUser: { id: 'admin-user', role: 'admin' },
+      })
+    })
+
+    it('should display Notes column in session list', async () => {
+      const user = userEvent.setup()
+      renderWithRouter(<CashSessionDetail />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Journal des Ventes (2 ventes)')).toBeInTheDocument()
+      })
+
+      // Vérifier que la colonne Notes est présente
+      expect(screen.getByText('Notes')).toBeInTheDocument()
+    })
+
+    it('should show note preview in session list', async () => {
+      const sessionWithNotes = {
+        ...mockSessionData,
+        sales: [
+          {
+            ...mockSessionData.sales[0],
+            note: 'Test note for sale'
+          },
+          mockSessionData.sales[1]
+        ]
+      }
+
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(sessionWithNotes),
+      })
+
+      renderWithRouter(<CashSessionDetail />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Journal des Ventes (2 ventes)')).toBeInTheDocument()
+      })
+
+      // Vérifier que la note est affichée dans la colonne
+      expect(screen.getByText('Test note for sale')).toBeInTheDocument()
+    })
+
+    it('should show dash when no note in session list', async () => {
+      renderWithRouter(<CashSessionDetail />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Journal des Ventes (2 ventes)')).toBeInTheDocument()
+      })
+
+      // Vérifier qu'un tiret est affiché pour les ventes sans note
+      const dashes = screen.getAllByText('-')
+      expect(dashes.length).toBeGreaterThan(0)
+    })
+
+    it('should always show note section in ticket popup', async () => {
+      const user = userEvent.setup()
+      renderWithRouter(<CashSessionDetail />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Journal des Ventes (2 ventes)')).toBeInTheDocument()
+      })
+
+      // Ouvrir la modal du ticket (sans note)
+      const viewTicketButton = screen.getAllByText('Voir le ticket')[0]
+      await user.click(viewTicketButton)
+
+      await waitFor(() => {
+        expect(screen.getByText('Ticket de Caisse')).toBeInTheDocument()
+      })
+
+      // Vérifier que la section Note est toujours affichée
+      expect(screen.getByText('Note:')).toBeInTheDocument()
+      expect(screen.getByText('Aucune note')).toBeInTheDocument()
+    })
+
+    it('should show note section when sale has note', async () => {
+      // Mock d'une vente avec note
+      const mockSaleWithNote = {
+        id: 'sale-1',
+        cash_session_id: 'session-1',
+        total_amount: 25.0,
+        donation: 5.0,
+        payment_method: 'cash',
+        created_at: '2025-01-27T11:00:00Z',
+        operator_id: 'operator-1',
+        operator_name: 'John Doe',
+        note: 'This is a test note',
+        items: []
+      }
+
+      const mockGetSaleDetail = vi.mocked(require('../../../services/salesService').getSaleDetail)
+      mockGetSaleDetail.mockResolvedValue(mockSaleWithNote)
+
+      const user = userEvent.setup()
+      renderWithRouter(<CashSessionDetail />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Journal des Ventes (2 ventes)')).toBeInTheDocument()
+      })
+
+      // Ouvrir la modal du ticket
+      const viewTicketButton = screen.getAllByText('Voir le ticket')[0]
+      await user.click(viewTicketButton)
+
+      await waitFor(() => {
+        expect(screen.getByText('Ticket de Caisse')).toBeInTheDocument()
+      })
+
+      // Vérifier que la section Note est affichée avec le contenu
+      expect(screen.getByText('Note:')).toBeInTheDocument()
+      expect(screen.getByText('This is a test note')).toBeInTheDocument()
+    })
+
+    it('should show edit button only for admin users', async () => {
+      const mockSaleWithNote = {
+        id: 'sale-1',
+        cash_session_id: 'session-1',
+        total_amount: 25.0,
+        donation: 5.0,
+        payment_method: 'cash',
+        created_at: '2025-01-27T11:00:00Z',
+        operator_id: 'operator-1',
+        operator_name: 'John Doe',
+        note: 'This is a test note',
+        items: []
+      }
+
+      const mockGetSaleDetail = vi.mocked(require('../../../services/salesService').getSaleDetail)
+      mockGetSaleDetail.mockResolvedValue(mockSaleWithNote)
+
+      const user = userEvent.setup()
+      renderWithRouter(<CashSessionDetail />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Journal des Ventes (2 ventes)')).toBeInTheDocument()
+      })
+
+      // Ouvrir la modal du ticket
+      const viewTicketButton = screen.getAllByText('Voir le ticket')[0]
+      await user.click(viewTicketButton)
+
+      await waitFor(() => {
+        expect(screen.getByText('Ticket de Caisse')).toBeInTheDocument()
+      })
+
+      // Vérifier que le bouton "Modifier la note" est visible pour admin
+      expect(screen.getByText('Modifier la note')).toBeInTheDocument()
+    })
+
+    it('should show "Ajouter une note" button when no note exists', async () => {
+      const mockSaleWithoutNote = {
+        id: 'sale-1',
+        cash_session_id: 'session-1',
+        total_amount: 25.0,
+        donation: 5.0,
+        payment_method: 'cash',
+        created_at: '2025-01-27T11:00:00Z',
+        operator_id: 'operator-1',
+        operator_name: 'John Doe',
+        note: null, // Pas de note
+        items: []
+      }
+
+      const mockGetSaleDetail = vi.mocked(require('../../../services/salesService').getSaleDetail)
+      mockGetSaleDetail.mockResolvedValue(mockSaleWithoutNote)
+
+      const user = userEvent.setup()
+      renderWithRouter(<CashSessionDetail />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Journal des Ventes (2 ventes)')).toBeInTheDocument()
+      })
+
+      // Ouvrir la modal du ticket
+      const viewTicketButton = screen.getAllByText('Voir le ticket')[0]
+      await user.click(viewTicketButton)
+
+      await waitFor(() => {
+        expect(screen.getByText('Ticket de Caisse')).toBeInTheDocument()
+      })
+
+      // Vérifier que le bouton "Ajouter une note" est visible
+      expect(screen.getByText('Ajouter une note')).toBeInTheDocument()
+      expect(screen.getByText('Aucune note')).toBeInTheDocument()
+    })
+
+    it('should hide edit button for non-admin users', async () => {
+      mockUseAuthStore.mockReturnValue({
+        currentUser: { id: 'user-user', role: 'user' },
+      })
+
+      const mockSaleWithNote = {
+        id: 'sale-1',
+        cash_session_id: 'session-1',
+        total_amount: 25.0,
+        donation: 5.0,
+        payment_method: 'cash',
+        created_at: '2025-01-27T11:00:00Z',
+        operator_id: 'operator-1',
+        operator_name: 'John Doe',
+        note: 'This is a test note',
+        items: []
+      }
+
+      const mockGetSaleDetail = vi.mocked(require('../../../services/salesService').getSaleDetail)
+      mockGetSaleDetail.mockResolvedValue(mockSaleWithNote)
+
+      const user = userEvent.setup()
+      renderWithRouter(<CashSessionDetail />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Journal des Ventes (2 ventes)')).toBeInTheDocument()
+      })
+
+      // Ouvrir la modal du ticket
+      const viewTicketButton = screen.getAllByText('Voir le ticket')[0]
+      await user.click(viewTicketButton)
+
+      await waitFor(() => {
+        expect(screen.getByText('Ticket de Caisse')).toBeInTheDocument()
+      })
+
+      // Vérifier que les boutons d'édition ne sont pas visibles pour user
+      expect(screen.queryByText('Modifier la note')).not.toBeInTheDocument()
+      expect(screen.queryByText('Ajouter une note')).not.toBeInTheDocument()
+    })
+
+    it('should log audit information when updating existing note', async () => {
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+
+      const mockSaleWithNote = {
+        id: 'sale-1',
+        cash_session_id: 'session-1',
+        total_amount: 25.0,
+        donation: 5.0,
+        payment_method: 'cash',
+        created_at: '2025-01-27T11:00:00Z',
+        operator_id: 'operator-1',
+        operator_name: 'John Doe',
+        note: 'Original note',
+        items: []
+      }
+
+      const mockGetSaleDetail = vi.mocked(require('../../../services/salesService').getSaleDetail)
+      mockGetSaleDetail.mockResolvedValue(mockSaleWithNote)
+
+      const mockUpdateSaleNote = vi.mocked(require('../../../services/salesService').updateSaleNote)
+      mockUpdateSaleNote.mockResolvedValue({
+        ...mockSaleWithNote,
+        note: 'Updated note'
+      })
+
+      const user = userEvent.setup()
+      renderWithRouter(<CashSessionDetail />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Journal des Ventes (2 ventes)')).toBeInTheDocument()
+      })
+
+      // Ouvrir la modal du ticket
+      const viewTicketButton = screen.getAllByText('Voir le ticket')[0]
+      await user.click(viewTicketButton)
+
+      await waitFor(() => {
+        expect(screen.getByText('Ticket de Caisse')).toBeInTheDocument()
+      })
+
+      // Cliquer sur "Modifier la note"
+      const editButton = screen.getByText('Modifier la note')
+      await user.click(editButton)
+
+      // Modifier la note
+      const textarea = screen.getByDisplayValue('Original note')
+      await user.clear(textarea)
+      await user.type(textarea, 'Updated note')
+
+      // Sauvegarder
+      const saveButton = screen.getByText('Sauvegarder')
+      await user.click(saveButton)
+
+      // Vérifier que l'audit log a été appelé avec action 'update'
+      await waitFor(() => {
+        expect(consoleSpy).toHaveBeenCalledWith('[AUDIT] Note modification', {
+          userId: 'admin-user',
+          userRole: 'admin',
+          saleId: 'sale-1',
+          timestamp: expect.any(String),
+          oldNote: 'Original note',
+          newNote: 'Updated note',
+          action: 'update'
+        })
+      })
+
+      consoleSpy.mockRestore()
+    })
+
+    it('should log audit information when creating new note', async () => {
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+
+      const mockSaleWithoutNote = {
+        id: 'sale-1',
+        cash_session_id: 'session-1',
+        total_amount: 25.0,
+        donation: 5.0,
+        payment_method: 'cash',
+        created_at: '2025-01-27T11:00:00Z',
+        operator_id: 'operator-1',
+        operator_name: 'John Doe',
+        note: null, // Pas de note initiale
+        items: []
+      }
+
+      const mockGetSaleDetail = vi.mocked(require('../../../services/salesService').getSaleDetail)
+      mockGetSaleDetail.mockResolvedValue(mockSaleWithoutNote)
+
+      const mockUpdateSaleNote = vi.mocked(require('../../../services/salesService').updateSaleNote)
+      mockUpdateSaleNote.mockResolvedValue({
+        ...mockSaleWithoutNote,
+        note: 'New note added'
+      })
+
+      const user = userEvent.setup()
+      renderWithRouter(<CashSessionDetail />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Journal des Ventes (2 ventes)')).toBeInTheDocument()
+      })
+
+      // Ouvrir la modal du ticket
+      const viewTicketButton = screen.getAllByText('Voir le ticket')[0]
+      await user.click(viewTicketButton)
+
+      await waitFor(() => {
+        expect(screen.getByText('Ticket de Caisse')).toBeInTheDocument()
+      })
+
+      // Cliquer sur "Ajouter une note"
+      const editButton = screen.getByText('Ajouter une note')
+      await user.click(editButton)
+
+      // Ajouter une note
+      const textarea = screen.getByDisplayValue('')
+      await user.type(textarea, 'New note added')
+
+      // Sauvegarder
+      const saveButton = screen.getByText('Sauvegarder')
+      await user.click(saveButton)
+
+      // Vérifier que l'audit log a été appelé avec action 'create'
+      await waitFor(() => {
+        expect(consoleSpy).toHaveBeenCalledWith('[AUDIT] Note modification', {
+          userId: 'admin-user',
+          userRole: 'admin',
+          saleId: 'sale-1',
+          timestamp: expect.any(String),
+          oldNote: '',
+          newNote: 'New note added',
+          action: 'create'
+        })
+      })
+
+      consoleSpy.mockRestore()
+    })
+
+    it('should show return to cash register button when session is open', async () => {
+      const sessionDataWithOpenStatus = {
+        ...mockSessionData,
+        status: 'open'
+      }
+
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(sessionDataWithOpenStatus),
+      })
+
+      renderWithRouter(<CashSessionDetail />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Retour à la caisse')).toBeInTheDocument()
+      })
+
+      // Vérifier que c'est un bouton (pas un span)
+      const returnButton = screen.getByText('Retour à la caisse')
+      expect(returnButton.tagName).toBe('BUTTON')
+    })
+
+    it('should show closed status badge when session is closed', async () => {
+      const sessionDataWithClosedStatus = {
+        ...mockSessionData,
+        status: 'closed'
+      }
+
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(sessionDataWithClosedStatus),
+      })
+
+      renderWithRouter(<CashSessionDetail />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Fermée')).toBeInTheDocument()
+      })
+
+      // Vérifier que c'est un span (pas un bouton)
+      const statusElement = screen.getByText('Fermée')
+      expect(statusElement.tagName).toBe('SPAN')
+    })
+
+    it('should navigate to cash register when return button is clicked', async () => {
+      const sessionDataWithOpenStatus = {
+        ...mockSessionData,
+        status: 'open',
+        id: 'session-123'
+      }
+
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(sessionDataWithOpenStatus),
+      })
+
+      const { userEvent } = await import('@testing-library/user-event')
+      const user = userEvent.setup()
+
+      renderWithRouter(<CashSessionDetail />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Retour à la caisse')).toBeInTheDocument()
+      })
+
+      const returnButton = screen.getByText('Retour à la caisse')
+      await user.click(returnButton)
+
+      expect(mockNavigate).toHaveBeenCalledWith('/cash-register/sale')
+    })
+
+    it('should not show return button when session is closed', async () => {
+      const sessionDataWithClosedStatus = {
+        ...mockSessionData,
+        status: 'closed',
+        id: 'session-123'
+      }
+
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(sessionDataWithClosedStatus),
+      })
+
+      renderWithRouter(<CashSessionDetail />)
+
+      await waitFor(() => {
+        expect(screen.getByText('Fermée')).toBeInTheDocument()
+      })
+
+      // Vérifier que le bouton de retour n'est pas affiché
+      expect(screen.queryByText('Retour à la caisse')).not.toBeInTheDocument()
     })
   })
 })

@@ -33,6 +33,7 @@ class SaleBase(BaseModel):
     total_amount: float
     donation: Optional[float] = 0.0
     payment_method: Optional[PaymentMethod] = PaymentMethod.CASH
+    note: Optional[str] = None  # Story B40-P5: Notes sur les tickets de caisse
     # Story 1.1.2: notes et preset_id déplacés vers sale_items (par item individuel)
 
     @field_validator('cash_session_id', mode='before')
@@ -46,7 +47,11 @@ class SaleCreate(BaseModel):
     total_amount: float
     donation: Optional[float] = 0.0
     payment_method: Optional[PaymentMethod] = PaymentMethod.CASH
+    note: Optional[str] = None  # Story B40-P5: Notes sur les tickets de caisse
     # Story 1.1.2: notes et preset_id déplacés vers sale_items (par item individuel)
+
+class SaleUpdate(BaseModel):
+    note: Optional[str] = None  # Story B40-P4: Edition des notes côté Admin
 
 class SaleResponse(SaleBase):
     id: str

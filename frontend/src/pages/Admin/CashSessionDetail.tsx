@@ -3,10 +3,11 @@ import { useParams, useNavigate } from 'react-router-dom'
 import styled from 'styled-components'
 import { ArrowLeft, Calendar, User, DollarSign, Package, Clock, Heart, Eye } from 'lucide-react'
 import axiosClient from '../../api/axiosClient'
-import { getSaleDetail, SaleDetail, SaleItem } from '../../services/salesService'
+import { getSaleDetail, SaleDetail, SaleItem, updateSaleNote } from '../../services/salesService'
 import { getCategories, Category } from '../../services/categoriesService'
 import { getUsers, User as UserType } from '../../services/usersService'
 import { presetService } from '../../services/presetService'
+import { useAuthStore } from '../../stores/authStore'
 
 // Fonction utilitaire pour convertir les codes de paiement en libellés français
 const getPaymentMethodLabel = (code?: string): string => {
@@ -31,6 +32,7 @@ interface SaleSummary {
   payment_method?: string
   created_at: string
   operator_id?: string
+  note?: string  // Story B40-P4: Notes dans liste sessions
 }
 
 interface CashSessionDetail {
@@ -173,6 +175,29 @@ const StatusBadge = styled.span<{ variant?: 'open' | 'closed' }>`
   font-weight: 600;
   background: ${(props) => (props.variant === 'open' ? '#dcfce7' : '#fee2e2')};
   color: ${(props) => (props.variant === 'open' ? '#166534' : '#991b1b')};
+`
+
+const ReturnToCashButton = styled.button`
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 16px;
+  border-radius: 9999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  border: 1px solid #16a34a;
+  background: #16a34a;
+  color: white;
+  cursor: pointer;
+  transition: all 0.2s ease;
+
+  &:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+  }
+
+  &:active {
+    transform: translateY(0);
+  }
 `
 
 const SalesSection = styled.div`
@@ -412,6 +437,7 @@ const formatDuration = (openedAt: string, closedAt?: string) => {
 const CashSessionDetail: React.FC = () => {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const user = useAuthStore((state) => state.currentUser)
   const [session, setSession] = useState<CashSessionDetail | null>(null)
   const [loading, setLoading] = useState<boolean>(true)
   const [error, setError] = useState<string | null>(null)
@@ -422,6 +448,10 @@ const CashSessionDetail: React.FC = () => {
   const [users, setUsers] = useState<UserType[]>([])
   const [presets, setPresets] = useState<any[]>([])  // Pour stocker la liste des presets
   const [loadingData, setLoadingData] = useState<boolean>(false)
+  // Story B40-P4: Edition des notes
+  const [editingNote, setEditingNote] = useState<boolean>(false)
+  const [noteValue, setNoteValue] = useState<string>('')
+  const [updatingNote, setUpdatingNote] = useState<boolean>(false)
 
   useEffect(() => {
     if (!id) {
@@ -499,6 +529,60 @@ const CashSessionDetail: React.FC = () => {
   const closeTicketModal = () => {
     setShowTicketModal(false)
     setSelectedSale(null)
+    setEditingNote(false)
+    setNoteValue('')
+  }
+
+  // Story B40-P4: Edition des notes côté Admin
+  const handleEditNote = () => {
+    setNoteValue(selectedSale?.note || '')
+    setEditingNote(true)
+  }
+
+  const handleCancelEdit = () => {
+    setEditingNote(false)
+    setNoteValue('')
+  }
+
+  const handleSaveNote = async () => {
+    if (!selectedSale) return
+
+    const oldNote = selectedSale.note || ''
+    const newNote = noteValue
+
+    try {
+      setUpdatingNote(true)
+      const updatedSale = await updateSaleNote(selectedSale.id, noteValue)
+      setSelectedSale(updatedSale)
+      setEditingNote(false)
+      setNoteValue('')
+
+      // Story B40-P4: Audit logging for note modifications
+      console.log('[AUDIT] Note modification', {
+        userId: user?.id,
+        userRole: user?.role,
+        saleId: selectedSale.id,
+        timestamp: new Date().toISOString(),
+        oldNote: oldNote,
+        newNote: newNote,
+        action: oldNote ? 'update' : 'create'
+      })
+    } catch (error) {
+      console.error('Erreur lors de la mise à jour de la note:', error)
+      // TODO: Afficher une notification d'erreur
+    } finally {
+      setUpdatingNote(false)
+    }
+  }
+
+  // Vérifier si l'utilisateur peut éditer les notes (Admin/SuperAdmin uniquement)
+  const canEditNotes = user?.role === 'admin' || user?.role === 'super-admin'
+
+  // Gestionnaire de retour à la caisse
+  const handleReturnToCashRegister = () => {
+    if (session?.status === 'open') {
+      navigate('/cash-register/sale')
+    }
   }
 
   // Fonctions utilitaires pour récupérer les noms
@@ -683,9 +767,15 @@ const CashSessionDetail: React.FC = () => {
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
           <InfoLabel>Statut:</InfoLabel>
-          <StatusBadge variant={session.status === 'open' ? 'open' : 'closed'}>
-            {session.status === 'open' ? 'Ouverte' : 'Fermée'}
-          </StatusBadge>
+          {session.status === 'open' ? (
+            <ReturnToCashButton onClick={handleReturnToCashRegister}>
+              Retour à la caisse
+            </ReturnToCashButton>
+          ) : (
+            <StatusBadge variant="closed">
+              Fermée
+            </StatusBadge>
+          )}
         </div>
 
         {session.variance !== undefined && (
@@ -733,6 +823,7 @@ const CashSessionDetail: React.FC = () => {
                 <Th>Don</Th>
                 <Th>Paiement</Th>
                 <Th>Opérateur</Th>
+                <Th>Notes</Th>
                 <Th>Actions</Th>
               </tr>
             </thead>
@@ -744,8 +835,11 @@ const CashSessionDetail: React.FC = () => {
                   <Td>{sale.donation ? formatCurrency(sale.donation) : '-'}</Td>
                   <Td>{getPaymentMethodLabel(sale.payment_method)}</Td>
                   <Td>{sale.operator_id ? getUserName(sale.operator_id) : '-'}</Td>
+                  <Td style={{ maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {sale.note || '-'}
+                  </Td>
                   <Td>
-                    <ViewTicketButton 
+                    <ViewTicketButton
                       onClick={(e) => {
                         e.stopPropagation()
                         handleViewTicket(sale.id, sale.operator_id)
@@ -792,6 +886,83 @@ const CashSessionDetail: React.FC = () => {
               <TicketRow>
                 <span>Total:</span>
                 <span>{formatCurrency(selectedSale.total_amount)}</span>
+              </TicketRow>
+              <TicketRow>
+                <span>Note:</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', width: '100%' }}>
+                  {editingNote ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', flex: 1 }}>
+                      <textarea
+                        value={noteValue}
+                        onChange={(e) => setNoteValue(e.target.value)}
+                        placeholder="Ajouter une note..."
+                        style={{
+                          padding: '8px',
+                          border: '1px solid #d1d5db',
+                          borderRadius: '4px',
+                          fontSize: '0.9rem',
+                          minHeight: '60px',
+                          resize: 'vertical'
+                        }}
+                        disabled={updatingNote}
+                      />
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        <button
+                          onClick={handleSaveNote}
+                          disabled={updatingNote}
+                          style={{
+                            padding: '4px 8px',
+                            background: '#10b981',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '4px',
+                            cursor: updatingNote ? 'not-allowed' : 'pointer',
+                            fontSize: '0.8rem'
+                          }}
+                        >
+                          {updatingNote ? 'Sauvegarde...' : 'Sauvegarder'}
+                        </button>
+                        <button
+                          onClick={handleCancelEdit}
+                          disabled={updatingNote}
+                          style={{
+                            padding: '4px 8px',
+                            background: '#6b7280',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '4px',
+                            cursor: updatingNote ? 'not-allowed' : 'pointer',
+                            fontSize: '0.8rem'
+                          }}
+                        >
+                          Annuler
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <span style={{ flex: 1 }}>
+                        {selectedSale.note || 'Aucune note'}
+                      </span>
+                      {canEditNotes && (
+                        <button
+                          onClick={handleEditNote}
+                          style={{
+                            padding: '4px 8px',
+                            background: '#3b82f6',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '4px',
+                            cursor: 'pointer',
+                            fontSize: '0.8rem'
+                          }}
+                        >
+                          {selectedSale.note ? 'Modifier la note' : 'Ajouter une note'}
+                        </button>
+                      )}
+                    </>
+                  )}
+                </div>
               </TicketRow>
             </TicketInfo>
 

@@ -1,11 +1,13 @@
 # Story B42-P2: Backend – Refresh token & réémission glissante
 
-**Status:** Draft  
+**Status:** On Hold  
 **Epic:** [EPIC-B42 – Session glissante & anti-déconnexion](../epics/epic-b42-sliding-session.md)  
 **Module:** API / Auth  
 **Priority:** P0  
 **Owner:** Backend Lead  
 **Last Updated:** 2025-11-26
+
+**Blocking:** En attente de la completion de [B42-P1](../stories/story-b42-p1-audit-sliding-session.md) (Audit & design). Le dev ne peut pas commencer l'implémentation sans le design validé et la RFC.
 
 ---
 
@@ -33,6 +35,7 @@
 ## Dev Notes
 
 ### Références
+- **[RFC Sliding Session](../../architecture/sliding-session-rfc.md)** – Design complet validé (Option A: Refresh Token avec rotation)
 - `api/src/recyclic_api/core/security.py` – à étendre pour générer refresh tokens.  
 - `api/src/recyclic_api/core/auth.py` – `get_current_user`, `load_cached_user`, etc.  
 - `api/src/recyclic_api/api/api_v1/endpoints/auth.py` – endpoints `/login`, `/logout`.  

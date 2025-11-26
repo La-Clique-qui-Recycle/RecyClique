@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import styled from 'styled-components';
-import { Edit, Trash2 } from 'lucide-react';
+import { Edit, Trash2, StickyNote } from 'lucide-react';
 import { SaleItem } from '../../stores/cashSessionStore';
 import { useCategoryStore } from '../../stores/categoryStore';
 import { usePresetStore } from '../../stores/presetStore';
@@ -252,6 +252,7 @@ interface TicketProps {
   onUpdateItem: (itemId: string, newQuantity: number, newWeight: number, newPrice: number, presetId?: string, notes?: string) => void;
   onFinalizeSale: () => void;
   loading?: boolean;
+  saleNote?: string | null;  // Story B40-P1: Notes sur les tickets de caisse (lecture seule)
 }
 
 const Ticket: React.FC<TicketProps> = ({
@@ -259,7 +260,8 @@ const Ticket: React.FC<TicketProps> = ({
   onRemoveItem,
   onUpdateItem,
   onFinalizeSale,
-  loading = false
+  loading = false,
+  saleNote = null  // Story B40-P1: Notes sur les tickets de caisse (lecture seule)
 }) => {
   const { getCategoryById, fetchCategories } = useCategoryStore();
   const { selectedPreset, notes, setNotes, presets } = usePresetStore();
@@ -408,6 +410,25 @@ const Ticket: React.FC<TicketProps> = ({
           </ScrollerWrapper>
 
           <FixedFooter>
+            {/* Story B40-P1-CORRECTION: Champ note déplacé vers popup de paiement */}
+
+            {/* Story B40-P1-CORRECTION: Afficher la note dans le récapitulatif si elle existe */}
+            {saleNote && (
+              <div style={{
+                marginBottom: '1rem',
+                padding: '0.75rem',
+                background: '#fff3cd',
+                border: '1px solid #ffeaa7',
+                borderRadius: '6px',
+                fontSize: '0.9rem',
+                color: '#856404',
+                borderLeft: '4px solid #ff9800'
+              }}>
+                <StickyNote size={14} style={{ marginRight: '0.5rem', verticalAlign: 'middle' }} />
+                <strong>Note contextuelle:</strong> {saleNote}
+              </div>
+            )}
+
             <TotalSection>
               <TotalRow>
                 <span>{totalItems} articles</span>

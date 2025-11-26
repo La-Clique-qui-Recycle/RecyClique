@@ -1,11 +1,13 @@
 # Story B42-P5: Hardening & tests de sécurité sliding session
 
-**Status:** Draft  
+**Status:** On Hold  
 **Epic:** [EPIC-B42 – Session glissante & anti-déconnexion](../epics/epic-b42-sliding-session.md)  
 **Module:** QA / Sécurité / DevOps  
 **Priority:** P1  
 **Owner:** Security & QA Leads  
 **Last Updated:** 2025-11-26
+
+**Blocking:** En attente de la completion de [B42-P2](../stories/story-b42-p2-backend-refresh-token.md), [B42-P3](../stories/story-b42-p3-frontend-refresh-integration.md) et [B42-P4](../stories/story-b42-p4-ux-alertes-observabilite.md). Les tests de sécurité nécessitent que toutes les implémentations soient terminées.
 
 ---
 
@@ -33,6 +35,7 @@
 ## Dev Notes
 
 ### Références
+- **[RFC Sliding Session](../../architecture/sliding-session-rfc.md)** – Design complet validé (section 7: Analyse sécurité)
 - Stories P2–P4 (implémentations).  
 - `docs/testing-strategy.md` pour exigences QA.  
 - Outillage existant : Playwright, pytest, scripts load (k6?).
@@ -51,6 +54,8 @@
 ## Tasks / Subtasks
 1. **Pen-test scripts (AC1)**  
    - [ ] Créer scripts Python ou Postman collection.  
+   - [ ] **Tests CSRF:** Vérifier que refresh depuis origine différente est rejeté (cookie SameSite=Strict)  
+   - [ ] **Tests replay:** Vérifier qu'un refresh token réutilisé après rotation est rejeté  
    - [ ] Documenter comment les exécuter.  
 2. **Long-run scenario (AC2)**  
    - [ ] Utiliser Playwright ou Cypress avec timers mockés.  

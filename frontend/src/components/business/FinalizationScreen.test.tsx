@@ -203,6 +203,186 @@ describe('FinalizationScreen', () => {
     fireEvent.change(screen.getByTestId('payment-select'), { target: { value: 'check' } });
     expect(screen.queryByTestId('change-output')).not.toBeInTheDocument();
   });
+
+  // Story B40-P1-CORRECTION: Tests pour le champ de note déplacé vers le popup
+  describe('Note field functionality', () => {
+    it('shows note field when callbacks are provided', () => {
+      const mockOnSaleNoteChange = vi.fn();
+      render(
+        <FinalizationScreen
+          open
+          totalAmount={10}
+          onCancel={() => {}}
+          onConfirm={() => {}}
+          saleNote="Test note"
+          onSaleNoteChange={mockOnSaleNoteChange}
+        />
+      );
+
+      const noteInput = screen.getByTestId('sale-note-input');
+      expect(noteInput).toBeInTheDocument();
+      expect(noteInput).toHaveValue('Test note');
+    });
+
+    it('does not show note field when callbacks are not provided', () => {
+      render(
+        <FinalizationScreen
+          open
+          totalAmount={10}
+          onCancel={() => {}}
+          onConfirm={() => {}}
+        />
+      );
+
+      expect(screen.queryByTestId('sale-note-input')).not.toBeInTheDocument();
+    });
+
+    it('calls onSaleNoteChange when note is modified', () => {
+      const mockOnSaleNoteChange = vi.fn();
+      render(
+        <FinalizationScreen
+          open
+          totalAmount={10}
+          onCancel={() => {}}
+          onConfirm={() => {}}
+          saleNote=""
+          onSaleNoteChange={mockOnSaleNoteChange}
+        />
+      );
+
+      const noteInput = screen.getByTestId('sale-note-input');
+      fireEvent.change(noteInput, { target: { value: 'New note with spaces' } });
+
+      expect(mockOnSaleNoteChange).toHaveBeenCalledWith('New note with spaces');
+    });
+
+    it('preserves spaces in note input (no trimming)', () => {
+      const mockOnSaleNoteChange = vi.fn();
+      render(
+        <FinalizationScreen
+          open
+          totalAmount={10}
+          onCancel={() => {}}
+          onConfirm={() => {}}
+          saleNote=""
+          onSaleNoteChange={mockOnSaleNoteChange}
+        />
+      );
+
+      const noteInput = screen.getByTestId('sale-note-input');
+      fireEvent.change(noteInput, { target: { value: '  Note with leading and trailing spaces  ' } });
+
+      expect(mockOnSaleNoteChange).toHaveBeenCalledWith('  Note with leading and trailing spaces  ');
+    });
+
+    it('handles empty note input correctly', () => {
+      const mockOnSaleNoteChange = vi.fn();
+      render(
+        <FinalizationScreen
+          open
+          totalAmount={10}
+          onCancel={() => {}}
+          onConfirm={() => {}}
+          saleNote="Existing note"
+          onSaleNoteChange={mockOnSaleNoteChange}
+        />
+      );
+
+      const noteInput = screen.getByTestId('sale-note-input');
+      fireEvent.change(noteInput, { target: { value: '' } });
+
+      expect(mockOnSaleNoteChange).toHaveBeenCalledWith(null);
+    });
+  });
+
+  // Story B40-P1-CORRECTION: Tests d'accessibilité et UX
+  describe('Accessibility and UX improvements', () => {
+    it('has proper labels and icons for form fields', () => {
+      const mockOnSaleNoteChange = vi.fn();
+      render(
+        <FinalizationScreen
+          open
+          totalAmount={10}
+          onCancel={() => {}}
+          onConfirm={() => {}}
+          saleNote=""
+          onSaleNoteChange={mockOnSaleNoteChange}
+        />
+      );
+
+      // Vérifier que les labels contiennent les icônes et le texte approprié
+      expect(screen.getByText('Don (€)')).toBeInTheDocument();
+      expect(screen.getByText('Moyen de paiement')).toBeInTheDocument();
+      expect(screen.getByText('Note contextuelle (optionnel)')).toBeInTheDocument();
+    });
+
+    it('has proper ARIA attributes', () => {
+      render(
+        <FinalizationScreen
+          open
+          totalAmount={10}
+          onCancel={() => {}}
+          onConfirm={() => {}}
+        />
+      );
+
+      const modal = screen.getByTestId('finalization-screen');
+      expect(modal).toHaveAttribute('role', 'dialog');
+      expect(modal).toHaveAttribute('aria-modal', 'true');
+      expect(modal).toHaveAttribute('aria-label', 'Finaliser la vente');
+    });
+
+    it('has proper form field associations', () => {
+      const mockOnSaleNoteChange = vi.fn();
+      render(
+        <FinalizationScreen
+          open
+          totalAmount={10}
+          onCancel={() => {}}
+          onConfirm={() => {}}
+          saleNote=""
+          onSaleNoteChange={mockOnSaleNoteChange}
+        />
+      );
+
+      const donationInput = screen.getByTestId('donation-input');
+      const paymentSelect = screen.getByTestId('payment-select');
+      const noteTextarea = screen.getByTestId('sale-note-input');
+
+      expect(donationInput).toHaveAttribute('id', 'donation');
+      expect(screen.getByLabelText('Don (€)')).toBe(donationInput);
+
+      expect(paymentSelect).toHaveAttribute('id', 'payment');
+      expect(screen.getByLabelText('Moyen de paiement')).toBe(paymentSelect);
+
+      expect(noteTextarea).toHaveAttribute('id', 'sale-note');
+      expect(screen.getByLabelText('Note contextuelle (optionnel)')).toBe(noteTextarea);
+    });
+
+    it('includes note in finalization data', () => {
+      const mockOnConfirm = vi.fn();
+      const mockOnSaleNoteChange = vi.fn();
+      render(
+        <FinalizationScreen
+          open
+          totalAmount={10}
+          onCancel={() => {}}
+          onConfirm={mockOnConfirm}
+          saleNote="Test contextual note"
+          onSaleNoteChange={mockOnSaleNoteChange}
+        />
+      );
+
+      const confirmButton = screen.getByTestId('confirm-finalization');
+      fireEvent.click(confirmButton);
+
+      expect(mockOnConfirm).toHaveBeenCalledWith(
+        expect.objectContaining({
+          note: 'Test contextual note'
+        })
+      );
+    });
+  });
 });
 
 

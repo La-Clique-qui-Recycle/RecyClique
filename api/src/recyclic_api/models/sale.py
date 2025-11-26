@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, DateTime, Float, ForeignKey, Enum as SQLEnum
+from sqlalchemy import Column, String, DateTime, Float, ForeignKey, Enum as SQLEnum, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
@@ -25,6 +25,7 @@ class Sale(Base):
     total_amount = Column(Float, nullable=False)
     donation = Column(Float, nullable=True, default=0.0)
     payment_method = Column(SQLEnum(PaymentMethod, name="payment_method", native_enum=False), nullable=True, default=PaymentMethod.CASH)
+    note = Column(Text, nullable=True)  # Story B40-P5: Notes sur les tickets de caisse
     # Story 1.1.2: preset_id et notes déplacés vers sale_items (par item individuel)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

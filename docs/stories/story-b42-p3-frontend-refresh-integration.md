@@ -1,11 +1,13 @@
 # Story B42-P3: Frontend – Intégration refresh & pings intelligents
 
-**Status:** Draft  
+**Status:** On Hold  
 **Epic:** [EPIC-B42 – Session glissante & anti-déconnexion](../epics/epic-b42-sliding-session.md)  
 **Module:** Frontend (React / Auth)  
 **Priority:** P0  
 **Owner:** Frontend Lead  
 **Last Updated:** 2025-11-26
+
+**Blocking:** En attente de la completion de [B42-P1](../stories/story-b42-p1-audit-sliding-session.md) (Audit & design) et [B42-P2](../stories/story-b42-p2-backend-refresh-token.md) (Backend refresh token). Le dev ne peut pas commencer l'implémentation frontend sans le design validé et l'endpoint backend.
 
 ---
 
@@ -19,7 +21,7 @@
 
 ## Acceptance Criteria
 
-1. **Stockage sécurisé** – Le refresh token est stocké dans un emplacement sûr (HTTP-only cookie si fourni par le backend, sinon storage chiffré + rotation). Aucun accès via JS si possible.  
+1. **Stockage sécurisé** – Le refresh token est stocké dans un **HTTP-only cookie** avec `SameSite=Strict` (RFC section 3.2.5). Protection CSRF via double-submit token dans header `X-CSRF-Token`.  
 2. **Client refresh loop** – `axiosClient` ou un hook dédié déclenche automatiquement un refresh :  
    - Proactif (ex: 2 min avant expiration de l’access token)  
    - Réactif (sur 401, tente un refresh une seule fois avant de rediriger login)  
@@ -32,6 +34,7 @@
 ## Dev Notes
 
 ### Références
+- **[RFC Sliding Session](../../architecture/sliding-session-rfc.md)** – Design complet validé (stockage HTTP-only cookie + CSRF)
 - `frontend/src/api/axiosClient.ts` (intercepteurs 401).  
 - `frontend/src/stores/authStore.ts` (state token, login/logout).  
 - `frontend/src/App.jsx` (ping actuel toutes les 5 min).  
@@ -43,6 +46,8 @@
 - Si le refresh échoue définitivement, laisser l’utilisateur enregistrer (ex: modale “sauvegarder brouillon” si applicable).
 
 ### Technique
+- **Refresh token:** HTTP-only cookie (géré automatiquement par navigateur, pas accessible JS)
+- **CSRF protection:** Double-submit token pattern - générer token côté serveur, envoyer dans cookie ET header `X-CSRF-Token`
 - Conserver l’access token en mémoire (Zustand) + localStorage pour compat legacy.  
 - Gérer la clock drift : utiliser `exp` du JWT pour calculer l’heure d’expiration.  
 - Exposer un hook `useSessionHeartbeat()` qui orchestre ping + refresh + alerts.  
@@ -63,6 +68,7 @@
    - [ ] Étendre `authStore` pour stocker metadata de session (exp, refreshPending).  
    - [ ] Créer `useSessionHeartbeat` (setInterval + window visibility).  
    - [ ] Modifier `axiosClient` pour tenter refresh une seule fois sur 401.  
+   - [ ] **Implémenter CSRF protection:** Générer/valider double-submit token (cookie + header `X-CSRF-Token`)  
 2. **UI & alerting (AC4)**  
    - [ ] Créer un composant `SessionStatusBanner`.  
    - [ ] Brancher sur `useSessionHeartbeat` pour afficher countdown + actions (forcer refresh, sauvegarder brouillon).  

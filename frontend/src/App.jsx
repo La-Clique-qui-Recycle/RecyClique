@@ -5,16 +5,18 @@ import Header from './components/Header.jsx';
 import ProtectedRoute from './components/auth/ProtectedRoute';
 import PostLoginRedirect from './components/PostLoginRedirect';
 import { ReceptionProvider } from './contexts/ReceptionContext';
+import { CashStoreProvider } from './providers/CashStoreProvider';
 import { useAuthStore } from './stores/authStore';
 import axiosClient from './api/axiosClient';
 
 // Lazy loading des pages pour le code-splitting
 const BenevoleDashboard = lazy(() => import('./pages/BenevoleDashboard.jsx'));
 const UnifiedDashboard = lazy(() => import('./pages/UnifiedDashboard.tsx'));
-const CashRegister = lazy(() => import('./pages/CashRegister/CashRegisterDashboard.tsx'));
-const OpenCashSession = lazy(() => import('./pages/CashRegister/OpenCashSession.tsx'));
-const Sale = lazy(() => import('./pages/CashRegister/Sale.tsx'));
-const CloseSession = lazy(() => import('./pages/CashRegister/CloseSession.tsx'));
+const CashRegister = lazy(() => import('./pages/CashRegister/CashRegisterWrapper.tsx'));
+const OpenCashSession = lazy(() => import('./pages/CashRegister/OpenCashSessionWrapper.tsx'));
+const Sale = lazy(() => import('./pages/CashRegister/SaleWrapper.tsx'));
+const CloseSession = lazy(() => import('./pages/CashRegister/CloseSessionWrapper.tsx'));
+// Les composants virtuels sont maintenant remplacés par les wrappers avec provider
 const Deposits = lazy(() => import('./pages/Deposits.jsx'));
 const Reports = lazy(() => import('./pages/Reports.jsx'));
 const CashJournal = lazy(() => import('./pages/Admin/Dashboard.tsx'));
@@ -184,10 +186,17 @@ function App() {
             <Route path="/telegram-auth" element={<TelegramAuth />} />
             <Route path="/" element={<ProtectedRoute><UnifiedDashboard /></ProtectedRoute>} />
             <Route path="/dashboard/benevole" element={<ProtectedRoute><BenevoleDashboard /></ProtectedRoute>} />
+            {/* Route /caisse : Dashboard des caisses réelles */}
             <Route path="/caisse" element={<ProtectedRoute requiredPermission="caisse.access"><CashRegister /></ProtectedRoute>} />
+            {/* Routes caisse réelle */}
             <Route path="/cash-register/session/open" element={<ProtectedRoute requiredPermission="caisse.access"><OpenCashSession /></ProtectedRoute>} />
             <Route path="/cash-register/sale" element={<ProtectedRoute requiredPermission="caisse.access"><Sale /></ProtectedRoute>} />
             <Route path="/cash-register/session/close" element={<ProtectedRoute requiredPermission="caisse.access"><CloseSession /></ProtectedRoute>} />
+            {/* Routes virtuelles : utilisent les mêmes composants avec le provider en mode virtuel */}
+            <Route path="/cash-register/virtual" element={<ProtectedRoute requiredPermission="caisse.access"><CashRegister /></ProtectedRoute>} />
+            <Route path="/cash-register/virtual/session/open" element={<ProtectedRoute requiredPermission="caisse.access"><OpenCashSession /></ProtectedRoute>} />
+            <Route path="/cash-register/virtual/sale" element={<ProtectedRoute requiredPermission="caisse.access"><Sale /></ProtectedRoute>} />
+            <Route path="/cash-register/virtual/session/close" element={<ProtectedRoute requiredPermission="caisse.access"><CloseSession /></ProtectedRoute>} />
             <Route path="/reception" element={<ProtectedRoute requiredPermission="reception.access"><Reception /></ProtectedRoute>} />
             <Route path="/reception/dashboard" element={<ProtectedRoute requiredPermission="reception.access"><ReceptionDashboard /></ProtectedRoute>} />
             <Route path="/reception/ticket" element={<ProtectedRoute requiredPermission="reception.access"><TicketForm /></ProtectedRoute>} />

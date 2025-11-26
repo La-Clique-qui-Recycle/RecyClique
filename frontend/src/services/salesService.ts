@@ -21,6 +21,7 @@ export interface SaleDetail {
   payment_method?: string
   created_at: string
   operator_id?: string
+  note?: string  // Story B40-P4: Notes sur les tickets
   // Story 1.1.2: notes et preset_id déplacés vers sale_items (par item individuel)
   items: SaleItem[]
 }
@@ -34,6 +35,19 @@ export const getSaleDetail = async (saleId: string): Promise<SaleDetail> => {
     return response.data
   } catch (error) {
     console.error('Erreur lors de la récupération des détails de la vente:', error)
+    throw error
+  }
+}
+
+/**
+ * Service pour mettre à jour la note d'une vente (admin seulement)
+ */
+export const updateSaleNote = async (saleId: string, note: string): Promise<SaleDetail> => {
+  try {
+    const response = await axiosClient.put(`/v1/sales/${saleId}`, { note })
+    return response.data
+  } catch (error) {
+    console.error('Erreur lors de la mise à jour de la note:', error)
     throw error
   }
 }
