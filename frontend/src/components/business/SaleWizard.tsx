@@ -1238,7 +1238,10 @@ export const SaleWizard: React.FC<SaleWizardProps> = ({ onItemComplete, numpadCa
             $inactive={stepState.categoryState === 'inactive'}
             data-active={stepState.categoryState === 'active'}
             data-completed={stepState.categoryState === 'completed'}
-            onClick={() => transitionToStep('category')}
+            onClick={() => {
+              transitionToStep('category');
+              numpadCallbacks.setMode('idle');
+            }}
             role="tab"
             id="tab-category"
             aria-selected={stepState.categoryState === 'active'}
@@ -1254,7 +1257,12 @@ export const SaleWizard: React.FC<SaleWizardProps> = ({ onItemComplete, numpadCa
             data-active={stepState.subcategoryState === 'active'}
             data-completed={stepState.subcategoryState === 'completed'}
             disabled={!selectedCategory || activeCategories.filter(cat => cat.parent_id === selectedCategory).length === 0}
-            onClick={() => selectedCategory && activeCategories.filter(cat => cat.parent_id === selectedCategory).length > 0 && transitionToStep('subcategory')}
+            onClick={() => {
+              if (selectedCategory && activeCategories.filter(cat => cat.parent_id === selectedCategory).length > 0) {
+                transitionToStep('subcategory');
+                numpadCallbacks.setMode('idle');
+              }
+            }}
             role="tab"
             id="tab-subcategory"
             aria-selected={stepState.subcategoryState === 'active'}

@@ -290,12 +290,13 @@ const Sale: React.FC = () => {
     const currentValue = getCurrentValue();
 
     if (numpadMode === 'quantity') {
-      // Mode "remplacer" : si valeur = "1" et appui sur 1-9, remplacer au lieu d'ajouter
+      // Mode "remplacer" : si valeur = "1" et appui sur 2-9, remplacer au lieu d'ajouter
+      // Si appui sur "1", ajouter normalement pour permettre 11, 12, etc.
       let newValue: string;
-      if (currentValue === '1' && /^[1-9]$/.test(digit)) {
-        newValue = digit; // Remplacer le 1 par le nouveau chiffre
+      if (currentValue === '1' && /^[2-9]$/.test(digit)) {
+        newValue = digit; // Remplacer le 1 par le nouveau chiffre (2-9)
       } else {
-        newValue = currentValue + digit; // Ajouter normalement
+        newValue = currentValue + digit; // Ajouter normalement (y compris pour "1")
       }
 
       if (/^\d*$/.test(newValue) && parseInt(newValue || '0', 10) <= 9999) {
@@ -391,6 +392,21 @@ const Sale: React.FC = () => {
       if (event.key === 'Escape') {
         event.preventDefault();
         handleNumpadClear();
+        return;
+      }
+
+      // Raccourci pour "+" (touche "=" en AZERTY) en mode weight pour ajouter une pesée
+      // Laisser MultipleWeightEntry gérer le "+" directement, mais mapper "=" vers "+"
+      if (numpadMode === 'weight' && event.key === '=') {
+        event.preventDefault();
+        // Simuler un événement "+" pour que MultipleWeightEntry le gère
+        const plusEvent = new KeyboardEvent('keydown', {
+          key: '+',
+          code: 'Equal',
+          bubbles: true,
+          cancelable: true
+        });
+        document.dispatchEvent(plusEvent);
         return;
       }
     };
