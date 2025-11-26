@@ -1,8 +1,9 @@
 ---
-cleanup_status: tech_debt
-cleanup_destination: docs/pending-tech-debt/
-cleanup_date: 2025-11-17T20:53:13.594399
-original_path: docs/stories/story-admin-dashboard-home.md
+categorized_by: story-audit-and-sort
+categorized_date: 2025-11-20
+category: debt
+original_path: docs/backup-pre-cleanup/story-admin-dashboard-home.md
+rationale: mentions debt/stabilization/fix
 ---
 
 # Story (UX/UI): Création de la Page d'Accueil de l'Administration

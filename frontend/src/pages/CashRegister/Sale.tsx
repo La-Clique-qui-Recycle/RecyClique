@@ -117,7 +117,7 @@ const Sale: React.FC = () => {
   const [showSuccessPopup, setShowSuccessPopup] = useState<boolean>(false);
 
   // Numpad state - separated by step type
-  const [quantityValue, setQuantityValue] = useState<string>('');
+  const [quantityValue, setQuantityValue] = useState<string>('1');
   const [quantityError, setQuantityError] = useState<string>('');
   const [priceValue, setPriceValue] = useState<string>('');
   const [priceError, setPriceError] = useState<string>('');
@@ -139,6 +139,57 @@ const Sale: React.FC = () => {
   const { getCategoryById, fetchCategories } = useCategoryStore();
   const { clearSelection, selectedPreset, notes } = usePresetStore();
 
+  // Numpad handlers - défini AVANT les useEffect qui l'utilisent
+  const getCurrentValue = () => {
+    switch (numpadMode) {
+      case 'quantity': return quantityValue;
+      case 'price': return priceValue;
+      case 'weight': return weightValue;
+      default: return '';
+    }
+  };
+
+  const getCurrentError = () => {
+    switch (numpadMode) {
+      case 'quantity': return quantityError;
+      case 'price': return priceError;
+      case 'weight': return weightError;
+      default: return '';
+    }
+  };
+
+  const setCurrentValue = (value: string) => {
+    switch (numpadMode) {
+      case 'quantity': setQuantityValue(value); break;
+      case 'price': setPriceValue(value); break;
+      case 'weight': setWeightValue(value); break;
+    }
+  };
+
+  const setCurrentError = (error: string) => {
+    switch (numpadMode) {
+      case 'quantity': setQuantityError(error); break;
+      case 'price': setPriceError(error); break;
+      case 'weight': setWeightError(error); break;
+    }
+  };
+
+  const numpadCallbacks = {
+    quantityValue,
+    quantityError,
+    priceValue,
+    priceError,
+    weightValue,
+    weightError,
+    setQuantityValue,
+    setQuantityError,
+    setPriceValue,
+    setPriceError,
+    setWeightValue,
+    setWeightError,
+    setMode: setNumpadMode
+  };
+
   // Load categories on component mount
   useEffect(() => {
     fetchCategories();
@@ -149,6 +200,23 @@ const Sale: React.FC = () => {
       navigate('/cash-register');
     }
   }, [currentSession, navigate]);
+
+  // Auto-focus sur le champ prix à l'entrée de l'écran d'encaissement (B39-P4)
+  useEffect(() => {
+    if (currentSession && numpadMode === 'idle') {
+      // Délai pour s'assurer que le DOM est rendu
+      const timer = setTimeout(() => {
+        const priceInput = document.querySelector('[data-testid="price-input"]');
+        if (priceInput instanceof HTMLElement) {
+          priceInput.focus();
+          // Basculer automatiquement vers le mode prix
+          numpadCallbacks.setMode('price');
+        }
+      }, 100);
+
+      return () => clearTimeout(timer);
+    }
+  }, [currentSession, numpadMode, numpadCallbacks]);
 
   const handleItemComplete = (itemData: SaleItemData) => {
     // Get category names from the category store
@@ -218,55 +286,34 @@ const Sale: React.FC = () => {
   };
 
   // Numpad handlers
-  const getCurrentValue = () => {
-    switch (numpadMode) {
-      case 'quantity': return quantityValue;
-      case 'price': return priceValue;
-      case 'weight': return weightValue;
-      default: return '';
-    }
-  };
-
-  const getCurrentError = () => {
-    switch (numpadMode) {
-      case 'quantity': return quantityError;
-      case 'price': return priceError;
-      case 'weight': return weightError;
-      default: return '';
-    }
-  };
-
-  const setCurrentValue = (value: string) => {
-    switch (numpadMode) {
-      case 'quantity': setQuantityValue(value); break;
-      case 'price': setPriceValue(value); break;
-      case 'weight': setWeightValue(value); break;
-    }
-  };
-
-  const setCurrentError = (error: string) => {
-    switch (numpadMode) {
-      case 'quantity': setQuantityError(error); break;
-      case 'price': setPriceError(error); break;
-      case 'weight': setWeightError(error); break;
-    }
-  };
-
   const handleNumpadDigit = (digit: string) => {
     const currentValue = getCurrentValue();
-    const newValue = currentValue + digit;
 
     if (numpadMode === 'quantity') {
+      // Mode "remplacer" : si valeur = "1" et appui sur 1-9, remplacer au lieu d'ajouter
+      let newValue: string;
+      if (currentValue === '1' && /^[1-9]$/.test(digit)) {
+        newValue = digit; // Remplacer le 1 par le nouveau chiffre
+      } else {
+        newValue = currentValue + digit; // Ajouter normalement
+      }
+
       if (/^\d*$/.test(newValue) && parseInt(newValue || '0', 10) <= 9999) {
-        setQuantityValue(newValue);
-        setQuantityError('');
+        // Pour la quantité, empêcher les valeurs < 1
+        const numValue = parseInt(newValue || '0', 10);
+        if (numValue >= 1) {
+          setQuantityValue(newValue);
+          setQuantityError('');
+        }
       }
     } else if (numpadMode === 'price') {
+      const newValue = currentValue + digit;
       if (/^\d*\.?\d{0,2}$/.test(newValue) && parseFloat(newValue || '0') <= 9999.99) {
         setPriceValue(newValue);
         setPriceError('');
       }
     } else if (numpadMode === 'weight') {
+      const newValue = currentValue + digit;
       if (/^\d*\.?\d{0,2}$/.test(newValue) && parseFloat(newValue || '0') <= 9999.99) {
         setWeightValue(newValue);
         setWeightError('');
@@ -290,20 +337,18 @@ const Sale: React.FC = () => {
     }
   };
 
-  const numpadCallbacks = {
-    quantityValue,
-    quantityError,
-    priceValue,
-    priceError,
-    weightValue,
-    weightError,
-    setQuantityValue,
-    setQuantityError,
-    setPriceValue,
-    setPriceError,
-    setWeightValue,
-    setWeightError,
-    setMode: setNumpadMode
+  // Mapping AZERTY vers chiffres (comme en Réception)
+  const AZERTY_NUMERIC_MAP: Record<string, string> = {
+    '&': '1',
+    'é': '2',
+    '"': '3',
+    "'": '4',
+    '(': '5',
+    '-': '6',
+    'è': '7',
+    '_': '8',
+    'ç': '9',
+    'à': '0'
   };
 
   // Gestionnaires de raccourcis clavier globaux
@@ -314,28 +359,39 @@ const Sale: React.FC = () => {
         return;
       }
 
-      // Raccourcis pour les chiffres (0-9)
+      // Raccourcis pour les chiffres directs (0-9)
       if (event.key >= '0' && event.key <= '9') {
         event.preventDefault();
         handleNumpadDigit(event.key);
+        return;
       }
-      
+
+      // Raccourcis AZERTY pour les chiffres (comme en Réception)
+      if (AZERTY_NUMERIC_MAP[event.key]) {
+        event.preventDefault();
+        handleNumpadDigit(AZERTY_NUMERIC_MAP[event.key]);
+        return;
+      }
+
       // Raccourci pour le point décimal
       if (event.key === '.' || event.key === ',') {
         event.preventDefault();
         handleNumpadDecimal();
+        return;
       }
       
       // Raccourci pour effacer (Backspace)
       if (event.key === 'Backspace') {
         event.preventDefault();
         handleNumpadBackspace();
+        return;
       }
       
       // Raccourci pour tout effacer (Escape)
       if (event.key === 'Escape') {
         event.preventDefault();
         handleNumpadClear();
+        return;
       }
     };
 
@@ -355,9 +411,9 @@ const Sale: React.FC = () => {
 
       {/* Layout principal à 3 colonnes: Numpad | Action Zone | Ticket */}
       <MainLayout>
-        {/* Colonne de gauche - Numpad unifié */}
+        {/* Colonne de gauche - Numpad unifié (présent à partir de Poids) */}
         <LeftColumn>
-          {true ? (
+          {numpadMode !== 'idle' ? (
             <Numpad
               value={getCurrentValue()}
               error={getCurrentError()}

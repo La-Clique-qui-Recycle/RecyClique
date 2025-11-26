@@ -1,8 +1,9 @@
 ---
-cleanup_status: tech_debt
-cleanup_destination: docs/pending-tech-debt/
-cleanup_date: 2025-11-17T20:53:13.440007
-original_path: docs/stories/bug-reception-delete-permissions.md
+categorized_by: story-audit-and-sort
+categorized_date: 2025-11-20
+category: debt
+original_path: docs/backup-pre-cleanup/bug-reception-delete-permissions.md
+rationale: mentions debt/stabilization/fix
 ---
 
 # Bug: Permissions Incorrectes sur la Suppression en Réception

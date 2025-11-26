@@ -25,8 +25,11 @@ from recyclic_api.schemas.reception import (
     LigneDepotReportResponse,
     LigneDepotListResponse,
 )
+from recyclic_api.schemas.stats import ReceptionLiveStatsResponse
 from recyclic_api.models.category import Category
 from recyclic_api.services.reception_service import ReceptionService
+from recyclic_api.services.reception_stats_service import ReceptionLiveStatsService
+from recyclic_api.core.config import settings
 
 
 router = APIRouter()
@@ -396,4 +399,34 @@ def export_lignes_depot_csv(
         media_type="text/csv",
         headers={"Content-Disposition": f"attachment; filename={filename}"}
     )
+
+
+@router.get("/stats/live", response_model=ReceptionLiveStatsResponse)
+async def get_live_reception_stats(
+    site_id: Optional[str] = Query(None, description="Optional site filter for future multi-site support"),
+    db: Session = Depends(get_db),
+    current_user=Depends(require_role_strict([UserRole.ADMIN, UserRole.SUPER_ADMIN])),
+):
+    """
+    Get live reception statistics for admin dashboard.
+
+    Returns real-time KPIs including open tickets, recent closures,
+    turnover, donations, and weight metrics for the last 24 hours.
+
+    Requires admin or super-admin permissions.
+    """
+    if not settings.LIVE_RECEPTION_STATS_ENABLED:
+        # Return zeros when feature is disabled (backward compatibility)
+        return ReceptionLiveStatsResponse(
+            tickets_open=0,
+            tickets_closed_24h=0,
+            turnover_eur=0.0,
+            donations_eur=0.0,
+            weight_in=0.0,
+            weight_out=0.0,
+        )
+
+    service = ReceptionLiveStatsService(db)
+    stats = await service.get_live_stats(site_id=site_id)
+    return ReceptionLiveStatsResponse(**stats)
 

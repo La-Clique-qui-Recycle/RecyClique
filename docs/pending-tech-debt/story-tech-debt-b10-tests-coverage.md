@@ -1,8 +1,9 @@
 ---
-cleanup_status: tech_debt
-cleanup_destination: docs/pending-tech-debt/
-cleanup_date: 2025-11-17T20:53:15.664546
-original_path: docs/stories/story-tech-debt-b10-tests-coverage.md
+categorized_by: story-audit-and-sort
+categorized_date: 2025-11-20
+category: debt
+original_path: docs/backup-pre-cleanup/story-tech-debt-b10-tests-coverage.md
+rationale: mentions debt/stabilization/fix
 ---
 
 # Story (Dette Technique): Renforcement de la Couverture de Tests du Module Caisse

@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useCallback, Component, ErrorInfo, ReactNode } from 'react';
 import styled from 'styled-components';
 import { BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { Switch, Alert, Badge, Text, Group, Stack } from '@mantine/core';
 import { getReceptionSummary, getReceptionByCategory } from '../../services/api';
+import { useLiveReceptionStats } from '../../hooks/useLiveReceptionStats';
 
 // Styled Components
 const DashboardContainer = styled.div`
@@ -133,6 +135,30 @@ const ErrorContainer = styled.div`
   margin: 20px 0;
 `;
 
+const LiveControlsContainer = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  background: #f8f9fa;
+  border-radius: 8px;
+  border: 1px solid #e9ecef;
+  margin-bottom: 16px;
+`;
+
+const LiveBadgeContainer = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+  color: #6b7280;
+`;
+
+const LiveTimestamp = styled.span`
+  font-size: 0.8rem;
+  color: #9ca3af;
+`;
+
 // Error Boundary for Charts
 interface ChartErrorBoundaryProps {
   children: ReactNode;
@@ -195,6 +221,9 @@ const ReceptionDashboard: React.FC = () => {
   const [endDate, setEndDate] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Hook pour les stats live
+  const liveStats = useLiveReceptionStats();
 
   // Version: v2 - Fixed tooltip formatter bug
 
@@ -310,11 +339,65 @@ const ReceptionDashboard: React.FC = () => {
     );
   }
 
+  // Déterminer les données à afficher
+  const displayStats = liveStats.featureEnabled && liveStats.data ? liveStats.data : summaryStats;
+
   return (
     <DashboardContainer>
       <Header>
         <Title>Tableau de Bord des Réceptions (v2)</Title>
       </Header>
+
+      {/* Contrôles Live Stats */}
+      {liveStats.featureEnabled && (
+        <LiveControlsContainer>
+          <Group justify="space-between" align="center">
+            <div>
+              <Text fw={500} size="sm">Mode Live KPI</Text>
+              <Text size="xs" c="dimmed">
+                Mise à jour automatique des statistiques en temps réel
+              </Text>
+            </div>
+            <Switch
+              checked={liveStats.isPolling}
+              onChange={liveStats.togglePolling}
+              label={liveStats.isPolling ? "Activé" : "Désactivé"}
+              size="md"
+              data-testid="live-mode-switch"
+            />
+          </Group>
+
+          {liveStats.isPolling && (
+            <LiveBadgeContainer data-testid="live-status-container">
+              <Badge color="green" variant="light" data-testid="live-badge">Live</Badge>
+              <Text size="sm" data-testid="live-status-text">
+                {liveStats.isLoading ? "Mise à jour..." : "Actualisé"}
+              </Text>
+              {liveStats.lastUpdate && (
+                <LiveTimestamp data-testid="live-timestamp">
+                  à {liveStats.lastUpdate.toLocaleTimeString('fr-FR', {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit'
+                  })}
+                </LiveTimestamp>
+              )}
+            </LiveBadgeContainer>
+          )}
+
+          {liveStats.error && (
+            <Alert color="red" size="sm" icon="⚠️">
+              {liveStats.error}
+            </Alert>
+          )}
+
+          {!liveStats.isOnline && (
+            <Alert color="orange" size="sm" icon="📶">
+              Connexion perdue - Polling suspendu
+            </Alert>
+          )}
+        </LiveControlsContainer>
+      )}
 
       {/* Date Range Filters */}
       <FiltersRow role="group" aria-label="Filtres de période">
@@ -376,22 +459,37 @@ const ReceptionDashboard: React.FC = () => {
       </FiltersRow>
 
       {/* KPI Stats Cards */}
-      {summaryStats && (
+      {displayStats && (
         <StatsGrid>
           <StatCard>
-            <StatLabel>Poids Total</StatLabel>
+            <StatLabel>
+              Poids Total
+              {liveStats.featureEnabled && liveStats.data && (
+                <Badge color="green" size="xs" ml="xs">Live</Badge>
+              )}
+            </StatLabel>
             <StatValue>
-              {summaryStats.total_weight.toLocaleString('fr-FR', { maximumFractionDigits: 1 })}
+              {displayStats.total_weight.toLocaleString('fr-FR', { maximumFractionDigits: 1 })}
               <StatUnit>kg</StatUnit>
             </StatValue>
           </StatCard>
           <StatCard>
-            <StatLabel>Nombre d'Articles</StatLabel>
-            <StatValue>{summaryStats.total_items.toLocaleString('fr-FR')}</StatValue>
+            <StatLabel>
+              Nombre d'Articles
+              {liveStats.featureEnabled && liveStats.data && (
+                <Badge color="green" size="xs" ml="xs">Live</Badge>
+              )}
+            </StatLabel>
+            <StatValue>{displayStats.total_items.toLocaleString('fr-FR')}</StatValue>
           </StatCard>
           <StatCard>
-            <StatLabel>Catégories Uniques</StatLabel>
-            <StatValue>{summaryStats.unique_categories}</StatValue>
+            <StatLabel>
+              Catégories Uniques
+              {liveStats.featureEnabled && liveStats.data && (
+                <Badge color="green" size="xs" ml="xs">Live</Badge>
+              )}
+            </StatLabel>
+            <StatValue>{displayStats.unique_categories}</StatValue>
           </StatCard>
         </StatsGrid>
       )}

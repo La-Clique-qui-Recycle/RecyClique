@@ -39,6 +39,78 @@ L'accueil affiche les métriques clés :
 - 👥 **Utilisateurs actifs** : Connectés aujourd'hui
 - 🚨 **Alertes actives** : Seuils dépassés ou problèmes détectés
 
+### Mode Live KPI (B38-P3)
+
+Le tableau de bord réception dispose d'un **mode Live** pour suivre l'activité en temps réel :
+
+#### Activation du Mode Live
+
+```
+🔄 Mode Live KPI
+├── 🔴 Désactivé → 🟢 Activé
+├── 📊 Badge "Live" + timestamp
+└── 🔄 Mise à jour automatique toutes les 10s
+```
+
+**Contrôles disponibles :**
+- **Switch "Mode Live"** : Active/désactive le rafraîchissement automatique
+- **Badge "Live"** : Indique que les données sont en temps réel
+- **Timestamp** : "Mis à jour à HH:mm:ss" - dernière synchronisation
+
+#### Fonctionnement
+
+**Quand activé :**
+- 🔄 **Polling automatique** : Mise à jour toutes les 10 secondes minimum
+- 📊 **Données temps réel** : Statistiques frais depuis l'API `/reception/stats/live`
+- 🟢 **Badge Live** : Confirmation visuelle du mode actif
+- ⏰ **Timestamp** : Heure exacte de la dernière mise à jour
+
+**Quand désactivé :**
+- 📊 **Données statiques** : Dernières valeurs connues conservées
+- ❌ **Pas de polling** : Économie de bande passante
+- 🔄 **Reprise possible** : Les données live sont conservées
+
+#### Gestion des Erreurs
+
+**En cas de problème réseau :**
+- ⚠️ **Bannière d'avertissement** : "Connexion perdue, polling suspendu"
+- 🔄 **Reprise automatique** : Quand la connexion revient
+- 📊 **Données préservées** : Derniers chiffres valides conservés
+
+**En cas d'erreur API :**
+- 🚨 **Message d'erreur** : "Erreur serveur, stats live indisponibles"
+- 🔄 **Fallback** : Retour aux statistiques classiques
+- 📝 **Logging** : Erreur tracée dans Sentry/Datadog
+
+#### Configuration Technique
+
+**Variables d'environnement :**
+```bash
+VITE_FEATURE_LIVE_RECEPTION_STATS=true  # Active la fonctionnalité
+```
+
+**Paramètres par défaut :**
+- **Interval** : 10 secondes minimum
+- **Timeout** : 5 secondes par requête
+- **Retry** : 3 tentatives en cas d'échec
+
+#### Recommandations d'Usage
+
+**Cas d'usage idéal :**
+- ✅ **Supervision temps réel** : Pendant les heures d'ouverture
+- ✅ **Monitoring d'événement** : Ventes spéciales, pics d'activité
+- ✅ **Dépannage** : Identification rapide de problèmes
+
+**Quand désactiver :**
+- ❌ **Connexion faible** : Évite la surcharge réseau
+- ❌ **Écran inactif** : Économie de ressources
+- ❌ **Debugging** : Simplifie l'analyse des logs
+
+**Performance :**
+- 📊 **Impact minimal** : ~1KB par requête toutes les 10s
+- 🔋 **Batterie** : Compatible avec les appareils mobiles
+- 📱 **Offline-ready** : Suspension automatique hors ligne
+
 ## Gestion des Utilisateurs
 
 ### Vue d'Ensemble
@@ -286,6 +358,102 @@ Date,Site,Type,Valeur,Quantité,Caissier
 - 📊 Réorganisez les widgets selon vos besoins
 - 🎨 Ajustez les périodes d'affichage
 - 💾 Sauvegardez vos configurations favorites
+
+## Monitoring et Observabilité
+
+### Événements Mode Live KPI
+
+Le système de statistiques live génère des événements de monitoring trackés dans Sentry et Datadog :
+
+#### Événements Sentry
+
+**Erreurs applicatives :**
+- `live_stats_api_error` : Échec d'appel à `/reception/stats/live`
+  - Context : URL, status code, response time
+  - Severity : Warning (4xx) / Error (5xx)
+- `live_stats_network_error` : Erreur réseau (timeout, connexion)
+  - Context : Error type, duration
+  - Severity : Warning
+- `live_stats_parsing_error` : Données API malformées
+  - Context : Response preview, expected schema
+  - Severity : Error
+
+**Erreurs utilisateur :**
+- `live_stats_user_disabled` : Utilisateur désactive manuellement
+  - Context : Session duration, reason (if provided)
+  - Severity : Info
+- `live_stats_offline_detected` : Perte de connectivité détectée
+  - Context : navigator.onLine status, last successful call
+  - Severity : Info
+
+#### Métriques Datadog
+
+**Performance :**
+- `recyclic.live_stats.response_time` : Latence des appels API
+  - Tags : `endpoint:/reception/stats/live`, `status:success|error`
+- `recyclic.live_stats.request_count` : Nombre d'appels par minute
+  - Tags : `status:success|error|timeout`
+- `recyclic.live_stats.data_freshness` : Âge des données affichées (secondes)
+  - Tags : `mode:live|cached`, `user_enabled:true|false`
+
+**Fiabilité :**
+- `recyclic.live_stats.error_rate` : Taux d'erreur des appels (%)
+  - Alert : >5% sur 5 minutes = Warning, >15% = Critical
+- `recyclic.live_stats.offline_duration` : Durée des périodes offline (secondes)
+  - Alert : >300s consécutifs = Warning
+- `recyclic.live_stats.user_adoption` : % d'utilisateurs avec mode live activé
+  - Target : >70% des sessions admin
+
+#### Dashboards Recommandés
+
+**Dashboard "Live Stats Health" :**
+```
+┌─────────────────────────────────────────┐
+│ 🟢 Live Stats - Health Overview         │
+├─────────────────────────────────────────┤
+│ Response Time: 250ms (avg)             │
+│ Error Rate: 0.1%                       │
+│ Active Users: 85%                      │
+│ Offline Incidents: 0 (last 24h)        │
+└─────────────────────────────────────────┘
+```
+
+**Dashboard "Live Stats Performance" :**
+```
+┌─────────────────────────────────────────┐
+│ 📊 Live Stats - Performance            │
+├─────────────────────────────────────────┤
+│ API Calls/min: 42                      │
+│ Cache Hit Rate: 95%                    │
+│ Data Freshness: <5s                     │
+│ Bandwidth Usage: 2.1KB/min             │
+└─────────────────────────────────────────┘
+```
+
+### Alertes et Notifications
+
+**Alertes critiques :**
+- 🔴 **API Down** : >95% error rate pendant 5 minutes
+- 🔴 **High Latency** : >2s average response time pendant 10 minutes
+- 🟡 **Offline Users** : >50% des sessions admin offline simultanément
+
+**Alertes de performance :**
+- 🟡 **High Error Rate** : >10% error rate pendant 15 minutes
+- 🟡 **Stale Data** : Données >60s pendant 20 minutes
+- 🟢 **Low Adoption** : <50% des utilisateurs actifs utilisent le mode live
+
+### Debugging et Support
+
+**Outils de diagnostic :**
+- **Console logs** : `live_stats:*` pour tracing détaillé
+- **Network tab** : Vérifier les appels `/reception/stats/live`
+- **Local storage** : `liveStatsEnabled` pour préférence utilisateur
+
+**Procédures de troubleshooting :**
+1. Vérifier la connectivité réseau
+2. Confirmer que l'API backend répond
+3. Vérifier les feature flags côté frontend
+4. Consulter les logs Sentry pour erreurs détaillées
 
 ---
 

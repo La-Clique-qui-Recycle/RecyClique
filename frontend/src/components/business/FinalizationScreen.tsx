@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import styled from 'styled-components';
+import { useFeatureFlag } from '../../utils/features';
 
 const Backdrop = styled.div<{ $open: boolean }>`
   position: fixed;
@@ -118,6 +119,7 @@ interface FinalizationScreenProps {
 }
 
 const FinalizationScreen: React.FC<FinalizationScreenProps> = ({ open, totalAmount, onCancel, onConfirm }) => {
+  const cashChequesV2Enabled = useFeatureFlag('cashChequesV2');
   const [donation, setDonation] = useState<string>('0');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
   const [cashGiven, setCashGiven] = useState<string>('');
@@ -162,10 +164,10 @@ const FinalizationScreen: React.FC<FinalizationScreenProps> = ({ open, totalAmou
       return true;
     }
 
-    if (paymentMethod === 'cash') {
+    if (paymentMethod === 'cash' || (paymentMethod === 'check' && cashChequesV2Enabled)) {
       return parsedCashGiven != null && parsedCashGiven >= amountDue;
     }
-    return true; // card/check don't require cash given
+    return true; // card doesn't require cash given
   }, [paymentMethod, parsedCashGiven, amountDue]);
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -224,7 +226,7 @@ const FinalizationScreen: React.FC<FinalizationScreenProps> = ({ open, totalAmou
             </Field>
           </Row>
 
-          {paymentMethod === 'cash' && amountDue > 0 && (
+          {(paymentMethod === 'cash' || (paymentMethod === 'check' && cashChequesV2Enabled)) && amountDue > 0 && (
             <Row>
               <Field>
                 <Label htmlFor="cashGiven">Montant donné (€)</Label>
@@ -238,14 +240,16 @@ const FinalizationScreen: React.FC<FinalizationScreenProps> = ({ open, totalAmou
                   data-testid="cash-given-input"
                 />
               </Field>
-              <Field>
-                <Label>Monnaie à rendre</Label>
-                <Input
-                  value={paymentMethod === 'cash' && parsedCashGiven != null ? (Math.max(0, change || 0)).toFixed(2) : '0.00'}
-                  readOnly
-                  data-testid="change-output"
-                />
-              </Field>
+              {paymentMethod === 'cash' && (
+                <Field>
+                  <Label>Monnaie à rendre</Label>
+                  <Input
+                    value={parsedCashGiven != null ? (Math.max(0, change || 0)).toFixed(2) : '0.00'}
+                    readOnly
+                    data-testid="change-output"
+                  />
+                </Field>
+              )}
             </Row>
           )}
 

@@ -322,3 +322,4 @@ class TestReceptionTicketsStatusFilter:
         # Vérifier que tous les tickets retournés sont ouverts
         for ticket in data["tickets"]:
             assert ticket["status"] == "opened"
+

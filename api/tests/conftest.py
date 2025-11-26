@@ -146,7 +146,9 @@ from recyclic_api.models.category import Category
 from recyclic_api.core.security import create_access_token, hash_password
 
 # Configuration de la base de données de test
-SQLALCHEMY_DATABASE_URL = os.getenv("TEST_DATABASE_URL", "postgresql://recyclic:your_postgres_password@localhost:5432/recyclic_test")
+# Utilise le nom du service Docker en environnement conteneurisé
+db_host = "postgres" if os.getenv("TESTING") == "true" else "localhost"
+SQLALCHEMY_DATABASE_URL = os.getenv("TEST_DATABASE_URL", f"postgresql://recyclic:your_postgres_password@{db_host}:5432/recyclic_test")
 os.environ["TESTING"] = "true"
 
 engine_kwargs = {}

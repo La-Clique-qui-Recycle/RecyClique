@@ -303,4 +303,74 @@ docker-compose up -d
 
 ---
 
-*Dernière mise à jour : 2025-01-27 | Version : 1.0*
+---
+
+## 🚀 **Live Reception Stats Feature (Story B38-P2)**
+
+### Feature Flag Configuration
+
+Le système de statistiques de réception en temps réel peut être activé/désactivé via la variable d'environnement :
+
+```bash
+# Activer les stats temps réel (par défaut)
+LIVE_RECEPTION_STATS_ENABLED=true
+
+# Désactiver pour revenir à l'ancienne logique
+LIVE_RECEPTION_STATS_ENABLED=false
+```
+
+### Endpoint API
+
+**Route :** `GET /api/v1/reception/stats/live`
+
+**Permissions :** Admin ou Super Admin uniquement
+
+**Réponse :**
+```json
+{
+  "tickets_open": 5,
+  "tickets_closed_24h": 23,
+  "turnover_eur": 1247.50,
+  "donations_eur": 45.80,
+  "weight_in": 1250.75,
+  "weight_out": 890.25
+}
+```
+
+### Métriques Prometheus
+
+Le service expose automatiquement les métriques suivantes :
+
+- `reception_live_stats_requests_total` : Nombre total de requêtes
+- `reception_live_stats_duration_seconds` : Temps de calcul des statistiques
+- `reception_live_stats_errors_total` : Nombre d'erreurs lors du calcul
+
+### Utilisation en Développement
+
+```bash
+# Tester l'endpoint avec un admin
+curl -H "Authorization: Bearer <admin_token>" \
+     http://localhost:8000/api/v1/reception/stats/live
+
+# Avec feature flag désactivé, retourne des zéros
+LIVE_RECEPTION_STATS_ENABLED=false curl -H "Authorization: Bearer <admin_token>" \
+     http://localhost:8000/api/v1/reception/stats/live
+```
+
+### Performance
+
+- **Latence cible :** < 500ms sur dataset de 5,000 tickets
+- **Fréquence d'appel :** Adaptée aux besoins du dashboard (toutes les 30s-1min)
+- **Cache :** Non implémenté (calcul en temps réel pour fraîcheur maximale)
+
+### Debug et Monitoring
+
+```bash
+# Vérifier les métriques Prometheus
+curl http://localhost:8000/metrics | grep reception_live_stats
+
+# Logs structurés dans les conteneurs
+docker-compose logs -f api | grep "live.*stats"
+```
+
+*Dernière mise à jour : 2025-11-26 | Version : 1.1*

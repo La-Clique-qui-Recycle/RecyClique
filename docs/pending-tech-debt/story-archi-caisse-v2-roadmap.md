@@ -1,8 +1,9 @@
 ---
-cleanup_status: tech_debt
-cleanup_destination: docs/pending-tech-debt/
-cleanup_date: 2025-11-17T20:53:13.617662
-original_path: docs/stories/story-archi-caisse-v2-roadmap.md
+categorized_by: story-audit-and-sort
+categorized_date: 2025-11-20
+category: debt
+original_path: docs/backup-pre-cleanup/story-archi-caisse-v2-roadmap.md
+rationale: mentions debt/stabilization/fix
 ---
 
 # Story (Architecture): Définition de la Feuille de Route Finale pour la Caisse V2
