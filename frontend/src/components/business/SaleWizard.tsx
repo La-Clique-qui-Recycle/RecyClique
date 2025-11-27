@@ -302,6 +302,7 @@ export interface NumpadCallbacks {
   setWeightValue: (value: string) => void;
   setWeightError: (error: string) => void;
   setMode: (mode: 'quantity' | 'price' | 'weight' | 'idle') => void;
+  setPricePrefilled: (prefilled: boolean) => void;
 }
 
 export interface SaleWizardProps {
@@ -535,43 +536,21 @@ export const SaleWizard: React.FC<SaleWizardProps> = ({ onItemComplete, numpadCa
   }, [weight]);
 
   const isPriceValid = useMemo(() => {
-    // Si un preset est sélectionné, il est automatiquement valide (prix déjà défini)
-    // Story 1.1.2: Utiliser currentTransactionPreset au lieu de selectedPreset du store global
+    // Les presets sont toujours valides
     if (currentTransactionPreset) {
       return true;
     }
 
-    // B39-P4: Toujours permettre la saisie manuelle du prix, même avec tarif catalogue
-    // Le prix catalogue sert de valeur par défaut mais peut être modifié
-
-    const cat = getCategoryById(selectedCategory);
-    const hasMax = cat?.max_price != null && Number(cat.max_price) > 0;
-    const hasMin = cat?.price != null;
-
-    // Si pas de prix saisi et pas de preset, utiliser le prix catalogue par défaut
     if (!price) {
-      if (hasMin && !hasMax) {
-        // Prix fixe catalogue : utiliser automatiquement comme valeur par défaut
-        return true;
-      }
-      // Pas de prix par défaut disponible
       return false;
     }
 
-    // Validation du prix saisi manuellement
     const num = parseFloat(price);
-    if (isNaN(num) || num < 0 || num > 9999.99) return false;
-
-    // Validation entre price(min) et max_price si max_price>0 (fourchette de prix)
-    if (hasMax && hasMin) {
-      const min = Number(cat!.price);
-      const max = Number(cat!.max_price);
-      return num >= min && num <= max;
+    if (isNaN(num) || num < 0.01 || num > 9999.99) {
+      return false;
     }
-
-    // Prix libre ou prix fixe modifié manuellement : toujours valide
     return true;
-  }, [price, selectedCategory, getCategoryById, currentTransactionPreset]);
+  }, [price, currentTransactionPreset]);
 
   // Removed handleNumberClick, handleDecimalClick, handleClear - now handled by parent numpad
 
@@ -865,10 +844,20 @@ export const SaleWizard: React.FC<SaleWizardProps> = ({ onItemComplete, numpadCa
     // - Toujours passer par l'étape prix pour permettre la sélection des boutons prédéfinis
     handleQuantityInputCompleted();
 
-    // B39-P4: Ne plus pré-remplir automatiquement le prix fixe
-    // Le caissier peut maintenant modifier le prix même avec tarif catalogue
-    // Le prix catalogue servira de valeur par défaut mais sera affiché dans l'interface
-    numpadCallbacks.setPriceValue('');
+    // B39-P4: Pré-remplir avec le prix catalogue par défaut quand disponible
+    const hasCatalogPrice = category?.price != null;
+    if (hasCatalogPrice) {
+      const priceValue =
+        typeof category!.price === 'number'
+          ? category!.price.toString()
+          : category!.price ?? '';
+      numpadCallbacks.setPriceValue(priceValue);
+      numpadCallbacks.setPricePrefilled(true);
+    } else {
+      // Prix libre : champ vide pour saisie manuelle
+      numpadCallbacks.setPriceValue('');
+      numpadCallbacks.setPricePrefilled(false);
+    }
 
     numpadCallbacks.setPriceError('');
     numpadCallbacks.setMode('price');
@@ -957,6 +946,7 @@ export const SaleWizard: React.FC<SaleWizardProps> = ({ onItemComplete, numpadCa
     numpadCallbacks.setQuantityValue('1');
     numpadCallbacks.setQuantityError('');
     numpadCallbacks.setPriceValue('');
+    numpadCallbacks.setPricePrefilled(false);
     numpadCallbacks.setPriceError('');
     numpadCallbacks.setWeightValue('');
     numpadCallbacks.setWeightError('');
@@ -1121,9 +1111,11 @@ export const SaleWizard: React.FC<SaleWizardProps> = ({ onItemComplete, numpadCa
                     if (preset) {
                       // When a preset is selected, set the price to 0€ (presets always have 0€ unit price)
                       numpadCallbacks.setPriceValue('0');
+                      numpadCallbacks.setPricePrefilled(false);
                     } else {
                       // When deselected, clear the price value to allow manual input
                       numpadCallbacks.setPriceValue('');
+                      numpadCallbacks.setPricePrefilled(false);
                     }
                   }}
                 />
@@ -1142,6 +1134,7 @@ export const SaleWizard: React.FC<SaleWizardProps> = ({ onItemComplete, numpadCa
                       categoryName={currentCategoryName}
                       onPriceCalculated={(calculatedPrice) => {
                         numpadCallbacks.setPriceValue(calculatedPrice.toString());
+                        numpadCallbacks.setPricePrefilled(false);
                       }}
                     />
                   );

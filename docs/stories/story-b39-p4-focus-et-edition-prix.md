@@ -58,6 +58,7 @@ En tant que **caissier**, je veux **avoir immédiatement le focus sur le champ p
 ### Completion Notes
 - **Auto-focus**: Implemented automatic focus on price field when sale screen loads, with 100ms delay for DOM readiness
 - **Price Editing**: Removed restriction on price editing when catalog prices exist - manual price input now always available
+- **Default Price Display**: Catalog prices now display as default values while still allowing manual editing
 - **Focus Management**: Maintained existing focus flow after quantity confirmation (focuses back to price field)
 - **Error Messages**: Enhanced validation with specific "Prix négatif interdit" message for negative prices
 - **Tests**: Added comprehensive test suite covering auto-focus, price editing, and error handling

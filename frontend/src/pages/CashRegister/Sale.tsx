@@ -120,6 +120,7 @@ const Sale: React.FC = () => {
   const [quantityValue, setQuantityValue] = useState<string>('1');
   const [quantityError, setQuantityError] = useState<string>('');
   const [priceValue, setPriceValue] = useState<string>('');
+  const [pricePrefilled, setPricePrefilled] = useState<boolean>(false);
   const [priceError, setPriceError] = useState<string>('');
   const [weightValue, setWeightValue] = useState<string>('');
   const [weightError, setWeightError] = useState<string>('');
@@ -191,7 +192,8 @@ const Sale: React.FC = () => {
     setPriceError,
     setWeightValue,
     setWeightError,
-    setMode: setNumpadMode
+    setMode: setNumpadMode,
+    setPricePrefilled: setPricePrefilled
   };
 
   // Load categories on component mount
@@ -331,10 +333,11 @@ const Sale: React.FC = () => {
         }
       }
     } else if (numpadMode === 'price') {
-      const newValue = currentValue + digit;
+      const newValue = pricePrefilled ? digit : currentValue + digit;
       if (/^\d*\.?\d{0,2}$/.test(newValue) && parseFloat(newValue || '0') <= 9999.99) {
         setPriceValue(newValue);
         setPriceError('');
+        setPricePrefilled(false);
       }
     } else if (numpadMode === 'weight') {
       const newValue = currentValue + digit;
@@ -348,15 +351,28 @@ const Sale: React.FC = () => {
   const handleNumpadClear = () => {
     setCurrentValue('');
     setCurrentError('');
+    if (numpadMode === 'price') {
+      setPricePrefilled(false);
+    }
   };
 
   const handleNumpadBackspace = () => {
+    if (numpadMode === 'price' && pricePrefilled) {
+      setPriceValue('');
+      setPricePrefilled(false);
+      return;
+    }
     setCurrentValue(getCurrentValue().slice(0, -1));
   };
 
   const handleNumpadDecimal = () => {
     const currentValue = getCurrentValue();
     if ((numpadMode === 'price' || numpadMode === 'weight') && !currentValue.includes('.')) {
+      if (numpadMode === 'price' && pricePrefilled) {
+        setPriceValue('0.');
+        setPricePrefilled(false);
+        return;
+      }
       setCurrentValue(currentValue + '.');
     }
   };
