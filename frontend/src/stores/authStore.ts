@@ -26,6 +26,7 @@ interface AuthState {
   currentUser: User | null;
   isAuthenticated: boolean;
   token: string | null; // OPTIMIZATION: Cache token in memory to avoid repeated localStorage reads
+  refreshToken: string | null; // B42-P6: Store refresh token for rotation
   permissions: string[]; // NEW: Stocker les permissions de l'utilisateur
   loading: boolean;
   error: string | null;
@@ -72,6 +73,7 @@ export const useAuthStore = create<AuthState>()(
         currentUser: null,
         isAuthenticated: false,
         token: null, // OPTIMIZATION: Cached token in memory
+        refreshToken: null, // B42-P6
         permissions: [], // NEW
         loading: false,
         error: null,
@@ -91,6 +93,9 @@ export const useAuthStore = create<AuthState>()(
             
             // OPTIMIZATION: Store token in both localStorage (persistence) and memory (cache)
             localStorage.setItem('token', response.access_token);
+            if (response.refresh_token) {
+              localStorage.setItem('refreshToken', response.refresh_token);
+            }
             if (axiosClient.defaults?.headers?.common) {
               axiosClient.defaults.headers.common['Authorization'] = `Bearer ${response.access_token}`;
             }
@@ -130,6 +135,7 @@ export const useAuthStore = create<AuthState>()(
               currentUser: user,
               isAuthenticated: true,
               token: response.access_token, // OPTIMIZATION: Cache token in memory
+              refreshToken: response.refresh_token || null, // B42-P6
               permissions: userPermissions, // NEW
               tokenExpiration: expiration,
               csrfToken: csrfToken,
@@ -222,6 +228,7 @@ export const useAuthStore = create<AuthState>()(
           } finally {
             // Toujours procéder à la déconnexion locale
             localStorage.removeItem('token');
+            localStorage.removeItem('refreshToken'); // B42-P6
             // B42-P3: Clear session metadata
             // Safely delete Authorization header if axiosClient is configured
             if (axiosClient.defaults?.headers?.common) {
@@ -231,6 +238,7 @@ export const useAuthStore = create<AuthState>()(
               currentUser: null, 
               isAuthenticated: false, 
               token: null, 
+              refreshToken: null, // B42-P6
               permissions: [], 
               error: null,
               tokenExpiration: null,
@@ -244,8 +252,9 @@ export const useAuthStore = create<AuthState>()(
         initializeAuth: async () => {
           // OPTIMIZATION: Read from localStorage only once on app init, then cache in memory
           const token = localStorage.getItem('token');
+          const refreshToken = localStorage.getItem('refreshToken'); // B42-P6
           if (!token) {
-            set({ currentUser: null, isAuthenticated: false, token: null, permissions: [], loading: false });
+            set({ currentUser: null, isAuthenticated: false, token: null, refreshToken: null, permissions: [], loading: false });
             return;
           }
           if (axiosClient.defaults?.headers?.common) {
@@ -257,7 +266,8 @@ export const useAuthStore = create<AuthState>()(
           // Cache the token in memory for subsequent requests
           set({ 
             isAuthenticated: true, 
-            token, 
+            token,
+            refreshToken, // B42-P6
             tokenExpiration: expiration,
             csrfToken: csrfToken,
             loading: false 
@@ -296,11 +306,17 @@ export const useAuthStore = create<AuthState>()(
         
         // B42-P3: Refresh token actions
         refreshToken: async () => {
-          const { refreshPending, lastRefreshAttempt, csrfToken } = get();
+          const { refreshPending, lastRefreshAttempt, csrfToken, refreshToken } = get();
           
           // Prevent concurrent refresh attempts
           if (refreshPending) {
             console.debug('Refresh already in progress, skipping');
+            return false;
+          }
+          
+          // Check if we have a refresh token
+          if (!refreshToken) {
+            console.error('No refresh token available');
             return false;
           }
           
@@ -319,7 +335,7 @@ export const useAuthStore = create<AuthState>()(
             
             const response = await axiosClient.post(
               '/v1/auth/refresh',
-              {},
+              { refresh_token: refreshToken }, // B42-P6: Send refresh token in body
               {
                 headers: currentCsrfToken ? {
                   'X-CSRF-Token': currentCsrfToken
@@ -329,17 +345,22 @@ export const useAuthStore = create<AuthState>()(
             );
             
             const newToken = response.data.access_token;
+            const newRefreshToken = response.data.refresh_token; // B42-P6: Get new refresh token (rotation)
             const newExpiration = getTokenExpiration(newToken);
             const newCsrfToken = response.data.csrf_token || getCsrfTokenFromCookie();
             
             // Update token in localStorage and memory
             localStorage.setItem('token', newToken);
+            if (newRefreshToken) {
+              localStorage.setItem('refreshToken', newRefreshToken);
+            }
             if (axiosClient.defaults?.headers?.common) {
               axiosClient.defaults.headers.common['Authorization'] = `Bearer ${newToken}`;
             }
             
             set({
               token: newToken,
+              refreshToken: newRefreshToken || refreshToken, // Update with new one or keep old one
               tokenExpiration: newExpiration,
               csrfToken: newCsrfToken,
               refreshPending: false,
