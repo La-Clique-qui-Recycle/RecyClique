@@ -166,18 +166,16 @@ export function useSessionHeartbeat(
       return;
     }
 
-    // Calculate if we can do automatic refresh (need at least buffer time)
-    const expirationMinutes = expiration / (60 * 1000);
-    const canAutoRefresh = expirationMinutes >= refreshBeforeExpiryMinutes;
-
-    // B42-P6: Only refresh automatically if user has recent activity AND we have enough time
+    // B42-P6: Only refresh automatically if user has recent activity
     if (!hasRecentActivity) {
       console.debug('User inactive, skipping automatic refresh');
       return;
     }
 
-    // Check if token is expiring soon AND we can do automatic refresh
-    if (isTokenExpiringSoon(token, refreshBeforeExpiryMinutes) && canAutoRefresh) {
+    // Check if token is expiring soon - if so, trigger automatic refresh
+    // We don't need to check "canAutoRefresh" because if the token is expiring soon,
+    // we should refresh it regardless of the total session duration
+    if (isTokenExpiringSoon(token, refreshBeforeExpiryMinutes)) {
       console.debug('Token expiring soon, triggering automatic refresh (user active)');
       try {
         const success = await refreshToken();
@@ -194,10 +192,6 @@ export function useSessionHeartbeat(
         console.error('Error during automatic refresh:', error);
         // Don't throw - let the banner handle the error display
       }
-    } else if (isTokenExpiringSoon(token, refreshBeforeExpiryMinutes) && !canAutoRefresh) {
-      // Session too short for automatic refresh - don't set refreshFailed, just let banner show warning
-      console.debug('Token expiring soon but session too short for automatic refresh - manual refresh required');
-      setRefreshFailed(false); // Don't show error, just warning
     }
   }, [token, isAuthenticated, refreshPending, refreshBeforeExpiryMinutes, refreshToken, hasRecentActivity]);
 
@@ -369,9 +363,18 @@ export function useSessionHeartbeat(
         .find(row => row.startsWith('csrf_token='))
         ?.split('=')[1] || null;
       
+      // Get refresh token from store
+      const refreshToken = useAuthStore.getState().refreshToken;
+      if (!refreshToken) {
+        console.error('No refresh token available for manual refresh');
+        setRefreshFailed(true);
+        setRefreshPending(false);
+        return false;
+      }
+      
       const response = await axiosClient.post(
         '/v1/auth/refresh',
-        {},
+        { refresh_token: refreshToken }, // B42-P6: Send refresh token in body
         {
           headers: csrfToken ? { 'X-CSRF-Token': csrfToken } : {},
           withCredentials: true
@@ -380,12 +383,16 @@ export function useSessionHeartbeat(
       
       // Refresh succeeded - update token in store (same as authStore.refreshToken does)
       const newToken = response.data.access_token;
+      const newRefreshToken = response.data.refresh_token; // B42-P6: Get new refresh token (rotation)
       const newExpiration = getTokenExpiration(newToken);
       const newCsrfToken = response.data.csrf_token || 
         document.cookie.split('; ').find(row => row.startsWith('csrf_token='))?.split('=')[1] || null;
       
       // Update token in localStorage and memory (same as authStore)
       localStorage.setItem('token', newToken);
+      if (newRefreshToken) {
+        localStorage.setItem('refreshToken', newRefreshToken);
+      }
       if (axiosClient.defaults?.headers?.common) {
         axiosClient.defaults.headers.common['Authorization'] = `Bearer ${newToken}`;
       }
@@ -394,6 +401,7 @@ export function useSessionHeartbeat(
       // This ensures tokenExpiration is updated immediately and triggers re-render
       useAuthStore.setState({
         token: newToken,
+        refreshToken: newRefreshToken || refreshToken, // Update with new one or keep old one
         tokenExpiration: newExpiration,
         csrfToken: newCsrfToken,
         refreshPending: false,
