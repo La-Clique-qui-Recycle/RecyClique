@@ -1,4 +1,4 @@
-﻿import jwt
+﻿from jose import jwt
 """
 Tests pour l'endpoint des statuts des utilisateurs
 """
@@ -95,7 +95,7 @@ class TestUserStatuses:
         assert len(user_statuses) > 0
         
         # Trouver l'utilisateur actuel dans la liste
-        import jwt
+        from jose import jwt
         payload = jwt.decode(token, options={"verify_signature": False})
         current_user_id = payload["sub"]
         
@@ -176,7 +176,7 @@ class TestUserStatuses:
         assert login_response.status_code == 200
         token = login_response.json()["access_token"]
         
-        import jwt
+        from jose import jwt
         payload = jwt.decode(token, options={"verify_signature": False})
         user_id = payload["sub"]
         

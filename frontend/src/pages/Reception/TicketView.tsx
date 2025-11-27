@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import styled from 'styled-components';
 import { ArrowLeft, Calendar, User, Package, Weight, MapPin, FileText, CheckCircle, Clock, Tag } from 'lucide-react';
 import { getReceptionTicketDetail } from '../../services/api';
+import { ReceptionKPIBanner } from '../../components/business/ReceptionKPIBanner';
 
 const TicketViewContainer = styled.div`
   max-width: 1200px;
@@ -285,6 +286,7 @@ const TicketView: React.FC = () => {
 
   return (
     <TicketViewContainer>
+      <ReceptionKPIBanner />
       <Header>
         <BackButton onClick={() => navigate('/reception')}>
           <ArrowLeft size={20} />

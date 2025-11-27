@@ -7,7 +7,8 @@ from sqlalchemy.orm import Session
 from uuid import uuid4
 
 from recyclic_api.models.user import User, UserRole, UserStatus
-from recyclic_api.models.reception import PosteReception, PosteReceptionStatus, TicketDepot, TicketDepotStatus
+from recyclic_api.models.poste_reception import PosteReception, PosteReceptionStatus
+from recyclic_api.models.ticket_depot import TicketDepot, TicketDepotStatus
 from recyclic_api.core.security import hash_password
 
 

@@ -7,6 +7,7 @@ import { useReception } from '../../contexts/ReceptionContext';
 import { receptionService } from '../../services/receptionService';
 import NumericKeypad from '../../components/ui/NumericKeypad';
 import SessionHeader from '../../components/SessionHeader';
+import { ReceptionKPIBanner } from '../../components/business/ReceptionKPIBanner';
 import { useStepState } from '../../services/sessionState';
 import { useCategoryStore } from '../../stores/categoryStore';
 import { useReceptionShortcutStore } from '../../stores/receptionShortcutStore';
@@ -1588,11 +1589,12 @@ const TicketForm: React.FC = () => {
     <KioskContainer>
       <SessionHeader
         ticketId={ticket.id}
-        onBack={() => navigate('/reception')}
         onCloseTicket={handleCloseTicket}
         isLoading={isLoading}
+        title={`Reception : Ticket #${ticket.id.slice(-8)}`}
+        showBackButton={false}
       />
-
+      <ReceptionKPIBanner />
 
       <MainLayout>
         {isMobile ? (

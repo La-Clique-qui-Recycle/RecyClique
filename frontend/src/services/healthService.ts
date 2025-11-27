@@ -51,6 +51,26 @@ export interface SchedulerTask {
   interval_minutes: number
 }
 
+export interface SessionMetrics {
+  total_operations: number
+  refresh_success_count: number
+  refresh_failure_count: number
+  refresh_success_rate_percent: number
+  logout_forced_count: number
+  logout_manual_count: number
+  active_sessions_estimate: number
+  latency_metrics: {
+    min_ms: number
+    max_ms: number
+    avg_ms: number
+  }
+  error_breakdown: Record<string, number>
+  ip_breakdown: Record<string, number>
+  site_breakdown: Record<string, { success: number; failure: number }>
+  time_period_hours: number
+  timestamp: number
+}
+
 export interface AnomalySummary {
   status: string
   anomalies: Record<string, Anomaly[]>
@@ -111,6 +131,21 @@ class HealthService {
     } catch (error) {
       console.error('Erreur lors de l\'envoi de la notification de test:', error)
       throw new Error('Impossible d\'envoyer la notification de test')
+    }
+  }
+
+  /**
+   * Récupère les métriques de sessions (B42-P4)
+   */
+  async getSessionMetrics(hours: number = 24): Promise<SessionMetrics> {
+    try {
+      const response = await api.get('/v1/admin/sessions/metrics', {
+        params: { hours }
+      })
+      return response.data.metrics
+    } catch (error) {
+      console.error('Erreur lors de la récupération des métriques de session:', error)
+      throw new Error('Impossible de récupérer les métriques de session')
     }
   }
 }

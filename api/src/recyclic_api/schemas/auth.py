@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field, EmailStr
+from pydantic import BaseModel, Field, EmailStr, ConfigDict
 
 
 class LoginRequest(BaseModel):
@@ -21,6 +21,8 @@ class SignupRequest(BaseModel):
 
 class AuthUser(BaseModel):
     """Représentation de l'utilisateur retournée après authentification."""
+    
+    model_config = ConfigDict(from_attributes=True)
 
     id: str
     telegram_id: Optional[int] = None
@@ -38,7 +40,9 @@ class LoginResponse(BaseModel):
     """Réponse d'authentification contenant le token et l'utilisateur."""
 
     access_token: str = Field(..., description="JWT d'accès")
+    refresh_token: Optional[str] = Field(None, description="Refresh token pour renouveler l'access token")
     token_type: str = Field("bearer", description="Type de token")
+    expires_in: Optional[int] = Field(None, description="Durée de validité de l'access token en secondes")
     user: AuthUser
 
 
@@ -79,5 +83,20 @@ class LogoutResponse(BaseModel):
     """Réponse pour la déconnexion."""
 
     message: str = Field(..., description="Message de confirmation")
+
+
+class RefreshTokenRequest(BaseModel):
+    """Schéma de requête pour le refresh token."""
+
+    refresh_token: str = Field(..., description="Refresh token à utiliser pour obtenir un nouveau access token")
+
+
+class RefreshTokenResponse(BaseModel):
+    """Réponse pour le refresh token contenant les nouveaux tokens."""
+
+    access_token: str = Field(..., description="Nouveau JWT d'accès")
+    refresh_token: str = Field(..., description="Nouveau refresh token (rotation)")
+    token_type: str = Field("bearer", description="Type de token")
+    expires_in: int = Field(..., description="Durée de validité de l'access token en secondes")
 
 

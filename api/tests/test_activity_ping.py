@@ -2,7 +2,7 @@
 Tests pour l'endpoint de ping d'activité utilisateur.
 """
 import time
-import jwt
+from jose import jwt
 from fastapi.testclient import TestClient
 
 import sys

@@ -1,7 +1,10 @@
 ﻿from pydantic_settings import BaseSettings
 from pydantic import ConfigDict
 import os
+import logging
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 class Settings(BaseSettings):
     # Database
@@ -59,7 +62,11 @@ class Settings(BaseSettings):
 settings = Settings()
 
 # Test-mode overrides to satisfy tests expectations
+# IMPORTANT: Ne pas activer TESTING en production - cela force l'utilisation de la base de test
+# TESTING doit être défini uniquement lors de l'exécution des tests pytest
 if os.getenv("TESTING") == "true":
+    logger = logging.getLogger(__name__)
+    logger.warning("⚠️ TESTING mode activé - utilisation de la base de données de test!")
     settings.ENVIRONMENT = "test"
     if settings.TEST_DATABASE_URL:
         settings.DATABASE_URL = settings.TEST_DATABASE_URL

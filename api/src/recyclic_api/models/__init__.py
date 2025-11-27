@@ -11,6 +11,7 @@ from .sync_log import SyncLog
 from .registration_request import RegistrationRequest
 from .user_status_history import UserStatusHistory
 from .login_history import LoginHistory
+from .user_session import UserSession
 from .admin_setting import AdminSetting
 from .poste_reception import PosteReception, PosteReceptionStatus
 from .ticket_depot import TicketDepot, TicketDepotStatus
@@ -38,6 +39,7 @@ __all__ = [
     "RegistrationRequest",
     "UserStatusHistory",
     "LoginHistory",
+    "UserSession",
     "AdminSetting",
     "PosteReception",
     "PosteReceptionStatus",

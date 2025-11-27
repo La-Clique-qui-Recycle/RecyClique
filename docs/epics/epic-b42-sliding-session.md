@@ -43,6 +43,12 @@ Aujourd’hui, la durée de session (token JWT) est configurable mais fixe : l
    - Tests de pénétration ciblés (replay token, refresh forgé, CSRF selon choix technique).  
    - Documentation Runbook (procédure regen clés, rotation forcée).
 
+6. **STORY-B42-P6 – Capteur de Présence & Refresh Automatique Intelligent**  
+   - Détection automatique d'activité utilisateur (mousemove, click, keypress, scroll).  
+   - Pings intelligents basés sur l'activité (pas toutes les 5 min).  
+   - Refresh automatique silencieux si activité récente.  
+   - Bandeau discret (masqué par défaut, visible seulement en cas d'erreur/inactivité).
+
 ## 4. Compatibilité & Contraintes
 
 - Rester compatible avec les tokens existants (migration douce).  
@@ -52,7 +58,7 @@ Aujourd’hui, la durée de session (token JWT) est configurable mais fixe : l
 
 ## 5. Definition of Done
 
-- [ ] Les 5 stories sont livrées et validées par QA + sécurité.  
+- [ ] Les 6 stories sont livrées et validées par QA + sécurité.  
 - [ ] Une séance de caisse peut rester ouverte toute la journée sans reconnection tant que l’opérateur est actif.  
 - [ ] Les tokens expirent bien lorsque le poste est réellement inactif (au-delà du seuil + durée max).  
 - [ ] Les métriques/alertes permettent au PO de surveiller le taux de déconnexion.  

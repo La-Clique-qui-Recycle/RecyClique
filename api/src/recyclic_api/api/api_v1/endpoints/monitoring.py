@@ -15,6 +15,7 @@ from recyclic_api.utils.classification_cache import classification_cache
 from recyclic_api.core.email_service import send_email
 from recyclic_api.utils.email_metrics import email_metrics
 from recyclic_api.utils.auth_metrics import auth_metrics
+from recyclic_api.utils.session_metrics import session_metrics
 
 router = APIRouter()
 
@@ -367,3 +368,68 @@ async def reset_auth_metrics():
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to reset auth metrics: {str(e)}")
+
+
+# B42-P4: Session metrics endpoints
+@router.get("/sessions/metrics")
+async def get_session_metrics(
+    hours: int = Query(default=24, ge=1, le=168, description="Number of hours to include in metrics (1-168)")
+):
+    """
+    Get session metrics for monitoring and observability.
+    
+    Story B42-P4: Expose session refresh and logout metrics for admin dashboard.
+
+    Args:
+        hours: Number of hours to include in metrics summary
+
+    Returns:
+        Session metrics summary including refresh success rates, active sessions, and error breakdown
+    """
+    try:
+        metrics_summary = session_metrics.get_metrics_summary(hours=hours)
+        return {
+            "success": True,
+            "metrics": metrics_summary
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get session metrics: {str(e)}")
+
+
+@router.get("/sessions/metrics/prometheus")
+async def get_session_metrics_prometheus():
+    """
+    Get session metrics in Prometheus format.
+    
+    Story B42-P4: Expose Prometheus metrics for alerting (AC3).
+
+    Returns:
+        Prometheus-formatted metrics as plain text
+    """
+    try:
+        prometheus_metrics = session_metrics.get_prometheus_metrics()
+        from fastapi.responses import Response
+        return Response(
+            content="\n".join(prometheus_metrics),
+            media_type="text/plain"
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get Prometheus session metrics: {str(e)}")
+
+
+@router.post("/sessions/metrics/reset")
+async def reset_session_metrics():
+    """
+    Reset session metrics (for testing purposes).
+
+    Returns:
+        Confirmation of metrics reset
+    """
+    try:
+        session_metrics.reset_metrics()
+        return {
+            "success": True,
+            "message": "Session metrics reset successfully"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to reset session metrics: {str(e)}")

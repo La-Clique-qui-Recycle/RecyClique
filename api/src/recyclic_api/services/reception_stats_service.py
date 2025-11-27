@@ -78,21 +78,25 @@ class ReceptionLiveStatsService:
                 # 2. Count tickets closed in last 24h
                 tickets_closed_24h = self._count_closed_tickets_24h(site_id, threshold_24h)
 
-                # 3. Calculate turnover (sales in last 24h)
+                # 3. Count items/lines received (from closed tickets in 24h)
+                items_received = self._count_items_received_24h(site_id, threshold_24h)
+
+                # 4. Calculate turnover (sales in last 24h)
                 turnover_eur = self._calculate_turnover_24h(site_id, threshold_24h)
 
-                # 4. Calculate donations (from sales in last 24h)
+                # 5. Calculate donations (from sales in last 24h)
                 donations_eur = self._calculate_donations_24h(site_id, threshold_24h)
 
-                # 5. Calculate weight received (open tickets + closed in 24h)
+                # 6. Calculate weight received (open tickets + closed in 24h)
                 weight_in = self._calculate_weight_in(site_id, threshold_24h)
 
-                # 6. Calculate weight sold (from sales in last 24h)
+                # 7. Calculate weight sold (from sales in last 24h)
                 weight_out = self._calculate_weight_out(site_id, threshold_24h)
 
                 return {
                     "tickets_open": tickets_open,
                     "tickets_closed_24h": tickets_closed_24h,
+                    "items_received": items_received,
                     "turnover_eur": float(turnover_eur),
                     "donations_eur": float(donations_eur),
                     "weight_in": float(weight_in),
@@ -118,6 +122,20 @@ class ReceptionLiveStatsService:
     def _count_closed_tickets_24h(self, site_id: Optional[str], threshold: datetime) -> int:
         """Count tickets closed within the last 24 hours."""
         query = self.db.query(func.count(TicketDepot.id)).filter(
+            and_(
+                TicketDepot.status == TicketDepotStatus.CLOSED.value,
+                TicketDepot.closed_at.isnot(None),
+                TicketDepot.closed_at >= threshold
+            )
+        )
+
+        return query.scalar() or 0
+
+    def _count_items_received_24h(self, site_id: Optional[str], threshold: datetime) -> int:
+        """Count items/lines received from tickets closed in the last 24 hours."""
+        query = self.db.query(func.count(LigneDepot.id)).join(
+            TicketDepot, LigneDepot.ticket_id == TicketDepot.id
+        ).filter(
             and_(
                 TicketDepot.status == TicketDepotStatus.CLOSED.value,
                 TicketDepot.closed_at.isnot(None),

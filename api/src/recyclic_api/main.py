@@ -123,6 +123,10 @@ else:
     for internal_host in ["localhost", "127.0.0.1"]:
         if internal_host not in allowed_hosts:
             allowed_hosts.append(internal_host)
+    # En mode test, ajouter "testserver" pour les tests FastAPI TestClient
+    is_test_env = (os.getenv("TESTING") == "true") or (settings.ENVIRONMENT == "test")
+    if is_test_env and "testserver" not in allowed_hosts:
+        allowed_hosts.append("testserver")
     app.add_middleware(
         TrustedHostMiddleware,
         allowed_hosts=allowed_hosts
