@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import styled from 'styled-components'
-import { healthService, SystemHealth, Anomaly, Recommendation } from '../../services/healthService'
+import { healthService, SystemHealth, Anomaly, Recommendation, SessionMetrics } from '../../services/healthService'
 import { adminService } from '../../services/adminService'
 import { useAuth } from '../../hooks/useAuth'
 import { UserRole } from '../../generated'
@@ -336,6 +336,7 @@ const WarningBox = styled.div`
 const HealthDashboard: React.FC = () => {
   const { user } = useAuth()
   const [healthData, setHealthData] = useState<SystemHealth | null>(null)
+  const [sessionMetrics, setSessionMetrics] = useState<SessionMetrics | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
@@ -346,8 +347,12 @@ const HealthDashboard: React.FC = () => {
     try {
       setLoading(true)
       setError(null)
-      const data = await healthService.getSystemHealth()
+      const [data, sessionData] = await Promise.all([
+        healthService.getSystemHealth(),
+        healthService.getSessionMetrics(24).catch(() => null) // Don't fail if session metrics fail
+      ])
       setHealthData(data)
+      setSessionMetrics(sessionData)
       setLastRefresh(new Date())
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erreur inconnue')
@@ -591,6 +596,86 @@ const HealthDashboard: React.FC = () => {
         <SectionTitle>⚙️ Statut du Scheduler</SectionTitle>
         {renderSchedulerStatus(scheduler_status)}
       </Section>
+
+      {/* B42-P4: Session Metrics Section */}
+      {sessionMetrics && (
+        <Section>
+          <SectionTitle>🔐 Métriques de Sessions</SectionTitle>
+          <MetricsGrid>
+            <MetricCard>
+              <MetricValue>{sessionMetrics.active_sessions_estimate}</MetricValue>
+              <MetricLabel>Sessions Actives</MetricLabel>
+            </MetricCard>
+            <MetricCard>
+              <MetricValue style={{ color: sessionMetrics.refresh_success_rate_percent >= 95 ? '#059669' : sessionMetrics.refresh_success_rate_percent >= 90 ? '#f59e0b' : '#dc2626' }}>
+                {sessionMetrics.refresh_success_rate_percent.toFixed(1)}%
+              </MetricValue>
+              <MetricLabel>Taux de Réussite Refresh</MetricLabel>
+            </MetricCard>
+            <MetricCard>
+              <MetricValue>{sessionMetrics.refresh_success_count}</MetricValue>
+              <MetricLabel>Refresh Réussis</MetricLabel>
+            </MetricCard>
+            <MetricCard>
+              <MetricValue style={{ color: sessionMetrics.refresh_failure_count > 0 ? '#dc2626' : '#059669' }}>
+                {sessionMetrics.refresh_failure_count}
+              </MetricValue>
+              <MetricLabel>Refresh Échoués</MetricLabel>
+            </MetricCard>
+            <MetricCard>
+              <MetricValue>{sessionMetrics.logout_forced_count}</MetricValue>
+              <MetricLabel>Logouts Forcés</MetricLabel>
+            </MetricCard>
+            <MetricCard>
+              <MetricValue>{sessionMetrics.logout_manual_count}</MetricValue>
+              <MetricLabel>Logouts Manuels</MetricLabel>
+            </MetricCard>
+          </MetricsGrid>
+          
+          {sessionMetrics.error_breakdown && Object.keys(sessionMetrics.error_breakdown).length > 0 && (
+            <div style={{ marginTop: '16px' }}>
+              <h3 style={{ fontSize: '1.1rem', marginBottom: '12px', color: '#1f2937' }}>Erreurs par Type</h3>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {Object.entries(sessionMetrics.error_breakdown).map(([errorType, count]) => (
+                  <div key={errorType} style={{ 
+                    background: '#f3f4f6', 
+                    padding: '8px 12px', 
+                    borderRadius: '4px',
+                    display: 'flex',
+                    justifyContent: 'space-between'
+                  }}>
+                    <span style={{ fontWeight: 500 }}>{errorType}</span>
+                    <span style={{ color: '#dc2626', fontWeight: 600 }}>{count}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {sessionMetrics.ip_breakdown && Object.keys(sessionMetrics.ip_breakdown).length > 0 && (
+            <div style={{ marginTop: '16px' }}>
+              <h3 style={{ fontSize: '1.1rem', marginBottom: '12px', color: '#1f2937' }}>Top Erreurs par IP</h3>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {Object.entries(sessionMetrics.ip_breakdown)
+                  .sort(([, a], [, b]) => b - a)
+                  .slice(0, 5)
+                  .map(([ip, count]) => (
+                    <div key={ip} style={{ 
+                      background: '#f3f4f6', 
+                      padding: '8px 12px', 
+                      borderRadius: '4px',
+                      display: 'flex',
+                      justifyContent: 'space-between'
+                    }}>
+                      <span style={{ fontWeight: 500 }}>{ip}</span>
+                      <span style={{ color: '#dc2626', fontWeight: 600 }}>{count}</span>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          )}
+        </Section>
+      )}
 
       {user?.role === UserRole.SUPER_ADMIN && (
         <Section>

@@ -7,7 +7,8 @@ import PostLoginRedirect from './components/PostLoginRedirect';
 import { ReceptionProvider } from './contexts/ReceptionContext';
 import { CashStoreProvider } from './providers/CashStoreProvider';
 import { useAuthStore } from './stores/authStore';
-import axiosClient from './api/axiosClient';
+import { useSessionHeartbeat } from './hooks/useSessionHeartbeat';
+import { SessionStatusBanner } from './components/ui/SessionStatusBanner';
 
 // Lazy loading des pages pour le code-splitting
 const BenevoleDashboard = lazy(() => import('./pages/BenevoleDashboard.jsx'));
@@ -94,57 +95,16 @@ function App() {
     initializeAuth();
   }, [initializeAuth]);
 
-  useEffect(() => {
-    let intervalId = null;
-
-    const sendPing = async () => {
-      try {
-        await axiosClient.post('/v1/activity/ping');
-      } catch (error) {
-        console.debug('Activity ping failed', error);
-      }
-    };
-
-    const stopInterval = () => {
-      if (intervalId !== null) {
-        clearInterval(intervalId);
-        intervalId = null;
-      }
-    };
-
-    const startInterval = () => {
-      if (intervalId !== null) {
-        return;
-      }
-      sendPing();
-      // OPTIMIZATION: Increase interval from 60s to 5 minutes (300000ms) to reduce server load
-      intervalId = window.setInterval(() => {
-        if (!document.hidden) {
-          sendPing();
-        }
-      }, 300000); // 5 minutes
-    };
-
-    const handleVisibilityChange = () => {
-      if (document.hidden) {
-        stopInterval();
-      } else if (isAuthenticated) {
-        startInterval();
-      }
-    };
-
-    if (isAuthenticated) {
-      if (!document.hidden) {
-        startInterval();
-      }
-      document.addEventListener('visibilitychange', handleVisibilityChange);
-    }
-
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      stopInterval();
-    };
-  }, [isAuthenticated]);
+  // B42-P3: Use session heartbeat hook for token refresh and activity pings
+  // This replaces the old ping logic and adds automatic token refresh
+  // The hook handles: proactive refresh (2 min before expiry), reactive refresh (on 401),
+  // activity pings (every 5 min), and pause/resume on tab visibility
+  useSessionHeartbeat({
+    refreshBeforeExpiryMinutes: 2,
+    checkInterval: 60000, // Check every minute
+    enablePing: true,
+    pingInterval: 300000 // Ping every 5 minutes
+  });
 
   // Routes en mode Kiosque (sans header principal)
   const kioskModeRoutes = [
@@ -175,6 +135,8 @@ function App() {
   return (
     <ReceptionProvider>
       <AppContainer>
+        {/* B42-P3: Session status banner for offline/expiring warnings */}
+        {isAuthenticated && <SessionStatusBanner />}
         {shouldShowHeader && <Header />}
         <MainContent $isKioskMode={isKioskMode}>
           <Suspense fallback={<LoadingSpinner />}>

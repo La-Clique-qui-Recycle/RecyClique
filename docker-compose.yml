@@ -63,10 +63,14 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_PORT: 5432
       POSTGRES_DB: recyclic
+      # Configuration pour les tests
+      TEST_DATABASE_URL: postgresql://recyclic:${POSTGRES_PASSWORD}@postgres:5432/recyclic_test
+      # TESTING: "true"  # Désactivé - ne doit être activé que lors des tests
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:
       - ./api/src:/app/src
+      - ./api/tests:/app/tests
     depends_on:
       postgres:
         condition: service_healthy
@@ -221,6 +225,7 @@ services:
       # Mount source code for hot-reloading
       - ./frontend/src:/app/src
       - ./frontend/public:/app/public
+      - ./frontend/tests:/app/tests
       - ./frontend/package.json:/app/package.json
       - ./frontend/vite.config.js:/app/vite.config.js
       - ./frontend/tsconfig.json:/app/tsconfig.json

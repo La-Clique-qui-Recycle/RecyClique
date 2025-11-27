@@ -374,3 +374,157 @@ docker-compose logs -f api | grep "live.*stats"
 ```
 
 *Dernière mise à jour : 2025-11-26 | Version : 1.1*
+
+---
+
+## 🔐 **Système d'Authentification et Session Glissante (Story B42-P3)**
+
+### Vue d'Ensemble
+
+Le système d'authentification utilise un mécanisme de **session glissante** avec refresh token automatique pour maintenir les utilisateurs actifs connectés sans intervention manuelle.
+
+### Architecture
+
+#### Composants Principaux
+
+- **`useSessionHeartbeat`** : Hook React qui orchestre le refresh automatique et les pings d'activité
+- **`SessionStatusBanner`** : Composant UI affichant l'état de la session (expiration, offline, etc.)
+- **`authStore`** : Store Zustand gérant l'état d'authentification et les métadonnées de session
+- **`axiosClient`** : Client HTTP avec intercepteurs pour refresh automatique sur 401
+
+#### Flux d'Authentification
+
+1. **Login** : L'utilisateur se connecte, reçoit un access token (JWT) et un refresh token (HTTP-only cookie)
+2. **Refresh Proactif** : Le hook `useSessionHeartbeat` détecte l'expiration proche (2 min avant) et déclenche un refresh automatique
+3. **Refresh Réactif** : Si une requête API retourne 401, `axiosClient` tente automatiquement un refresh avant de rediriger vers login
+4. **Pings d'Activité** : Toutes les 5 minutes, un ping est envoyé pour maintenir l'activité utilisateur
+
+### Configuration
+
+#### Paramètres de Session
+
+- **Durée access token** : 240 minutes (4h) - Configurable via `token_expiration_minutes` dans les settings
+- **Durée refresh token** : 24h maximum - Configurable via `refresh_token_max_hours`
+- **Seuil d'inactivité** : 15 minutes - Si inactif plus longtemps, le refresh est refusé
+- **Buffer de refresh** : 2 minutes avant expiration pour déclencher le refresh proactif
+
+#### Stockage des Tokens
+
+- **Access token** : localStorage + mémoire (Zustand store) pour performance
+- **Refresh token** : HTTP-only cookie avec `SameSite=Strict` (géré par le backend)
+- **CSRF token** : Cookie + header `X-CSRF-Token` pour protection CSRF
+
+### Utilisation en Développement
+
+#### Tester le Refresh Automatique
+
+```typescript
+// Dans un composant React
+import { useSessionHeartbeat } from '../hooks/useSessionHeartbeat';
+
+function MyComponent() {
+  const { 
+    timeUntilExpiration, 
+    isExpiringSoon, 
+    isRefreshing,
+    refreshToken 
+  } = useSessionHeartbeat();
+
+  // Le hook gère automatiquement le refresh
+  // Vous pouvez utiliser les valeurs pour afficher l'état
+}
+```
+
+#### Tester le Bandeau de Session
+
+Le `SessionStatusBanner` s'affiche automatiquement quand :
+- Le token expire bientôt (< 2 min)
+- La connexion est perdue (offline)
+- Un refresh est en cours
+
+Pour forcer l'affichage en développement :
+```typescript
+// Simuler expiration proche
+const token = useAuthStore.getState().token;
+// Modifier le token pour qu'il expire dans 1 minute
+```
+
+#### Debug des Problèmes de Session
+
+```bash
+# Vérifier les cookies de session
+# Dans la console du navigateur (DevTools > Application > Cookies)
+# Chercher : refresh_token, csrf_token
+
+# Vérifier l'état du store
+# Dans la console du navigateur
+window.useAuthStore.getState()
+
+# Logs de refresh dans la console
+# Les refresh automatiques sont loggés avec console.debug
+```
+
+### FAQ : Pourquoi je vois le bandeau de session ?
+
+#### Le bandeau apparaît quand :
+
+1. **"Session expirant bientôt"** (orange)
+   - Le token expire dans moins de 2 minutes
+   - **Action** : Le refresh automatique est en cours, attendez quelques secondes
+   - **Si persiste** : Vérifiez votre connexion internet
+
+2. **"Connexion perdue"** (rouge)
+   - Le navigateur détecte que vous êtes offline
+   - **Action** : Vérifiez votre connexion internet
+   - **Note** : La session expirera si la connexion n'est pas rétablie rapidement
+
+3. **"Actualisation de la session..."** (bleu)
+   - Un refresh est en cours
+   - **Action** : Aucune, attendez la fin du refresh
+   - **Durée** : Généralement < 1 seconde
+
+#### Le bandeau ne devrait PAS apparaître si :
+
+- Vous êtes connecté normalement
+- Le token est valide pour plus de 2 minutes
+- Vous êtes en ligne
+
+### Bonnes Pratiques
+
+#### Pour les Développeurs
+
+- **Ne pas stocker le refresh token en localStorage** : Il est géré automatiquement via HTTP-only cookie
+- **Utiliser `useSessionHeartbeat`** : Ne pas créer de logique de ping/refresh manuelle
+- **Gérer les erreurs 401** : Laisser `axiosClient` gérer le refresh automatique, ne pas rediriger manuellement
+- **Tests** : Utiliser les mocks fournis dans `frontend/src/test/hooks/useSessionHeartbeat.test.ts`
+
+#### Pour les Utilisateurs
+
+- **Rester actif** : L'application maintient automatiquement la session si vous êtes actif
+- **Ne pas fermer l'onglet** : Si l'onglet est caché, les pings s'arrêtent automatiquement
+- **Vérifier la connexion** : Si le bandeau rouge apparaît, vérifiez votre connexion internet
+
+### Troubleshooting
+
+#### Problème : Session expire trop rapidement
+
+**Cause possible** : Inactivité > 15 minutes
+**Solution** : L'utilisateur doit se reconnecter (comportement attendu pour sécurité)
+
+#### Problème : Refresh en boucle infinie
+
+**Cause possible** : Token invalide ou backend non disponible
+**Solution** : Vérifier les logs backend, vérifier que le refresh token est valide
+
+#### Problème : Bandeau ne disparaît pas
+
+**Cause possible** : Token expiré mais refresh échoue
+**Solution** : Se reconnecter manuellement
+
+### Références
+
+- **RFC Sliding Session** : `docs/architecture/sliding-session-rfc.md`
+- **Story B42-P3** : `docs/stories/story-b42-p3-frontend-refresh-integration.md`
+- **Tests E2E** : `frontend/tests/e2e/session-refresh.spec.ts`
+
+*Dernière mise à jour : 2025-11-26 | Version : 1.2*

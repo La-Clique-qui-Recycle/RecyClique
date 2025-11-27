@@ -310,3 +310,58 @@ class TestAuthLoginUsernamePassword:
             }
         )
         assert response.status_code == 401
+
+    def test_login_response_serialization_success(self, client: TestClient, db_session: Session, openapi_schema):
+        """
+        Test de régression pour le bug EndOfStream.
+        Vérifie que la sérialisation de LoginResponse fonctionne correctement
+        même avec refresh_token None ou avec tous les champs remplis.
+        """
+        hashed_password = hash_password("serialtest123")
+        test_user = User(
+            username="serialuser1",
+            hashed_password=hashed_password,
+            role=UserRole.USER,
+            status=UserStatus.APPROVED,
+            is_active=True,
+            first_name="Test",
+            last_name="User"
+        )
+        db_session.add(test_user)
+        db_session.commit()
+        db_session.refresh(test_user)
+
+        # Test login - doit réussir même si refresh_token est None
+        response = client.post(
+            "/api/v1/auth/login",
+            json={
+                "username": "serialuser1",
+                "password": "serialtest123"
+            }
+        )
+
+        assert response.status_code == 200, f"Login failed with status {response.status_code}: {response.text}"
+        data = response.json()
+        
+        # Validation du schéma OpenAPI de la réponse
+        login_schema = openapi_schema["paths"]["/api/v1/auth/login"]["post"]["responses"]["200"]["content"]["application/json"]["schema"]
+        try:
+            validate_with_resolver(data, login_schema, openapi_schema)
+        except ValidationError as e:
+            pytest.fail(f"Validation OpenAPI échouée pour la réponse de login: {e}")
+        
+        # Vérifier que tous les champs requis sont présents
+        assert "access_token" in data
+        assert "token_type" in data
+        assert data["token_type"] == "bearer"
+        assert "user" in data
+        assert data["user"]["username"] == "serialuser1"
+        assert data["user"]["first_name"] == "Test"
+        assert data["user"]["last_name"] == "User"
+        assert "refresh_token" in data  # Peut être None ou string
+        assert "expires_in" in data  # Peut être None ou int
+        
+        # Vérifier que refresh_token est soit None soit une string non vide
+        if data["refresh_token"] is not None:
+            assert isinstance(data["refresh_token"], str)
+            assert len(data["refresh_token"]) > 0

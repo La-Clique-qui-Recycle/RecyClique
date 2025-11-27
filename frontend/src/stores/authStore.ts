@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { devtools, persist } from 'zustand/middleware';
 import { AuthApi, LoginRequest, LoginResponse, AuthUser } from '../generated/api';
 import axiosClient from '../api/axiosClient';
+import { getTokenExpiration } from '../utils/jwt';
 
 export interface User {
   id: string;
@@ -28,6 +29,12 @@ interface AuthState {
   permissions: string[]; // NEW: Stocker les permissions de l'utilisateur
   loading: boolean;
   error: string | null;
+  
+  // B42-P3: Session metadata for sliding session
+  tokenExpiration: number | null; // Expiration timestamp in milliseconds
+  refreshPending: boolean; // Flag to prevent concurrent refresh attempts
+  csrfToken: string | null; // CSRF token for double-submit pattern
+  lastRefreshAttempt: number | null; // Timestamp of last refresh attempt to prevent loops
 
   // Actions
   login: (username: string, password: string) => Promise<void>;
@@ -43,6 +50,12 @@ interface AuthState {
   clearError: () => void;
   logout: () => Promise<void>;
   initializeAuth: () => Promise<void>;
+  
+  // B42-P3: Refresh token actions
+  refreshToken: () => Promise<boolean>; // Attempt to refresh access token, returns success
+  setRefreshPending: (pending: boolean) => void;
+  setCsrfToken: (token: string | null) => void;
+  updateTokenExpiration: (token: string | null) => void; // Update expiration from token
 
   // Computed
   isAdmin: () => boolean;
@@ -62,6 +75,12 @@ export const useAuthStore = create<AuthState>()(
         permissions: [], // NEW
         loading: false,
         error: null,
+        
+        // B42-P3: Session metadata
+        tokenExpiration: null,
+        refreshPending: false,
+        csrfToken: null,
+        lastRefreshAttempt: null,
 
         // Actions
         login: async (username: string, password: string) => {
@@ -72,7 +91,9 @@ export const useAuthStore = create<AuthState>()(
             
             // OPTIMIZATION: Store token in both localStorage (persistence) and memory (cache)
             localStorage.setItem('token', response.access_token);
-            axiosClient.defaults.headers.common['Authorization'] = `Bearer ${response.access_token}`;
+            if (axiosClient.defaults?.headers?.common) {
+              axiosClient.defaults.headers.common['Authorization'] = `Bearer ${response.access_token}`;
+            }
 
             // Récupérer les permissions de l'utilisateur
             let userPermissions: string[] = [];
@@ -100,11 +121,18 @@ export const useAuthStore = create<AuthState>()(
               updated_at: response.user.updated_at || new Date().toISOString()
             };
             
+            // B42-P3: Update token expiration and CSRF token
+            const expiration = getTokenExpiration(response.access_token);
+            // CSRF token will be set by the backend via cookie, we'll read it from cookie
+            const csrfToken = getCsrfTokenFromCookie();
+            
             set({
               currentUser: user,
               isAuthenticated: true,
               token: response.access_token, // OPTIMIZATION: Cache token in memory
               permissions: userPermissions, // NEW
+              tokenExpiration: expiration,
+              csrfToken: csrfToken,
               loading: false,
               error: null
             });
@@ -169,7 +197,10 @@ export const useAuthStore = create<AuthState>()(
 
         setCurrentUser: (user) => set({ currentUser: user, isAuthenticated: !!user }),
         setAuthenticated: (authenticated) => set({ isAuthenticated: authenticated }),
-        setToken: (token) => set({ token }), // OPTIMIZATION: Set cached token
+        setToken: (token) => {
+          const expiration = token ? getTokenExpiration(token) : null;
+          set({ token, tokenExpiration: expiration });
+        }, // OPTIMIZATION: Set cached token and update expiration
         getToken: () => get().token, // OPTIMIZATION: Get cached token from memory
         setLoading: (loading) => set({ loading }),
         setError: (error) => set({ error }),
@@ -191,8 +222,22 @@ export const useAuthStore = create<AuthState>()(
           } finally {
             // Toujours procéder à la déconnexion locale
             localStorage.removeItem('token');
-            delete axiosClient.defaults.headers.common['Authorization'];
-            set({ currentUser: null, isAuthenticated: false, token: null, permissions: [], error: null }); // OPTIMIZATION: Clear cached token
+            // B42-P3: Clear session metadata
+            // Safely delete Authorization header if axiosClient is configured
+            if (axiosClient.defaults?.headers?.common) {
+              delete axiosClient.defaults.headers.common['Authorization'];
+            }
+            set({ 
+              currentUser: null, 
+              isAuthenticated: false, 
+              token: null, 
+              permissions: [], 
+              error: null,
+              tokenExpiration: null,
+              refreshPending: false,
+              csrfToken: null,
+              lastRefreshAttempt: null
+            }); // OPTIMIZATION: Clear cached token and session metadata
           }
         },
 
@@ -203,9 +248,20 @@ export const useAuthStore = create<AuthState>()(
             set({ currentUser: null, isAuthenticated: false, token: null, permissions: [], loading: false });
             return;
           }
-          axiosClient.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+          if (axiosClient.defaults?.headers?.common) {
+            axiosClient.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+          }
+          // B42-P3: Update token expiration and CSRF token
+          const expiration = getTokenExpiration(token);
+          const csrfToken = getCsrfTokenFromCookie();
           // Cache the token in memory for subsequent requests
-          set({ isAuthenticated: true, token, loading: false });
+          set({ 
+            isAuthenticated: true, 
+            token, 
+            tokenExpiration: expiration,
+            csrfToken: csrfToken,
+            loading: false 
+          });
           // TODO: Récupérer l'utilisateur et les permissions ici pour valider le token
         },
 
@@ -236,6 +292,87 @@ export const useAuthStore = create<AuthState>()(
           if (currentUser?.role === 'admin' || currentUser?.role === 'super-admin') return true;
           // Volunteers need the permission
           return permissions.includes('reception.access');
+        },
+        
+        // B42-P3: Refresh token actions
+        refreshToken: async () => {
+          const { refreshPending, lastRefreshAttempt, csrfToken } = get();
+          
+          // Prevent concurrent refresh attempts
+          if (refreshPending) {
+            console.debug('Refresh already in progress, skipping');
+            return false;
+          }
+          
+          // Prevent refresh loops (min 5 seconds between attempts)
+          const now = Date.now();
+          if (lastRefreshAttempt && now - lastRefreshAttempt < 5000) {
+            console.debug('Refresh attempted too recently, skipping');
+            return false;
+          }
+          
+          set({ refreshPending: true, lastRefreshAttempt: now });
+          
+          try {
+            // Get CSRF token from cookie if not in state
+            const currentCsrfToken = csrfToken || getCsrfTokenFromCookie();
+            
+            const response = await axiosClient.post(
+              '/v1/auth/refresh',
+              {},
+              {
+                headers: currentCsrfToken ? {
+                  'X-CSRF-Token': currentCsrfToken
+                } : {},
+                withCredentials: true // Include HTTP-only cookies
+              }
+            );
+            
+            const newToken = response.data.access_token;
+            const newExpiration = getTokenExpiration(newToken);
+            const newCsrfToken = response.data.csrf_token || getCsrfTokenFromCookie();
+            
+            // Update token in localStorage and memory
+            localStorage.setItem('token', newToken);
+            if (axiosClient.defaults?.headers?.common) {
+              axiosClient.defaults.headers.common['Authorization'] = `Bearer ${newToken}`;
+            }
+            
+            set({
+              token: newToken,
+              tokenExpiration: newExpiration,
+              csrfToken: newCsrfToken,
+              refreshPending: false,
+              error: null
+            });
+            
+            return true;
+          } catch (error: any) {
+            console.error('Token refresh failed:', error);
+            set({ refreshPending: false });
+            
+            // B42-P6: Don't logout immediately on refresh failure
+            // Let the SessionStatusBanner handle the error display
+            // Only logout if it's a critical error (not just inactivity)
+            if (error.response?.status === 401) {
+              // 401 = invalid/expired token - logout
+              const { logout } = get();
+              await logout();
+            } else if (error.response?.status === 403) {
+              // 403 = inactive user - don't logout immediately, let user see the banner
+              // They can manually refresh or will be logged out when token expires
+              console.warn('Refresh refused due to inactivity - user can still manually refresh');
+            }
+            
+            return false;
+          }
+        },
+        
+        setRefreshPending: (pending) => set({ refreshPending: pending }),
+        setCsrfToken: (token) => set({ csrfToken: token }),
+        updateTokenExpiration: (token) => {
+          const expiration = token ? getTokenExpiration(token) : null;
+          set({ tokenExpiration: expiration });
         }
       }),
       {
@@ -252,5 +389,24 @@ export const useAuthStore = create<AuthState>()(
     }
   )
 );
+
+/**
+ * Helper function to get CSRF token from cookie
+ * CSRF token is set by backend in cookie named 'csrf_token'
+ */
+function getCsrfTokenFromCookie(): string | null {
+  if (typeof document === 'undefined') {
+    return null;
+  }
+  
+  const cookies = document.cookie.split(';');
+  for (const cookie of cookies) {
+    const [name, value] = cookie.trim().split('=');
+    if (name === 'csrf_token' || name === 'X-CSRF-Token') {
+      return value || null;
+    }
+  }
+  return null;
+}
 
 export default useAuthStore;

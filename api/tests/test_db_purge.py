@@ -12,8 +12,8 @@ from recyclic_api.models.user import User, UserRole, UserStatus
 from recyclic_api.models.sale import Sale
 from recyclic_api.models.sale_item import SaleItem
 from recyclic_api.models.cash_session import CashSession
-from recyclic_api.models.reception_ticket import ReceptionTicket
-from recyclic_api.models.reception_line import ReceptionLine
+from recyclic_api.models.ticket_depot import TicketDepot
+from recyclic_api.models.ligne_depot import LigneDepot
 from recyclic_api.core.security import hash_password
 
 client = TestClient(app)
@@ -83,14 +83,14 @@ def sample_transactional_data(db_session: Session):
     db_session.add(sale_item)
     
     # Créer un ticket de réception
-    reception_ticket = ReceptionTicket(
+    reception_ticket = TicketDepot(
         status="closed"
     )
     db_session.add(reception_ticket)
     db_session.flush()
     
     # Créer des lignes de réception
-    reception_line = ReceptionLine(
+    reception_line = LigneDepot(
         ticket_id=reception_ticket.id,
         category_id=1,
         weight_kg=2.5,
@@ -140,8 +140,8 @@ class TestDatabasePurge:
         assert db_session.query(Sale).count() > 0
         assert db_session.query(SaleItem).count() > 0
         assert db_session.query(CashSession).count() > 0
-        assert db_session.query(ReceptionTicket).count() > 0
-        assert db_session.query(ReceptionLine).count() > 0
+        assert db_session.query(TicketDepot).count() > 0
+        assert db_session.query(LigneDepot).count() > 0
         
         response = client.post(
             "/api/v1/admin/db/purge-transactions",
@@ -160,8 +160,8 @@ class TestDatabasePurge:
         assert db_session.query(Sale).count() == 0
         assert db_session.query(SaleItem).count() == 0
         assert db_session.query(CashSession).count() == 0
-        assert db_session.query(ReceptionTicket).count() == 0
-        assert db_session.query(ReceptionLine).count() == 0
+        assert db_session.query(TicketDepot).count() == 0
+        assert db_session.query(LigneDepot).count() == 0
         
         # Vérifier que les utilisateurs n'ont pas été supprimés
         assert db_session.query(User).count() > 0

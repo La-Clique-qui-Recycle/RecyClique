@@ -112,28 +112,35 @@ const CloseTicketButton = styled.button`
 
 interface SessionHeaderProps {
   ticketId: string;
-  onBack: () => void;
+  onBack?: () => void;
   onCloseTicket: () => void;
   isLoading?: boolean;
+  title?: string; // Titre personnalisé (par défaut: Ticket #ID)
+  showBackButton?: boolean; // Afficher le bouton retour (par défaut: true)
 }
 
 const SessionHeader: React.FC<SessionHeaderProps> = ({
   ticketId,
   onBack,
   onCloseTicket,
-  isLoading = false
+  isLoading = false,
+  title,
+  showBackButton = true
 }) => {
   // Afficher les 8 derniers caractères de l'ID du ticket
   const shortTicketId = ticketId.slice(-8);
+  const displayTitle = title || `Ticket #${shortTicketId}`;
 
   return (
     <HeaderContainer>
       <LeftSection>
-        <BackButton onClick={onBack}>
-          <ArrowLeft size={20} />
-          Retour
-        </BackButton>
-        <TicketTitle>Ticket #{shortTicketId}</TicketTitle>
+        {showBackButton && onBack && (
+          <BackButton onClick={onBack}>
+            <ArrowLeft size={20} />
+            Retour
+          </BackButton>
+        )}
+        <TicketTitle>{displayTitle}</TicketTitle>
       </LeftSection>
       <CloseTicketButton onClick={onCloseTicket} disabled={isLoading}>
         <Check size={20} />

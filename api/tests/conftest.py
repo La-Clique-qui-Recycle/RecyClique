@@ -101,6 +101,10 @@ if "openpyxl" not in sys.modules:
         def __init__(self, *args, **kwargs):
             pass
 
+    def _dummy_load_workbook(*args, **kwargs):
+        """Mock pour load_workbook qui retourne un workbook vide."""
+        return _DummyWorkbook()
+
     openpyxl = types.ModuleType("openpyxl")
     styles_module = types.ModuleType("openpyxl.styles")
     styles_module.Font = _DummyFont
@@ -115,6 +119,7 @@ if "openpyxl" not in sys.modules:
         return _DummyWorkbook()
 
     openpyxl.Workbook = _DummyWorkbook
+    openpyxl.load_workbook = _dummy_load_workbook
 
 import os
 import pytest
@@ -146,10 +151,23 @@ from recyclic_api.models.category import Category
 from recyclic_api.core.security import create_access_token, hash_password
 
 # Configuration de la base de données de test
-# Utilise le nom du service Docker en environnement conteneurisé
-db_host = "postgres" if os.getenv("TESTING") == "true" else "localhost"
-SQLALCHEMY_DATABASE_URL = os.getenv("TEST_DATABASE_URL", f"postgresql://recyclic:your_postgres_password@{db_host}:5432/recyclic_test")
+# Utilise TEST_DATABASE_URL si défini, sinon utilise le nom du service Docker
 os.environ["TESTING"] = "true"
+# Utiliser TEST_DATABASE_URL si défini, sinon construire depuis DATABASE_URL ou utiliser postgres
+test_db_url = os.getenv("TEST_DATABASE_URL")
+if not test_db_url:
+    # Essayer d'utiliser DATABASE_URL et changer le nom de la base (après le dernier /)
+    db_url = os.getenv("DATABASE_URL", "")
+    if db_url and "/recyclic" in db_url:
+        # Remplacer seulement le nom de la base à la fin de l'URL
+        test_db_url = db_url.rsplit("/", 1)[0] + "/recyclic_test"
+    else:
+        # Fallback: utiliser postgres (service Docker) au lieu de localhost
+        db_host = "postgres"
+        postgres_password = os.getenv("POSTGRES_PASSWORD", "your_postgres_password")
+        test_db_url = f"postgresql://recyclic:{postgres_password}@{db_host}:5432/recyclic_test"
+
+SQLALCHEMY_DATABASE_URL = test_db_url
 
 engine_kwargs = {}
 if SQLALCHEMY_DATABASE_URL.startswith("sqlite"):
@@ -176,8 +194,13 @@ def db_engine():
     return engine
 
 @pytest.fixture(scope="function", autouse=True)
-def _db_autouse(db_engine):
+def _db_autouse(db_engine, request):
     """Fixture autouse qui isole chaque test avec sa propre session DB et override FastAPI."""
+    # Skip DB setup for tests marked with no_db
+    if request.node.get_closest_marker("no_db"):
+        yield None
+        return
+    
     connection = db_engine.connect()
     transaction = connection.begin()
 

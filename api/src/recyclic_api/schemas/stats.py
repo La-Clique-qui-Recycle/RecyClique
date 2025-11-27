@@ -76,6 +76,11 @@ class ReceptionLiveStatsResponse(BaseModel):
         description="Number of tickets closed in the last 24 hours",
         ge=0
     )
+    items_received: int = Field(
+        ...,
+        description="Number of items/lines received from tickets closed in the last 24 hours",
+        ge=0
+    )
     turnover_eur: float = Field(
         ...,
         description="Total sales turnover in EUR for the last 24 hours",
@@ -102,6 +107,7 @@ class ReceptionLiveStatsResponse(BaseModel):
             "example": {
                 "tickets_open": 5,
                 "tickets_closed_24h": 23,
+                "items_received": 156,
                 "turnover_eur": 1247.50,
                 "donations_eur": 45.80,
                 "weight_in": 1250.75,

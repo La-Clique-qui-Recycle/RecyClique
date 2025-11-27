@@ -42,6 +42,7 @@ from recyclic_api.services.activity_service import (
     ActivityService,
     DEFAULT_ACTIVITY_THRESHOLD_MINUTES,
 )
+from recyclic_api.utils.session_metrics import session_metrics
 
 router = APIRouter(tags=["admin"])
 logger = logging.getLogger(__name__)
@@ -1941,7 +1942,37 @@ def update_user_groups(
         )
 
 
- 
+# B42-P4: Admin session metrics endpoint
+@router.get("/sessions/metrics")
+async def get_admin_session_metrics(
+    hours: int = Query(default=24, ge=1, le=168, description="Number of hours to include in metrics (1-168)"),
+    current_user: User = Depends(require_admin_role),
+    db: Session = Depends(get_db)
+):
+    """
+    Get session metrics for admin dashboard.
+    
+    Story B42-P4: Admin insights - AC2 - Endpoint backend /v1/admin/sessions/metrics.
+    
+    Returns:
+        Session metrics including:
+        - Active sessions count
+        - Refresh success/failure rates
+        - Top errors by IP/site
+        - Logout statistics
+    """
+    try:
+        metrics_summary = session_metrics.get_metrics_summary(hours=hours)
+        return {
+            "success": True,
+            "metrics": metrics_summary
+        }
+    except Exception as e:
+        logger.error(f"Error getting session metrics: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erreur lors de la récupération des métriques de session: {str(e)}"
+        )
 
 
 
