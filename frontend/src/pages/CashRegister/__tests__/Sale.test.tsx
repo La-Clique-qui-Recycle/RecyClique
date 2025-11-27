@@ -595,20 +595,71 @@ describe('Sale Page', () => {
       const qtyConfirmBtn = screen.getByTestId('validate-quantity-button');
       fireEvent.click(qtyConfirmBtn);
 
-      // Vérifier que le champ prix est toujours éditable même avec prix catalogue
+      // Vérifier que le champ prix est pré-rempli avec le prix catalogue par défaut
       await waitFor(() => {
         const priceInput = screen.getByTestId('price-input');
         expect(priceInput).toBeInTheDocument();
         expect(priceInput).toBeVisible();
+        expect(priceInput).toHaveTextContent(/5(\.00)? €/); // Prix catalogue par défaut
       });
 
-      // Vérifier qu'on peut saisir un prix différent du catalogue
+      // Vérifier qu'on peut saisir un prix différent du catalogue sans clic souris
       const priceBtn2 = screen.getAllByRole('button', { name: '2' })[0];
       fireEvent.click(priceBtn2);
       const priceBtn0 = screen.getAllByRole('button', { name: '0' })[0];
       fireEvent.click(priceBtn0);
+      await waitFor(() => {
+        expect(screen.getByTestId('price-input')).toHaveTextContent(/20(\.00)? €/);
+      });
+    });
 
-      expect(screen.getByText('20.00 €')).toBeInTheDocument();
+    it('prefills min price for ranges but still allows overriding freely', async () => {
+      const mockCategoryStoreWithRange = {
+        ...mockCategoryStore,
+        getCategoryById: vi.fn().mockReturnValue({
+          id: 'EEE-2',
+          name: 'Petit électroménager',
+          price: 10.0,
+          max_price: 50.0,
+          is_active: true
+        })
+      };
+
+      mockUseCategoryStore.mockReturnValue(mockCategoryStoreWithRange);
+
+      render(<Sale />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Petit électroménager')).toBeInTheDocument();
+      });
+
+      const categoryButton = screen.getByTestId('category-EEE-2');
+      fireEvent.click(categoryButton);
+
+      const weightBtn5 = screen.getByText('5').closest('button');
+      fireEvent.click(weightBtn5!);
+
+      const weightConfirmBtn = document.querySelector('button[data-isvalid="true"]');
+      fireEvent.click(weightConfirmBtn!);
+
+      const qtyBtn1 = screen.getAllByRole('button', { name: '1' })[0];
+      fireEvent.click(qtyBtn1);
+
+      const qtyConfirmBtn = screen.getByTestId('validate-quantity-button');
+      fireEvent.click(qtyConfirmBtn);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('price-input')).toHaveTextContent(/10(\.00)? €/);
+      });
+
+      const priceBtn6 = screen.getAllByRole('button', { name: '6' })[0];
+      fireEvent.click(priceBtn6);
+      const priceBtn0 = screen.getAllByRole('button', { name: '0' })[0];
+      fireEvent.click(priceBtn0);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('price-input')).toHaveTextContent(/60(\.00)? €/);
+      });
     });
 
     it('shows appropriate error message for negative prices', async () => {
