@@ -27,3 +27,5 @@ def downgrade() -> None:
     # Migration de merge - aucune opération nécessaire
     pass
 
+
+

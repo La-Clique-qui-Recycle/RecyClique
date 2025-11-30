@@ -1000,7 +1000,7 @@ const useColumnCount = (containerRef: React.RefObject<HTMLElement>): number => {
 const TicketForm: React.FC = () => {
   const navigate = useNavigate();
   const { ticketId } = useParams<{ ticketId: string }>();
-  const { currentTicket, isLoading, addLineToTicket, updateTicketLine, deleteTicketLine, closeTicket } = useReception();
+  const { currentTicket, isLoading, addLineToTicket, updateTicketLine, deleteTicketLine, closeTicket, closePoste, poste, isDeferredMode, posteDate } = useReception();
   const { visibleCategories, activeCategories, fetchVisibleCategories, fetchCategories, loading: categoriesLoading, error: categoriesError } = useCategoryStore();
   const {
     initializeShortcuts,
@@ -1384,14 +1384,24 @@ const TicketForm: React.FC = () => {
       try {
         if (ticketId) {
           await receptionService.closeTicket(ticketId);
-          navigate('/reception');
         } else {
           await closeTicket(currentTicket!.id);
-          navigate('/reception');
         }
 
         // Notify step state manager
         handleTicketClosed();
+        
+        // Fermer le poste après la fermeture du ticket pour revenir à l'écran normal
+        if (poste) {
+          try {
+            await closePoste();
+          } catch (posteErr) {
+            console.error('Erreur lors de la fermeture du poste:', posteErr);
+            // Continuer même si la fermeture du poste échoue
+          }
+        }
+        
+        navigate('/reception');
       } catch (err) {
         console.error('Erreur lors de la clôture du ticket:', err);
       }
@@ -1593,6 +1603,8 @@ const TicketForm: React.FC = () => {
         isLoading={isLoading}
         title={`Reception : Ticket #${ticket.id.slice(-8)}`}
         showBackButton={false}
+        isDeferred={isDeferredMode}
+        deferredDate={posteDate}
       />
       <ReceptionKPIBanner />
 

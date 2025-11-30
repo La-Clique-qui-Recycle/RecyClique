@@ -1,8 +1,8 @@
 // Force rebuild: 2025-10-09 01:53
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import styled from 'styled-components';
-import { useCashSessionStoreInjected, useCategoryStoreInjected, usePresetStoreInjected } from '../../providers/CashStoreProvider';
+import { useCashSessionStoreInjected, useCategoryStoreInjected, usePresetStoreInjected, useCashStores } from '../../providers/CashStoreProvider';
 import { useAuthStore } from '../../stores/authStore';
 import SaleWizard from '../../components/business/SaleWizard';
 import Ticket from '../../components/business/Ticket';
@@ -119,6 +119,7 @@ const Sale: React.FC = () => {
   // Numpad state - separated by step type
   const [quantityValue, setQuantityValue] = useState<string>('1');
   const [quantityError, setQuantityError] = useState<string>('');
+  const [quantityIsDefault, setQuantityIsDefault] = useState<boolean>(true); // Track if quantity is still at default value "1"
   const [priceValue, setPriceValue] = useState<string>('');
   const [pricePrefilled, setPricePrefilled] = useState<boolean>(false);
   const [priceError, setPriceError] = useState<string>('');
@@ -128,6 +129,7 @@ const Sale: React.FC = () => {
 
   // Utiliser les stores injectés (réel ou virtuel selon le contexte)
   const cashSessionStore = useCashSessionStoreInjected();
+  const { isDeferredMode } = useCashStores();  // B44-P1
   const {
     currentSession,
     currentSaleItems,
@@ -143,6 +145,31 @@ const Sale: React.FC = () => {
   const { currentUser } = useAuthStore();
   const { getCategoryById, fetchCategories } = useCategoryStoreInjected();
   const { clearSelection, selectedPreset, notes } = usePresetStoreInjected();
+  
+  // B44-P1: Vérifier si la session est différée ET OUVERTE
+  const isDeferredSession = useMemo(() => {
+    if (!currentSession || !isDeferredMode) return false;
+    // La session doit être OUVERTE pour être considérée comme active
+    if (currentSession.status !== 'open') return false;
+    if (currentSession.opened_at) {
+      const openedAtDate = new Date(currentSession.opened_at);
+      const now = new Date();
+      return openedAtDate < now;
+    }
+    return false;
+  }, [currentSession, isDeferredMode]);
+  
+  // B44-P1: Formater la date de session pour affichage
+  const formattedSessionDate = useMemo(() => {
+    if (!currentSession?.opened_at || !isDeferredSession) return null;
+    // B44-P1: Corriger le formatage de date en gérant le timezone
+    const date = new Date(currentSession.opened_at);
+    // Utiliser UTC pour éviter les problèmes de timezone
+    const day = String(date.getUTCDate()).padStart(2, '0');
+    const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+    const year = date.getUTCFullYear();
+    return `${day}/${month}/${year}`;
+  }, [currentSession, isDeferredSession]);
 
   // Numpad handlers - défini AVANT les useEffect qui l'utilisent
   const getCurrentValue = () => {
@@ -165,9 +192,27 @@ const Sale: React.FC = () => {
 
   const setCurrentValue = (value: string) => {
     switch (numpadMode) {
-      case 'quantity': setQuantityValue(value); break;
+      case 'quantity': 
+        setQuantityValue(value);
+        // Si on réinitialise à "1", c'est la valeur par défaut
+        if (value === '1') {
+          setQuantityIsDefault(true);
+        } else {
+          setQuantityIsDefault(false);
+        }
+        break;
       case 'price': setPriceValue(value); break;
       case 'weight': setWeightValue(value); break;
+    }
+  };
+  
+  // Wrapper pour setQuantityValue qui gère aussi quantityIsDefault
+  const setQuantityValueWithDefault = (value: string) => {
+    setQuantityValue(value);
+    if (value === '1') {
+      setQuantityIsDefault(true);
+    } else {
+      setQuantityIsDefault(false);
     }
   };
 
@@ -186,7 +231,7 @@ const Sale: React.FC = () => {
     priceError,
     weightValue,
     weightError,
-    setQuantityValue,
+    setQuantityValue: setQuantityValueWithDefault, // Utiliser le wrapper qui gère quantityIsDefault
     setQuantityError,
     setPriceValue,
     setPriceError,
@@ -252,9 +297,17 @@ const Sale: React.FC = () => {
   };
 
   const handleCloseSession = () => {
-    // Utiliser le bon chemin selon le mode (détecté depuis l'URL)
+    // Utiliser le bon chemin selon le mode (détecté depuis l'URL ou le store)
     const isVirtual = window.location.pathname.includes('/virtual');
-    const basePath = isVirtual ? '/cash-register/virtual' : '/cash-register';
+    const isDeferred = window.location.pathname.includes('/deferred') || isDeferredMode;
+    let basePath: string;
+    if (isDeferred) {
+      basePath = '/cash-register/deferred';
+    } else if (isVirtual) {
+      basePath = '/cash-register/virtual';
+    } else {
+      basePath = '/cash-register';
+    }
     navigate(`${basePath}/session/close`);
   };
 
@@ -305,32 +358,52 @@ const Sale: React.FC = () => {
     const currentValue = getCurrentValue();
 
     if (numpadMode === 'quantity') {
-      // Comportement spécial pour la quantité :
-      // - Par défaut : "1" est affiché
-      // - Si appui sur "1" : remplacer "1" par "1" (reste "1", prêt à ajouter)
-      // - Si appui sur 2-9 : remplacer "1" par le chiffre choisi (donc "2", "3", etc.)
-      // - Si appui sur "0" : remplacer "1" par "10"
-      // - Une fois qu'on a commencé à éditer, ajouter normalement
+      // Logique pour la quantité :
+      // - Par défaut : "1" est affiché et quantityIsDefault = true
+      // - Si quantityIsDefault = true ET currentValue === '1' : le premier chiffre tapé remplace le "1"
+      // - Sinon : ajouter normalement (concaténation) pour permettre "11", "15", etc.
+      console.log('[handleNumpadDigit] quantity mode:', {
+        digit,
+        currentValue,
+        quantityIsDefault,
+        numpadMode
+      });
+      
       let newValue: string;
-      if (currentValue === '1') {
-        // Si valeur = "1", remplacer par le chiffre choisi
-        if (digit === '0') {
-          newValue = '10'; // Cas spécial : "0" après "1" = "10"
-        } else {
-          newValue = digit; // Remplacer "1" par le chiffre (1-9)
-        }
+      const shouldReplace = quantityIsDefault && currentValue === '1';
+      
+      console.log('[handleNumpadDigit] shouldReplace:', shouldReplace);
+      
+      if (shouldReplace) {
+        // Si c'est la valeur par défaut "1", remplacer par le chiffre tapé
+        // Exemple: tape "1" → remplace "1" par "1" (reste "1" mais quantityIsDefault devient false)
+        //          tape "5" → remplace "1" par "5" (devient "5")
+        newValue = digit;
+        console.log('[handleNumpadDigit] REPLACING default "1" with:', digit, '→ newValue:', newValue);
       } else {
-        // Si valeur n'est pas "1", ajouter normalement
+        // Sinon, ajouter normalement (concaténation) pour permettre les nombres à plusieurs chiffres
+        // Exemple: si currentValue = "1" (mais quantityIsDefault = false), on concatène pour faire "11", "15", etc.
         newValue = currentValue + digit;
+        console.log('[handleNumpadDigit] CONCATENATING:', currentValue, '+', digit, '→ newValue:', newValue);
       }
+      
+      // Toujours mettre quantityIsDefault à false après une saisie (sauf si on réinitialise explicitement)
+      setQuantityIsDefault(false);
+      console.log('[handleNumpadDigit] Set quantityIsDefault to false');
 
       if (/^\d*$/.test(newValue) && parseInt(newValue || '0', 10) <= 9999) {
         // Pour la quantité, empêcher les valeurs < 1
         const numValue = parseInt(newValue || '0', 10);
         if (numValue >= 1) {
+          // Utiliser setQuantityValue directement (pas le wrapper) car on gère quantityIsDefault manuellement
+          console.log('[handleNumpadDigit] Setting quantityValue to:', newValue);
           setQuantityValue(newValue);
           setQuantityError('');
+        } else {
+          console.log('[handleNumpadDigit] Rejected: numValue < 1:', numValue);
         }
+      } else {
+        console.log('[handleNumpadDigit] Rejected: invalid format or > 9999');
       }
     } else if (numpadMode === 'price') {
       const newValue = pricePrefilled ? digit : currentValue + digit;
@@ -348,24 +421,37 @@ const Sale: React.FC = () => {
     }
   };
 
-  const handleNumpadClear = () => {
+  const handleNumpadClear = useCallback(() => {
     setCurrentValue('');
     setCurrentError('');
     if (numpadMode === 'price') {
       setPricePrefilled(false);
+    } else if (numpadMode === 'quantity') {
+      setQuantityValueWithDefault('1'); // Réinitialiser à la valeur par défaut (gère aussi quantityIsDefault)
     }
-  };
+  }, [numpadMode, getCurrentValue, setCurrentValue, setCurrentError, setQuantityValueWithDefault, setPricePrefilled]);
 
-  const handleNumpadBackspace = () => {
+  const handleNumpadBackspace = useCallback(() => {
     if (numpadMode === 'price' && pricePrefilled) {
       setPriceValue('');
       setPricePrefilled(false);
       return;
     }
-    setCurrentValue(getCurrentValue().slice(0, -1));
-  };
+    const newValue = getCurrentValue().slice(0, -1);
+    if (numpadMode === 'quantity' && (newValue === '' || newValue === '0')) {
+      // Si on efface tout ou qu'on arrive à 0, remettre "1" par défaut
+      setQuantityValue('1');
+      setQuantityIsDefault(true);
+    } else if (numpadMode === 'quantity') {
+      // Pour la quantité, utiliser setQuantityValue directement et gérer quantityIsDefault
+      setQuantityValue(newValue);
+      setQuantityIsDefault(false); // Après backspace, ce n'est plus la valeur par défaut
+    } else {
+      setCurrentValue(newValue);
+    }
+  }, [numpadMode, pricePrefilled, getCurrentValue, setQuantityValue, setQuantityIsDefault, setPriceValue, setPricePrefilled, setCurrentValue]);
 
-  const handleNumpadDecimal = () => {
+  const handleNumpadDecimal = useCallback(() => {
     const currentValue = getCurrentValue();
     if ((numpadMode === 'price' || numpadMode === 'weight') && !currentValue.includes('.')) {
       if (numpadMode === 'price' && pricePrefilled) {
@@ -375,7 +461,7 @@ const Sale: React.FC = () => {
       }
       setCurrentValue(currentValue + '.');
     }
-  };
+  }, [numpadMode, pricePrefilled, getCurrentValue, setPriceValue, setPricePrefilled, setCurrentValue]);
 
   // Mapping AZERTY vers chiffres (comme en Réception)
   const AZERTY_NUMERIC_MAP: Record<string, string> = {
@@ -399,10 +485,33 @@ const Sale: React.FC = () => {
         return;
       }
 
-      // Raccourcis pour les chiffres directs (0-9)
+      // Raccourcis pour les chiffres directs (0-9) - gère aussi le pavé numérique
+      // Vérifier event.key (qui donne le caractère) et event.code (qui donne la touche physique)
+      let digit: string | null = null;
+      
+      // D'abord vérifier event.key (fonctionne pour la plupart des cas)
       if (event.key >= '0' && event.key <= '9') {
+        digit = event.key;
+      }
+      // Sinon, vérifier event.code pour les touches du pavé numérique
+      else if (event.code.startsWith('Numpad')) {
+        // Extraire le chiffre de "Numpad0", "Numpad1", ..., "Numpad9"
+        const numpadMatch = event.code.match(/^Numpad(\d)$/);
+        if (numpadMatch) {
+          digit = numpadMatch[1];
+        }
+      }
+      // Gérer aussi les codes Digit0-Digit9 (touches numériques en haut du clavier)
+      else if (event.code.startsWith('Digit')) {
+        const digitMatch = event.code.match(/^Digit(\d)$/);
+        if (digitMatch) {
+          digit = digitMatch[1];
+        }
+      }
+      
+      if (digit) {
         event.preventDefault();
-        handleNumpadDigit(event.key);
+        handleNumpadDigit(digit);
         return;
       }
 
@@ -452,7 +561,7 @@ const Sale: React.FC = () => {
 
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [numpadMode, quantityValue, priceValue, weightValue]);
+  }, [numpadMode, quantityValue, priceValue, weightValue, handleNumpadDigit, handleNumpadBackspace, handleNumpadClear, handleNumpadDecimal]);
 
   return (
     <KioskContainer>
@@ -462,6 +571,8 @@ const Sale: React.FC = () => {
         sessionId={currentSession.id}
         onCloseSession={handleCloseSession}
         isLoading={loading}
+        isDeferred={isDeferredSession}
+        deferredDate={formattedSessionDate}
       />
 
       {/* Bandeau KPI temps réel (B40-P2) */}

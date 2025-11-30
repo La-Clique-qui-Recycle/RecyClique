@@ -8,6 +8,12 @@ from datetime import datetime
 from recyclic_api.models.ligne_depot import Destination
 
 
+class OpenPosteRequest(BaseModel):
+    """Corps de requête pour ouvrir un poste de réception."""
+
+    opened_at: Optional[datetime] = Field(None, description="Date d'ouverture du poste (optionnel, uniquement ADMIN/SUPER_ADMIN)")
+
+
 class OpenPosteResponse(BaseModel):
     """Réponse lors de l'ouverture d'un poste de réception."""
 

@@ -18,4 +18,7 @@ Créer l'interface caisse responsive complète avec gestion des sessions, vente 
 ## Epic 6: Exports & Synchronisation Cloud
 Assurer la conformité réglementaire avec exports automatiques Ecologic, synchronisation cloud temps réel, et dashboard admin complet.
 
+## Epic 7: Audit Sessions Avancé - Améliorations d'Audit et d'Analyse
+Améliorer significativement les capacités d'audit et d'analyse des sessions de caisse et de réception avec exports globaux, filtres avancés, format Excel, comparaisons périodes, détection d'anomalies, visualisations, traçabilité complète, rapports programmés et interface avancée.
+
 ---

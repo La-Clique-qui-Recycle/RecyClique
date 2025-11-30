@@ -80,6 +80,31 @@ vi.mock('lucide-react', () => ({
     ...(props['data-testid'] ? { 'data-testid': props['data-testid'] } : {}),
     'data-icon-name': 'Tags'
   }, 'Tags'),
+  // B44-P4: Icônes pour ReceptionSessionManager
+  Scale: (props: any = {}) => React.createElement('div', {
+    ...(props['data-testid'] ? { 'data-testid': props['data-testid'] } : {}),
+    'data-icon-name': 'Scale'
+  }, 'Scale'),
+  Search: (props: any = {}) => React.createElement('div', {
+    ...(props['data-testid'] ? { 'data-testid': props['data-testid'] } : {}),
+    'data-icon-name': 'Search'
+  }, 'Search'),
+  ChevronUp: (props: any = {}) => React.createElement('div', {
+    ...(props['data-testid'] ? { 'data-testid': props['data-testid'] } : {}),
+    'data-icon-name': 'ChevronUp'
+  }, 'ChevronUp'),
+  ChevronDown: (props: any = {}) => React.createElement('div', {
+    ...(props['data-testid'] ? { 'data-testid': props['data-testid'] } : {}),
+    'data-icon-name': 'ChevronDown'
+  }, 'ChevronDown'),
+  ChevronsUpDown: (props: any = {}) => React.createElement('div', {
+    ...(props['data-testid'] ? { 'data-testid': props['data-testid'] } : {}),
+    'data-icon-name': 'ChevronsUpDown'
+  }, 'ChevronsUpDown'),
+  List: (props: any = {}) => React.createElement('div', {
+    ...(props['data-testid'] ? { 'data-testid': props['data-testid'] } : {}),
+    'data-icon-name': 'List'
+  }, 'List'),
 }))
 
 // Mock pour styled-components - approche avec styles simulés

@@ -340,10 +340,10 @@ const DashboardHomePage = () => {
                 variant="light"
                 color="cyan"
                 className="nav-button"
-                onClick={() => handleNavigation('/admin/reports')}
+                onClick={() => handleNavigation('/admin/reception-sessions')}
                 leftSection={<IconReport size={20} />}
               >
-                Rapports & Exports
+                Sessions de Réception
               </OperationalButton>
             </Grid.Col>
             <Grid.Col span={{ base: 12, sm: 4 }}>

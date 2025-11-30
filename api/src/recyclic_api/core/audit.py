@@ -259,6 +259,9 @@ def log_cash_session_opening(
     session_id: str,
     opening_amount: float,
     success: bool = True,
+    is_deferred: bool = False,
+    opened_at: Optional[datetime] = None,
+    created_at: Optional[datetime] = None,
     db: Optional[Session] = None
 ) -> Optional[AuditLog]:
     """
@@ -270,6 +273,9 @@ def log_cash_session_opening(
         session_id: ID de la session de caisse
         opening_amount: Montant d'ouverture
         success: Si l'ouverture a réussi
+        is_deferred: Si c'est une session de saisie différée (B44-P1)
+        opened_at: Date d'ouverture de la session (date du cahier, pour saisie différée)
+        created_at: Date de création réelle de la session (date de saisie)
         db: Session de base de données
     
     Returns:
@@ -277,14 +283,23 @@ def log_cash_session_opening(
     """
     action_type = AuditActionType.SYSTEM_CONFIG_CHANGED  # Utiliser un type générique
     description = f"Ouverture de session de caisse {session_id}" if success else f"Échec ouverture de session de caisse"
+    if is_deferred:
+        description = f"Ouverture de session de caisse différée {session_id}" if success else f"Échec ouverture de session de caisse différée"
     
     details = {
         "user_id": user_id,
         "username": username,
         "session_id": session_id,
         "opening_amount": opening_amount,
-        "success": success
+        "success": success,
+        "is_deferred": is_deferred
     }
+    
+    # Ajouter les informations de saisie différée si applicable
+    if is_deferred and opened_at is not None:
+        details["opened_at"] = opened_at.isoformat() if isinstance(opened_at, datetime) else str(opened_at)
+    if is_deferred and created_at is not None:
+        details["created_at"] = created_at.isoformat() if isinstance(created_at, datetime) else str(created_at)
     
     return log_audit(
         action_type=action_type,

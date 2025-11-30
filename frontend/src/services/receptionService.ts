@@ -43,8 +43,9 @@ export interface UpdateTicketLineRequest {
 }
 
 class ReceptionService {
-  async openPoste(): Promise<Poste> {
-    const response = await api.post('/v1/reception/postes/open');
+  async openPoste(openedAt?: string): Promise<Poste> {
+    const body = openedAt ? { opened_at: openedAt } : undefined;
+    const response = await api.post('/v1/reception/postes/open', body);
     return response.data;
   }
 

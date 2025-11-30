@@ -44,3 +44,5 @@ recommendations:
       refs: ["frontend/src/utils/cashKeyboardShortcuts.ts"]
     - action: "Add analytics tracking for shortcut usage to measure adoption"
       refs: ["frontend/src/utils/cashKeyboardShortcuts.ts"]
+
+

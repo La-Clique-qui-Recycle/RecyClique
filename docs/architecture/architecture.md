@@ -1,9 +1,15 @@
 # Architecture consolidée du projet Recyclic
 
 - **Auteur**: BMad Master (Synthèse)
-- **Version**: 3.1
-- **Date**: 2025-09-20
+- **Version**: 3.2
+- **Date**: 2025-01-27
 - **Objectif**: Remplacer les 21+ fichiers d'architecture précédents par une source de vérité unique, claire et exploitable pour tous les agents (IA et humains). Cette version intègre le pivot stratégique de l'abandon de kDrive au profit des rapports par email et l'ajout de l'historique utilisateur.
+- **Changements v3.2** :
+  - Documentation complète du modèle `CashSession` avec tous les champs
+  - Ajout du workflow de saisie différée (Story B44-P1)
+  - Documentation de l'exclusion des sessions vides (Story B44-P3)
+  - Documentation des notes sur les ventes (Story B40-P4)
+  - Documentation complète du système d'audit et traçabilité
 
 ---
 
@@ -77,8 +83,9 @@ Les modèles de données principaux sont conçus pour être simples et relationn
 - **`User`**: Gère les utilisateurs, leurs rôles et leur statut (voir section "Stratégie des Rôles" pour détails).
 - **`UserStatusHistory`**: Trace l'historique des changements de statut d'un utilisateur.
 - **`Deposit`**: Représente un dépôt d'objet, avec sa description, sa catégorie EEE et le statut de validation.
-- **`Sale`**: Représente une vente, liée à une session de caisse.
-- **`CashSession`**: Gère l'ouverture, la fermeture et le suivi d'une caisse.
+- **`Sale`**: Représente une vente, liée à une session de caisse. Peut contenir une note (Story B40-P4).
+- **`CashSession`**: Gère l'ouverture, la fermeture et le suivi d'une caisse. Supporte la saisie différée (Story B44-P1).
+- **`AuditLog`**: Journal d'audit centralisé pour traçabilité complète des actions système.
 
 **Note importante**: Les interfaces TypeScript ci-dessous sont un exemple de ce qui **devrait être généré automatiquement** (voir section 7).
 
@@ -101,6 +108,115 @@ export interface User {
 > **Annexe A : Schéma SQL Complet**
 > Le code SQL complet pour la création des tables, des types et des index est disponible dans le document :
 > [**Annexe A : Schéma de la Base de Données](./appendix-database-schema.md)
+
+### 5.2. Modèle CashSession - Structure Complète
+
+Le modèle `CashSession` représente une session de caisse avec toutes ses métriques et son suivi.
+
+**Champs Principaux :**
+- `id` : UUID unique de la session
+- `operator_id` : ID de l'opérateur (caissier) responsable
+- `site_id` : ID du site où se déroule la session
+- `register_id` : ID du poste de caisse (registre) utilisé (optionnel)
+- `initial_amount` : Montant initial du fond de caisse
+- `current_amount` : Montant actuel en caisse
+- `status` : Statut de la session (`open` ou `closed`)
+
+**Timestamps :**
+- `opened_at` : Date et heure d'ouverture (peut être dans le passé pour saisie différée - Story B44-P1)
+- `closed_at` : Date et heure de fermeture (null si session ouverte)
+
+**Métriques d'Étapes (Workflow) :**
+- `current_step` : Étape actuelle du workflow (`ENTRY`, `SALE`, `EXIT`)
+- `last_activity` : Dernière activité utilisateur (pour gestion timeout)
+- `step_start_time` : Début de l'étape actuelle (pour métriques de performance)
+
+**Statistiques de Vente :**
+- `total_sales` : Total des ventes effectuées
+- `total_items` : Nombre total d'articles vendus
+
+**Champs de Fermeture (Contrôle des Montants) :**
+- `closing_amount` : Montant théorique calculé à la fermeture (fond initial + ventes)
+- `actual_amount` : Montant physique compté à la fermeture
+- `variance` : Écart entre théorique et physique
+- `variance_comment` : Commentaire sur l'écart (obligatoire si écart significatif)
+
+**Relations :**
+- `sales` : Liste des ventes associées à la session (relation 1:N)
+- `operator` : Relation vers l'utilisateur opérateur
+- `site` : Relation vers le site
+- `register` : Relation vers le poste de caisse
+
+**Fonctionnalités Spéciales :**
+
+1. **Saisie Différée (Story B44-P1)** :
+   - Le champ `opened_at` peut être défini dans le passé pour saisir des ventes d'anciens cahiers
+   - Seuls les ADMIN et SUPER_ADMIN peuvent créer des sessions avec `opened_at` personnalisé
+   - Les sessions différées sont automatiquement exclues des statistiques live (KPIs)
+   - Les ventes créées dans une session différée utilisent `opened_at` de la session comme `created_at`
+
+2. **Exclusion des Sessions Vides (Story B44-P3)** :
+   - Par défaut, les sessions vides (`total_sales = 0` ET `total_items = 0`) sont exclues des listes
+   - Le filtre `include_empty=True` permet d'inclure ces sessions si nécessaire
+
+### 5.3. Modèle Sale - Notes et Métadonnées
+
+Le modèle `Sale` représente une vente individuelle dans une session de caisse.
+
+**Champs Principaux :**
+- `id` : UUID unique de la vente
+- `cash_session_id` : ID de la session de caisse associée
+- `operator_id` : ID de l'opérateur (optionnel, peut différer de l'opérateur de la session)
+- `total_amount` : Montant total de la vente
+- `donation` : Montant du don (optionnel, par défaut 0.0)
+- `payment_method` : Méthode de paiement (`cash`, `card`, `check`)
+- `note` : Note textuelle associée à la vente (Story B40-P4)
+- `created_at` : Date et heure de création (utilise `opened_at` de la session si session différée)
+- `updated_at` : Date et heure de dernière mise à jour
+
+**Relations :**
+- `cash_session` : Relation vers la session de caisse
+- `operator` : Relation vers l'utilisateur opérateur
+- `items` : Liste des articles vendus (relation 1:N vers `SaleItem`)
+
+### 5.4. Système d'Audit et Traçabilité
+
+Le système d'audit (`recyclic_api.core.audit`) fournit une traçabilité complète de toutes les actions système.
+
+**Modèle AuditLog :**
+- `id` : UUID unique de l'entrée d'audit
+- `timestamp` : Date et heure de l'action
+- `actor_id` : ID de l'utilisateur qui a effectué l'action
+- `actor_username` : Nom d'utilisateur (pour traçabilité même si utilisateur supprimé)
+- `action_type` : Type d'action (enum `AuditActionType`)
+- `target_id` : ID de la cible de l'action (ex: ID de session, ID d'utilisateur)
+- `target_type` : Type de la cible (ex: "cash_session", "user", "system")
+- `details_json` : Détails supplémentaires en JSON (structure flexible)
+- `description` : Description textuelle de l'action
+- `ip_address` : Adresse IP de l'acteur (optionnel)
+- `user_agent` : User-Agent de la requête (optionnel)
+
+**Fonctions Spécialisées :**
+
+1. **`log_cash_session_opening()`** :
+   - Enregistre l'ouverture d'une session de caisse
+   - Supporte la saisie différée avec `is_deferred`, `opened_at`, `created_at`
+   - Trace le montant d'ouverture et le succès/échec
+
+2. **`log_cash_session_closing()`** :
+   - Enregistre la fermeture d'une session de caisse
+   - Trace le montant de fermeture, l'écart (variance), et le commentaire
+
+3. **`log_role_change()`** :
+   - Enregistre les changements de rôle utilisateur
+   - Trace l'ancien et le nouveau rôle
+
+4. **`log_user_action()`** :
+   - Version simplifiée pour les actions sur les utilisateurs
+   - Utilisé pour création, modification, suppression d'utilisateurs
+
+**Utilisation :**
+Toutes les actions critiques sont tracées automatiquement dans le journal d'audit, permettant une traçabilité complète pour conformité et débogage.
 
 ## 5.1. Stratégie des Rôles Utilisateurs
 
@@ -261,6 +377,60 @@ sequenceDiagram
     API->>DB: 3. Enregistrer le statut de l'envoi
     EMAIL->>ADMIN: 4. Email reçu par l'admin
 ```
+
+### Workflow de Saisie Différée (Story B44-P1)
+
+**Contexte :** Les caissiers utilisent des cahiers papier pour enregistrer les ventes lors de coupures internet ou pour gérer plusieurs jours de vente sur un même cahier. La saisie différée permet de saisir ces ventes a posteriori avec la date réelle de vente (date du cahier), pas la date de saisie.
+
+**Permissions :** Seuls les ADMIN et SUPER_ADMIN peuvent créer des sessions avec date personnalisée.
+
+```mermaid
+sequenceDiagram
+    participant A as Admin
+    participant PWA as Interface PWA
+    participant API as FastAPI
+    participant DB as PostgreSQL
+    participant AUDIT as Audit Log
+
+    A->>PWA: Accéder mode saisie différée
+    PWA->>A: Formulaire avec sélection date passée
+    A->>PWA: Sélectionner date (ex: hier)
+    A->>PWA: Saisir montant fond de caisse
+    PWA->>API: POST /cash-sessions {opened_at: hier}
+    API->>API: Valider opened_at <= now()
+    API->>API: Vérifier permissions (ADMIN/SUPER_ADMIN)
+    API->>DB: Créer session avec opened_at personnalisé
+    API->>AUDIT: log_cash_session_opening(is_deferred=True)
+    API->>PWA: Session créée
+    
+    A->>PWA: Saisir ventes (workflow normal)
+    PWA->>API: POST /sales {session_id}
+    API->>API: Détecter session différée (opened_at < now())
+    API->>DB: Créer vente avec created_at = session.opened_at
+    API->>PWA: Vente créée avec date du cahier
+```
+
+**Règles Métier :**
+- `opened_at` ne peut pas être dans le futur
+- Pas de limite dans le passé (peut saisir des cahiers très anciens)
+- Les ventes créées dans une session différée utilisent `opened_at` de la session comme `created_at`
+- Les sessions différées sont **automatiquement exclues** des statistiques live (KPIs) pour éviter de fausser les métriques
+- Un opérateur peut avoir une session normale ouverte ET une session différée ouverte simultanément
+
+**Impact sur les Statistiques :**
+Les endpoints de statistiques (`/cash-sessions/stats`) excluent automatiquement les sessions différées en filtrant `opened_at >= date_from`. Cela garantit que les KPIs reflètent uniquement les sessions réellement ouvertes dans la période demandée.
+
+### Workflow de Filtrage des Sessions (Story B44-P3)
+
+**Comportement par défaut :** Les sessions vides (sans transaction : `total_sales = 0` ET `total_items = 0`) sont exclues des listes par défaut.
+
+**Filtre `include_empty` :**
+- `include_empty=False` (défaut) : Exclut les sessions vides
+- `include_empty=True` : Inclut toutes les sessions, y compris les vides
+
+**Utilisation :**
+- Interface admin : Par défaut, seules les sessions avec activité sont affichées
+- Audit complet : Utiliser `include_empty=True` pour voir toutes les sessions, y compris celles ouvertes puis fermées sans transaction
 
 ## 9. Stratégies Transverses (Qualité, Sécurité, Opérations)
 

@@ -198,3 +198,5 @@ describe('VirtualCashRegister', () => {
     expect(badge).toHaveClass('mantine-Badge-root');
   });
 });
+
+

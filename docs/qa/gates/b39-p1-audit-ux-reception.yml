@@ -41,3 +41,5 @@ recommendations:
       refs: ["docs/ux/reception-workflow.md#annexe--captures-decran-requises"]
     - action: "Obtain PO + Tech Lead validation before proceeding to B39-P2 implementation"
       refs: ["docs/stories/story-b39-p1-audit-ux-reception.md#3-critères-dacceptation"]
+
+

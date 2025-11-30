@@ -15,6 +15,8 @@ from recyclic_api.models.ticket_depot import TicketDepot, TicketDepotStatus
 from recyclic_api.models.ligne_depot import LigneDepot
 from recyclic_api.models.sale import Sale
 from recyclic_api.models.sale_item import SaleItem
+from recyclic_api.models.poste_reception import PosteReception
+from recyclic_api.models.cash_session import CashSession
 
 # Prometheus metrics - créées au niveau du module pour éviter les duplications
 _stats_requests = Counter(
@@ -71,27 +73,32 @@ class ReceptionLiveStatsService:
 
                 # Calculate time threshold (24 hours ago)
                 threshold_24h = datetime.now(timezone.utc) - timedelta(hours=24)
+                
+                # Calculate start of today (00:00:00) to exclude deferred tickets/sessions
+                # This ensures that only tickets/sessions opened today are included in live stats
+                now = datetime.now(timezone.utc)
+                start_of_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
-                # 1. Count open tickets
-                tickets_open = self._count_open_tickets(site_id)
+                # 1. Count open tickets (exclude deferred tickets)
+                tickets_open = self._count_open_tickets(site_id, start_of_today)
 
-                # 2. Count tickets closed in last 24h
-                tickets_closed_24h = self._count_closed_tickets_24h(site_id, threshold_24h)
+                # 2. Count tickets closed in last 24h (exclude deferred tickets)
+                tickets_closed_24h = self._count_closed_tickets_24h(site_id, threshold_24h, start_of_today)
 
-                # 3. Count items/lines received (from closed tickets in 24h)
-                items_received = self._count_items_received_24h(site_id, threshold_24h)
+                # 3. Count items/lines received (from closed tickets in 24h, exclude deferred)
+                items_received = self._count_items_received_24h(site_id, threshold_24h, start_of_today)
 
-                # 4. Calculate turnover (sales in last 24h)
-                turnover_eur = self._calculate_turnover_24h(site_id, threshold_24h)
+                # 4. Calculate turnover (sales in last 24h, exclude deferred sessions)
+                turnover_eur = self._calculate_turnover_24h(site_id, threshold_24h, start_of_today)
 
-                # 5. Calculate donations (from sales in last 24h)
-                donations_eur = self._calculate_donations_24h(site_id, threshold_24h)
+                # 5. Calculate donations (from sales in last 24h, exclude deferred sessions)
+                donations_eur = self._calculate_donations_24h(site_id, threshold_24h, start_of_today)
 
-                # 6. Calculate weight received (open tickets + closed in 24h)
-                weight_in = self._calculate_weight_in(site_id, threshold_24h)
+                # 6. Calculate weight received (open tickets + closed in 24h, exclude deferred)
+                weight_in = self._calculate_weight_in(site_id, threshold_24h, start_of_today)
 
-                # 7. Calculate weight sold (from sales in last 24h)
-                weight_out = self._calculate_weight_out(site_id, threshold_24h)
+                # 7. Calculate weight sold (from sales in last 24h, exclude deferred sessions)
+                weight_out = self._calculate_weight_out(site_id, threshold_24h, start_of_today)
 
                 return {
                     "tickets_open": tickets_open,
@@ -108,10 +115,16 @@ class ReceptionLiveStatsService:
                 # Re-raise with more context for debugging
                 raise RuntimeError(f"Failed to calculate live reception stats: {str(e)}") from e
 
-    def _count_open_tickets(self, site_id: Optional[str]) -> int:
-        """Count currently open tickets."""
-        query = self.db.query(func.count(TicketDepot.id)).filter(
-            TicketDepot.status == TicketDepotStatus.OPENED.value
+    def _count_open_tickets(self, site_id: Optional[str], start_of_today: datetime) -> int:
+        """Count currently open tickets, excluding deferred tickets (tickets from posts opened in the past)."""
+        query = self.db.query(func.count(TicketDepot.id)).join(
+            PosteReception, TicketDepot.poste_id == PosteReception.id
+        ).filter(
+            and_(
+                TicketDepot.status == TicketDepotStatus.OPENED.value,
+                # Exclude deferred tickets: only include tickets from posts opened today
+                PosteReception.opened_at >= start_of_today
+            )
         )
 
         # Note: site filtering not implemented yet as tickets don't have direct site relationship
@@ -119,36 +132,50 @@ class ReceptionLiveStatsService:
 
         return query.scalar() or 0
 
-    def _count_closed_tickets_24h(self, site_id: Optional[str], threshold: datetime) -> int:
-        """Count tickets closed within the last 24 hours."""
-        query = self.db.query(func.count(TicketDepot.id)).filter(
-            and_(
-                TicketDepot.status == TicketDepotStatus.CLOSED.value,
-                TicketDepot.closed_at.isnot(None),
-                TicketDepot.closed_at >= threshold
-            )
-        )
-
-        return query.scalar() or 0
-
-    def _count_items_received_24h(self, site_id: Optional[str], threshold: datetime) -> int:
-        """Count items/lines received from tickets closed in the last 24 hours."""
-        query = self.db.query(func.count(LigneDepot.id)).join(
-            TicketDepot, LigneDepot.ticket_id == TicketDepot.id
+    def _count_closed_tickets_24h(self, site_id: Optional[str], threshold: datetime, start_of_today: datetime) -> int:
+        """Count tickets closed within the last 24 hours, excluding deferred tickets."""
+        query = self.db.query(func.count(TicketDepot.id)).join(
+            PosteReception, TicketDepot.poste_id == PosteReception.id
         ).filter(
             and_(
                 TicketDepot.status == TicketDepotStatus.CLOSED.value,
                 TicketDepot.closed_at.isnot(None),
-                TicketDepot.closed_at >= threshold
+                TicketDepot.closed_at >= threshold,
+                # Exclude deferred tickets: only include tickets from posts opened today
+                PosteReception.opened_at >= start_of_today
             )
         )
 
         return query.scalar() or 0
 
-    def _calculate_turnover_24h(self, site_id: Optional[str], threshold: datetime) -> Decimal:
-        """Calculate total sales amount in EUR for the last 24 hours."""
-        query = self.db.query(func.coalesce(func.sum(Sale.total_amount), 0)).filter(
-            Sale.created_at >= threshold
+    def _count_items_received_24h(self, site_id: Optional[str], threshold: datetime, start_of_today: datetime) -> int:
+        """Count items/lines received from tickets closed in the last 24 hours, excluding deferred tickets."""
+        query = self.db.query(func.count(LigneDepot.id)).join(
+            TicketDepot, LigneDepot.ticket_id == TicketDepot.id
+        ).join(
+            PosteReception, TicketDepot.poste_id == PosteReception.id
+        ).filter(
+            and_(
+                TicketDepot.status == TicketDepotStatus.CLOSED.value,
+                TicketDepot.closed_at.isnot(None),
+                TicketDepot.closed_at >= threshold,
+                # Exclude deferred tickets: only include tickets from posts opened today
+                PosteReception.opened_at >= start_of_today
+            )
+        )
+
+        return query.scalar() or 0
+
+    def _calculate_turnover_24h(self, site_id: Optional[str], threshold: datetime, start_of_today: datetime) -> Decimal:
+        """Calculate total sales amount in EUR for the last 24 hours, excluding sales from deferred sessions."""
+        query = self.db.query(func.coalesce(func.sum(Sale.total_amount), 0)).join(
+            CashSession, Sale.cash_session_id == CashSession.id
+        ).filter(
+            and_(
+                Sale.created_at >= threshold,
+                # Exclude deferred sessions: only include sales from sessions opened today
+                CashSession.opened_at >= start_of_today
+            )
         )
 
         # Note: For now, we calculate all sales in the last 24h
@@ -156,32 +183,48 @@ class ReceptionLiveStatsService:
 
         return Decimal(str(query.scalar() or 0))
 
-    def _calculate_donations_24h(self, site_id: Optional[str], threshold: datetime) -> Decimal:
-        """Calculate total donations in EUR for the last 24 hours."""
-        query = self.db.query(func.coalesce(func.sum(Sale.donation), 0)).filter(
+    def _calculate_donations_24h(self, site_id: Optional[str], threshold: datetime, start_of_today: datetime) -> Decimal:
+        """Calculate total donations in EUR for the last 24 hours, excluding donations from deferred sessions."""
+        query = self.db.query(func.coalesce(func.sum(Sale.donation), 0)).join(
+            CashSession, Sale.cash_session_id == CashSession.id
+        ).filter(
             and_(
                 Sale.created_at >= threshold,
-                Sale.donation.isnot(None)
+                Sale.donation.isnot(None),
+                # Exclude deferred sessions: only include donations from sessions opened today
+                CashSession.opened_at >= start_of_today
             )
         )
 
         return Decimal(str(query.scalar() or 0))
 
-    def _calculate_weight_in(self, site_id: Optional[str], threshold: datetime) -> Decimal:
-        """Calculate total weight received in kg (open tickets + closed in 24h)."""
-        # Get weight from open tickets
+    def _calculate_weight_in(self, site_id: Optional[str], threshold: datetime, start_of_today: datetime) -> Decimal:
+        """Calculate total weight received in kg (open tickets + closed in 24h), excluding deferred tickets."""
+        # Get weight from open tickets (exclude deferred)
         open_weight_query = self.db.query(func.coalesce(func.sum(LigneDepot.poids_kg), 0)).join(
             TicketDepot, LigneDepot.ticket_id == TicketDepot.id
-        ).filter(TicketDepot.status == TicketDepotStatus.OPENED.value)
+        ).join(
+            PosteReception, TicketDepot.poste_id == PosteReception.id
+        ).filter(
+            and_(
+                TicketDepot.status == TicketDepotStatus.OPENED.value,
+                # Exclude deferred tickets: only include tickets from posts opened today
+                PosteReception.opened_at >= start_of_today
+            )
+        )
 
-        # Get weight from tickets closed in last 24h
+        # Get weight from tickets closed in last 24h (exclude deferred)
         closed_weight_query = self.db.query(func.coalesce(func.sum(LigneDepot.poids_kg), 0)).join(
             TicketDepot, LigneDepot.ticket_id == TicketDepot.id
+        ).join(
+            PosteReception, TicketDepot.poste_id == PosteReception.id
         ).filter(
             and_(
                 TicketDepot.status == TicketDepotStatus.CLOSED.value,
                 TicketDepot.closed_at.isnot(None),
-                TicketDepot.closed_at >= threshold
+                TicketDepot.closed_at >= threshold,
+                # Exclude deferred tickets: only include tickets from posts opened today
+                PosteReception.opened_at >= start_of_today
             )
         )
 
@@ -190,10 +233,18 @@ class ReceptionLiveStatsService:
 
         return open_weight + closed_weight
 
-    def _calculate_weight_out(self, site_id: Optional[str], threshold: datetime) -> Decimal:
-        """Calculate total weight sold in kg from sales in the last 24 hours."""
+    def _calculate_weight_out(self, site_id: Optional[str], threshold: datetime, start_of_today: datetime) -> Decimal:
+        """Calculate total weight sold in kg from sales in the last 24 hours, excluding sales from deferred sessions."""
         query = self.db.query(func.coalesce(func.sum(SaleItem.weight), 0)).join(
             Sale, SaleItem.sale_id == Sale.id
-        ).filter(Sale.created_at >= threshold)
+        ).join(
+            CashSession, Sale.cash_session_id == CashSession.id
+        ).filter(
+            and_(
+                Sale.created_at >= threshold,
+                # Exclude deferred sessions: only include sales from sessions opened today
+                CashSession.opened_at >= start_of_today
+            )
+        )
 
         return Decimal(str(query.scalar() or 0))

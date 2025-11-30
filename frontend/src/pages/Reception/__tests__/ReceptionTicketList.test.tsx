@@ -149,3 +149,5 @@ describe('ReceptionTicketList', () => {
     expect(mockOnRowClick).toHaveBeenCalledWith(mockTickets[0]);
   });
 });
+
+

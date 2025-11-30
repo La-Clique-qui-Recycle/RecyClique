@@ -46,7 +46,21 @@ class CashSessionBase(BaseModel):
 
 class CashSessionCreate(CashSessionBase):
     """Schéma pour la création d'une session de caisse."""
-    pass
+    opened_at: Optional[datetime] = Field(None, description="Date d'ouverture personnalisée (pour saisie différée, ADMIN/SUPER_ADMIN uniquement)")
+    
+    @field_validator('opened_at')
+    @classmethod
+    def validate_opened_at(cls, v):
+        """Valide que opened_at n'est pas dans le futur."""
+        if v is not None:
+            from datetime import timezone
+            now = datetime.now(timezone.utc)
+            # S'assurer que v est timezone-aware
+            if v.tzinfo is None:
+                v = v.replace(tzinfo=timezone.utc)
+            if v > now:
+                raise ValueError("La date d'ouverture ne peut pas être dans le futur")
+        return v
 
 
 class CashSessionUpdate(BaseModel):
@@ -132,6 +146,7 @@ class CashSessionFilters(BaseModel):
     date_from: Optional[datetime] = Field(None, description="Date de début")
     date_to: Optional[datetime] = Field(None, description="Date de fin")
     search: Optional[str] = Field(None, description="Recherche textuelle (nom opérateur ou ID de session)")
+    include_empty: bool = Field(False, description="B44-P3: Inclure les sessions vides (sans transaction) dans les résultats")
 
 
 class CashSessionStats(BaseModel):

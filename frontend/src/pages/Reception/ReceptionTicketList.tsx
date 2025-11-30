@@ -169,3 +169,5 @@ export const ReceptionTicketList: React.FC<ReceptionTicketListProps> = ({
 };
 
 export default ReceptionTicketList;
+
+
