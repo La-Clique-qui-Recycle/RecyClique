@@ -65,3 +65,5 @@ La Réception bénéficie déjà d’un parcours guidé (fil d’Ariane, tab ord
 - [ ] Les raccourcis clavier sont documentés dans l’app et sur Confluence/docs.  
 - [ ] Tests Playwright/Unitaires couvrent navigation, focus et mode chèque.
 
+
+

@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { cashRegisterDashboardService, cashSessionService } from '../../services/cashSessionService';
 import { Card, Badge, Group, Button, SimpleGrid, Title, Container, LoadingOverlay, Text } from '@mantine/core';
 import { useCashSessionStoreInjected, useCashStores } from '../../providers/CashStoreProvider';
-import { PlayCircle } from 'lucide-react';
+import { useAuthStore } from '../../stores/authStore';  // B44-P1: Pour vérifier les permissions
+import { PlayCircle, Calendar } from 'lucide-react';
 
 interface RegisterStatus {
   id: string;
@@ -32,10 +33,22 @@ const RegisterCard: React.FC<{ reg: RegisterStatus; onOpen: (id: string) => void
 
 const CashRegisterDashboard: React.FC = () => {
   const navigate = useNavigate();
-  const { cashSessionStore, isVirtualMode } = useCashStores();
+  const { cashSessionStore, isVirtualMode, isDeferredMode } = useCashStores();
   const { resumeSession } = cashSessionStore;
+  const { currentUser } = useAuthStore();  // B44-P1: Pour vérifier les permissions
   const [loading, setLoading] = useState(true);
   const [registers, setRegisters] = useState<RegisterStatus[]>([]);
+  
+  // B44-P1: Vérifier si l'utilisateur peut accéder à la saisie différée
+  const canAccessDeferred = currentUser?.role === 'admin' || currentUser?.role === 'super-admin';
+
+  // B44-P1: En mode différé, rediriger automatiquement vers l'ouverture de session
+  useEffect(() => {
+    if (isDeferredMode) {
+      navigate('/cash-register/deferred/session/open', { replace: true });
+      return;
+    }
+  }, [isDeferredMode, navigate]);
 
   // En mode virtuel, ne pas charger les caisses réelles
   useEffect(() => {
@@ -47,12 +60,12 @@ const CashRegisterDashboard: React.FC = () => {
     const load = async () => {
       setLoading(true);
       try {
-        const list = await cashRegisterDashboardService.getRegistersStatus();
-        setRegisters(list);
+      const list = await cashRegisterDashboardService.getRegistersStatus();
+      setRegisters(list);
       } catch (error) {
         console.error('Erreur lors du chargement des caisses:', error);
       } finally {
-        setLoading(false);
+      setLoading(false);
       }
     };
     load();
@@ -119,6 +132,11 @@ const CashRegisterDashboard: React.FC = () => {
       // Pas de session active, ouvrir une nouvelle session
       navigate('/cash-register/virtual/session/open');
     }
+  };
+
+  // B44-P1: Handler pour la saisie différée - rediriger directement vers l'ouverture de session
+  const handleDeferredCashRegister = () => {
+    navigate('/cash-register/deferred/session/open');
   };
 
   // Interface virtuelle : afficher uniquement la carte virtuelle
@@ -220,6 +238,46 @@ const CashRegisterDashboard: React.FC = () => {
             </Button>
           </Group>
         </Card>
+        
+        {/* B44-P1: Carte Saisie Différée (ADMIN/SUPER_ADMIN uniquement) */}
+        {canAccessDeferred && (
+          <Card 
+            shadow="sm" 
+            padding="lg" 
+            radius="md" 
+            withBorder
+            style={{ 
+              borderStyle: 'solid',
+              borderColor: '#fbbf24',
+              backgroundColor: '#fffbeb'
+            }}
+          >
+            <Group position="apart" mb="xs">
+              <Group spacing="xs">
+                <Calendar size={20} color="#fbbf24" />
+                <Title order={4} style={{ color: '#92400e' }}>Saisie différée</Title>
+              </Group>
+              <Badge color="orange" variant="light" size="sm">ADMIN</Badge>
+            </Group>
+            <Text size="sm" c="dimmed" mb="md">
+              Saisir des ventes d'anciens cahiers avec leur date réelle de vente
+            </Text>
+            <Group position="right">
+              <Button 
+                color="orange" 
+                variant="subtle"
+                onClick={handleDeferredCashRegister}
+                leftSection={<Calendar size={16} />}
+                style={{ 
+                  color: '#92400e',
+                  borderColor: '#fbbf24'
+                }}
+              >
+                Accéder
+              </Button>
+            </Group>
+          </Card>
+        )}
       </SimpleGrid>
     </Container>
   );

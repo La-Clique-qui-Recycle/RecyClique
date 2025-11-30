@@ -70,3 +70,5 @@ const ReceptionDashboard: React.FC = () => {
 };
 
 export default ReceptionDashboard;
+
+

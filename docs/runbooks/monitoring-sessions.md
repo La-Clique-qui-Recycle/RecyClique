@@ -364,3 +364,5 @@ Les logs de session sont intégrés dans les logs applicatifs standards. Configu
 **Dernière mise à jour :** 2025-11-26  
 **Version du document :** 1.0
 
+
+

@@ -19,7 +19,7 @@ class PosteReception(Base):
 
     id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     opened_by_user_id = Column(PGUUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
-    opened_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    opened_at = Column(DateTime(timezone=True), nullable=False, default=func.now())
     closed_at = Column(DateTime(timezone=True), nullable=True)
     # Option A: VARCHAR + CHECK côté DB (via migration) + validation applicative côté service
     status = Column(String(16), nullable=False, default=PosteReceptionStatus.OPENED.value)

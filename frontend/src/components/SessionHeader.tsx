@@ -1,10 +1,11 @@
 import React from 'react';
 import styled from 'styled-components';
 import { ArrowLeft, Check } from 'lucide-react';
+import { IconCalendar } from '@tabler/icons-react';
 
-const HeaderContainer = styled.div`
-  display: flex;
-  justify-content: space-between;
+const HeaderContainer = styled.div<{ $hasDeferred: boolean }>`
+  display: grid;
+  grid-template-columns: ${props => props.$hasDeferred ? '1fr auto 1fr' : '1fr auto'};
   align-items: center;
   padding: 12px 24px;
   background: #2e7d32;
@@ -13,9 +14,11 @@ const HeaderContainer = styled.div`
   position: sticky;
   top: 0;
   z-index: 100;
+  gap: 1rem;
 
   @media (max-width: 480px) {
     padding: 8px 12px;
+    gap: 0.5rem;
   }
 `;
 
@@ -23,9 +26,35 @@ const LeftSection = styled.div`
   display: flex;
   align-items: center;
   gap: 16px;
+  justify-self: start;
 
   @media (max-width: 480px) {
     gap: 8px;
+  }
+`;
+
+const MiddleSection = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  justify-self: center;
+`;
+
+const DeferredBadge = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  background: rgba(255, 152, 0, 0.2);
+  border: 1px solid rgba(255, 152, 0, 0.4);
+  border-radius: 12px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #ff9800;
+  
+  @media (max-width: 768px) {
+    font-size: 0.75rem;
+    padding: 0.4rem 0.8rem;
   }
 `;
 
@@ -117,6 +146,8 @@ interface SessionHeaderProps {
   isLoading?: boolean;
   title?: string; // Titre personnalisé (par défaut: Ticket #ID)
   showBackButton?: boolean; // Afficher le bouton retour (par défaut: true)
+  isDeferred?: boolean; // Mode saisie différée
+  deferredDate?: string | null; // Date du poste différé
 }
 
 const SessionHeader: React.FC<SessionHeaderProps> = ({
@@ -125,14 +156,33 @@ const SessionHeader: React.FC<SessionHeaderProps> = ({
   onCloseTicket,
   isLoading = false,
   title,
-  showBackButton = true
+  showBackButton = true,
+  isDeferred = false,
+  deferredDate = null
 }) => {
   // Afficher les 8 derniers caractères de l'ID du ticket
   const shortTicketId = ticketId.slice(-8);
   const displayTitle = title || `Ticket #${shortTicketId}`;
 
+  // Formater la date du poste différé
+  const formatDeferredDate = (dateString: string | null): string => {
+    if (!dateString) return '';
+    try {
+      const date = new Date(dateString);
+      return date.toLocaleDateString('fr-FR', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric'
+      });
+    } catch {
+      return '';
+    }
+  };
+
+  const hasDeferred = isDeferred && deferredDate;
+
   return (
-    <HeaderContainer>
+    <HeaderContainer $hasDeferred={hasDeferred}>
       <LeftSection>
         {showBackButton && onBack && (
           <BackButton onClick={onBack}>
@@ -142,7 +192,15 @@ const SessionHeader: React.FC<SessionHeaderProps> = ({
         )}
         <TicketTitle>{displayTitle}</TicketTitle>
       </LeftSection>
-      <CloseTicketButton onClick={onCloseTicket} disabled={isLoading}>
+      {hasDeferred && (
+        <MiddleSection>
+          <DeferredBadge data-testid="deferred-reception-badge">
+            <IconCalendar size={14} />
+            <span>Saisie différée - {formatDeferredDate(deferredDate)}</span>
+          </DeferredBadge>
+        </MiddleSection>
+      )}
+      <CloseTicketButton onClick={onCloseTicket} disabled={isLoading} style={{ justifySelf: 'end' }}>
         <Check size={20} />
         Clôturer le ticket
       </CloseTicketButton>

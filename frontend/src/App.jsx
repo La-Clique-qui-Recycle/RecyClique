@@ -36,6 +36,8 @@ const AdminCategories = lazy(() => import('./pages/Admin/Categories.tsx'));
 const AdminReceptionDashboard = lazy(() => import('./pages/Admin/ReceptionDashboard.tsx'));
 const ReceptionReports = lazy(() => import('./pages/Admin/ReceptionReports.tsx'));
 const CashSessionDetail = lazy(() => import('./pages/Admin/CashSessionDetail.tsx'));
+const ReceptionSessionManager = lazy(() => import('./pages/Admin/ReceptionSessionManager.tsx'));
+const ReceptionTicketDetail = lazy(() => import('./pages/Admin/ReceptionTicketDetail.tsx'));
 const AdminSettings = lazy(() => import('./pages/Admin/Settings.tsx'));
 const AdminGroups = lazy(() => import('./pages/Admin/GroupsReal.tsx'));
 const AuditLog = lazy(() => import('./pages/Admin/AuditLog.tsx'));
@@ -111,7 +113,9 @@ function App() {
     '/reception/ticket',
     /^\/reception\/ticket\/[^/]+$/,
     /^\/reception\/ticket\/[^/]+\/view$/,
-    '/cash-register/sale'
+    '/cash-register/sale',
+    '/cash-register/virtual/sale',
+    '/cash-register/deferred/sale'
   ];
 
   // Vérifier si la route actuelle est en mode kiosque
@@ -159,6 +163,11 @@ function App() {
             <Route path="/cash-register/virtual/session/open" element={<ProtectedRoute requiredPermission="caisse.access"><OpenCashSession /></ProtectedRoute>} />
             <Route path="/cash-register/virtual/sale" element={<ProtectedRoute requiredPermission="caisse.access"><Sale /></ProtectedRoute>} />
             <Route path="/cash-register/virtual/session/close" element={<ProtectedRoute requiredPermission="caisse.access"><CloseSession /></ProtectedRoute>} />
+            {/* B44-P1: Routes saisie différée : utilisent les mêmes composants avec le provider en mode différé (ADMIN/SUPER_ADMIN uniquement) */}
+            <Route path="/cash-register/deferred" element={<ProtectedRoute requiredRoles={['admin', 'super-admin']}><CashRegister /></ProtectedRoute>} />
+            <Route path="/cash-register/deferred/session/open" element={<ProtectedRoute requiredRoles={['admin', 'super-admin']}><OpenCashSession /></ProtectedRoute>} />
+            <Route path="/cash-register/deferred/sale" element={<ProtectedRoute requiredRoles={['admin', 'super-admin']}><Sale /></ProtectedRoute>} />
+            <Route path="/cash-register/deferred/session/close" element={<ProtectedRoute requiredRoles={['admin', 'super-admin']}><CloseSession /></ProtectedRoute>} />
             <Route path="/reception" element={<ProtectedRoute requiredPermission="reception.access"><Reception /></ProtectedRoute>} />
             <Route path="/reception/dashboard" element={<ProtectedRoute requiredPermission="reception.access"><ReceptionDashboard /></ProtectedRoute>} />
             <Route path="/reception/ticket" element={<ProtectedRoute requiredPermission="reception.access"><TicketForm /></ProtectedRoute>} />
@@ -175,6 +184,8 @@ function App() {
               <Route path="cash-sessions/:id" element={<CashSessionDetail />} />
               <Route path="reception-stats" element={<AdminReceptionDashboard />} />
               <Route path="reception-reports" element={<ReceptionReports />} />
+              <Route path="reception-sessions" element={<ReceptionSessionManager />} />
+              <Route path="reception-tickets/:id" element={<ReceptionTicketDetail />} />
               <Route path="reports" element={<ReportsHub />} />
               <Route path="reports/cash-sessions" element={<AdminReports />} />
               <Route path="users" element={<AdminUsers />} />

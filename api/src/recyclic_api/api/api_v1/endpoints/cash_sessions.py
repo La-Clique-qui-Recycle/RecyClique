@@ -1,8 +1,9 @@
 import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 from recyclic_api.core.database import get_db
 from recyclic_api.core.auth import get_current_user, require_role, require_role_strict
@@ -106,28 +107,49 @@ async def create_cash_session(
 ):
     service = CashSessionService(db)
     try:
-        # Vérifier qu'il n'y a pas déjà une session ouverte pour cet opérateur
-        existing_session = service.get_open_session_by_operator(session_data.operator_id)
-        if existing_session:
-            log_cash_session_opening(
-                user_id=str(current_user.id),
-                username=current_user.username or "Unknown",
-                session_id="",
-                opening_amount=session_data.initial_amount,
-                success=False,
-                db=db
-            )
-            raise HTTPException(
-                status_code=400,
-                detail="Une session de caisse est déjà ouverte pour cet opérateur"
-            )
+        # Vérifier les permissions si opened_at est fourni (saisie différée)
+        if session_data.opened_at is not None:
+            if current_user.role not in [UserRole.ADMIN, UserRole.SUPER_ADMIN]:
+                log_cash_session_opening(
+                    user_id=str(current_user.id),
+                    username=current_user.username or "Unknown",
+                    session_id="",
+                    opening_amount=session_data.initial_amount,
+                    success=False,
+                    db=db
+                )
+                raise HTTPException(
+                    status_code=403,
+                    detail="Seuls les administrateurs peuvent créer des sessions avec une date personnalisée (saisie différée)"
+                )
+        
+        # B44-P1: Vérifier qu'il n'y a pas déjà une session ouverte pour cet opérateur
+        # Exception: les sessions différées peuvent être créées même si l'opérateur a une session normale ouverte
+        if session_data.opened_at is None:
+            # Pour les sessions normales, vérifier qu'il n'y a pas déjà une session ouverte
+            existing_session = service.get_open_session_by_operator(session_data.operator_id)
+            if existing_session:
+                log_cash_session_opening(
+                    user_id=str(current_user.id),
+                    username=current_user.username or "Unknown",
+                    session_id="",
+                    opening_amount=session_data.initial_amount,
+                    success=False,
+                    db=db
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail="Une session de caisse est déjà ouverte pour cet opérateur"
+                )
+        # Pour les sessions différées, on permet la création même si l'opérateur a une session normale ouverte
 
-        # Créer la nouvelle session
+        # Créer la nouvelle session avec opened_at si fourni
         cash_session = service.create_session(
             operator_id=session_data.operator_id,
             site_id=session_data.site_id,
             initial_amount=session_data.initial_amount,
             register_id=session_data.register_id,
+            opened_at=session_data.opened_at,
         )
 
         # Initialiser les métriques d'étape (commencer par 'entry' pour les sessions de réception)
@@ -136,13 +158,17 @@ async def create_cash_session(
         # Sauvegarder l'initialisation des métriques
         db.commit()
 
-        # Log de l'ouverture de session
+        # Log de l'ouverture de session (avec flag is_deferred si opened_at fourni)
+        is_deferred = session_data.opened_at is not None
         log_cash_session_opening(
             user_id=str(current_user.id),
             username=current_user.username or "Unknown",
             session_id=str(cash_session.id),
             opening_amount=session_data.initial_amount,
             success=True,
+            is_deferred=is_deferred,
+            opened_at=session_data.opened_at,
+            created_at=datetime.now(timezone.utc) if is_deferred else None,
             db=db
         )
 
@@ -286,6 +312,7 @@ async def get_cash_sessions(
     date_from: Optional[datetime] = Query(None, description="Date de début (ISO 8601)"),
     date_to: Optional[datetime] = Query(None, description="Date de fin (ISO 8601)"),
     search: Optional[str] = Query(None, description="Recherche textuelle (nom opérateur ou ID de session)"),
+    include_empty: bool = Query(False, description="B44-P3: Inclure les sessions vides (sans transaction)"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role_strict([UserRole.USER, UserRole.ADMIN, UserRole.SUPER_ADMIN]))
 ):
@@ -300,6 +327,7 @@ async def get_cash_sessions(
         date_from=date_from,
         date_to=date_to,
         search=search,
+        include_empty=include_empty,
     )
     
     sessions, total = service.get_sessions_with_filters(filters)
@@ -650,14 +678,36 @@ async def close_cash_session(
                 detail="Un commentaire est obligatoire en cas d'écart entre le montant théorique et le montant physique"
             )
         
-        # Fermer la session avec contrôle des montants
+        # B44-P3: Fermer la session avec contrôle des montants
+        # Si la session est vide, elle sera supprimée au lieu d'être fermée
         closed_session = service.close_session_with_amounts(
             session_id, 
             close_data.actual_amount, 
             close_data.variance_comment
         )
         
-        # Log de la fermeture de session
+        # B44-P3: Si la session était vide, elle a été supprimée
+        if closed_session is None:
+            # Session vide supprimée : retourner un message informatif
+            log_cash_session_closing(
+                user_id=str(current_user.id),
+                username=current_user.username or "Unknown",
+                session_id=session_id,
+                closing_amount=0,
+                success=True,
+                db=db
+            )
+            # Retourner une réponse JSON personnalisée (pas CashSessionResponse)
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "message": "Session vide non enregistrée",
+                    "session_id": session_id,
+                    "deleted": True
+                }
+            )
+        
+        # Log de la fermeture de session normale
         log_cash_session_closing(
             user_id=str(current_user.id),
             username=current_user.username or "Unknown",

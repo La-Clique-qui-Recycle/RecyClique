@@ -27,3 +27,5 @@ def downgrade() -> None:
     # Story B40-P5: Supprimer colonne note de la table sales
     op.drop_column('sales', 'note')
 
+
+

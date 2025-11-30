@@ -17,6 +17,7 @@ export interface CashSessionCreate {
   site_id: string;
   register_id?: string;
   initial_amount: number;
+  opened_at?: string;  // B44-P1: Date de session pour saisie différée (ISO 8601)
 }
 
 export interface CashSessionUpdate {
@@ -184,12 +185,18 @@ export const cashSessionService = {
   /**
    * Ferme une session de caisse avec contrôle des montants
    */
-  async closeSessionWithAmounts(sessionId: string, actualAmount: number, varianceComment?: string): Promise<CashSession> {
+  async closeSessionWithAmounts(sessionId: string, actualAmount: number, varianceComment?: string): Promise<CashSession | null> {
     try {
       const response = await ApiClient.client.post(`/v1/cash-sessions/${sessionId}/close`, {
         actual_amount: actualAmount,
         variance_comment: varianceComment
       });
+
+      // B44-P3: Si la session était vide, l'API retourne { deleted: true, message: "..." }
+      if (response.data && response.data.deleted === true) {
+        // Session vide supprimée : retourner null pour indiquer la suppression
+        return null;
+      }
 
       // L'API retourne directement l'objet session, pas un wrapper
       if (response.data && response.data.id) {

@@ -411,7 +411,10 @@ export const useCashSessionStore = create<CashSessionState>()(
                 closeData.actual_amount, 
                 closeData.variance_comment
               );
-              success = !!closedSession;
+              // B44-P3: closedSession peut être null si la session était vide et a été supprimée
+              // null = session supprimée (succès), CashSession = session fermée (succès)
+              // Si on arrive ici sans exception, c'est toujours un succès
+              success = true;
             } else {
               // Fermeture simple
               success = await cashSessionService.closeSession(sessionId);

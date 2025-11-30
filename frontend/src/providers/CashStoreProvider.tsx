@@ -2,6 +2,7 @@ import React, { createContext, useContext, ReactNode, useMemo } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useCashSessionStore } from '../stores/cashSessionStore';
 import { useVirtualCashSessionStore } from '../stores/virtualCashSessionStore';
+import { useDeferredCashSessionStore } from '../stores/deferredCashSessionStore';  // B44-P1
 import { useCategoryStore } from '../stores/categoryStore';
 import { useVirtualCategoryStore } from '../stores/virtualCategoryStore';
 import { usePresetStore } from '../stores/presetStore';
@@ -9,7 +10,7 @@ import { useVirtualPresetStore } from '../stores/virtualPresetStore';
 
 /**
  * Interface pour les stores injectés
- * Permet de basculer entre mode réel et virtuel de manière transparente
+ * Permet de basculer entre mode réel, virtuel et différé de manière transparente
  */
 export interface CashStoreContextValue {
   // Stores de session de caisse
@@ -19,6 +20,7 @@ export interface CashStoreContextValue {
   
   // Mode actuel
   isVirtualMode: boolean;
+  isDeferredMode: boolean;  // B44-P1: Mode saisie différée
   
   // Actions pour basculer le mode
   enableVirtualMode: () => void;
@@ -58,11 +60,16 @@ export const CashStoreProvider: React.FC<CashStoreProviderProps> = ({
   // Utiliser useLocation pour détecter les changements d'URL en temps réel
   const location = useLocation();
   
+  // B44-P1: Détecter le mode différé depuis l'URL
+  const isDeferredFromUrl = location.pathname.includes('/cash-register/deferred');
+  
   // Détecter le mode depuis l'URL si non forcé
   // /caisse = toujours mode réel (même si /virtual est dans l'URL ailleurs)
   // /cash-register/virtual = mode virtuel
+  // /cash-register/deferred = mode saisie différée
   const isVirtualFromUrl = location.pathname.includes('/virtual') &&
-    !location.pathname.startsWith('/caisse');
+    !location.pathname.startsWith('/caisse') &&
+    !isDeferredFromUrl;
   
   // Détecter le mode depuis le store virtuel
   const virtualStore = useVirtualCashSessionStore();
@@ -71,6 +78,9 @@ export const CashStoreProvider: React.FC<CashStoreProviderProps> = ({
   // Déterminer le mode final
   // PRIORITÉ : forceMode > defaultMode > URL > Store
   const isVirtualMode = useMemo(() => {
+    if (isDeferredFromUrl) {
+      return false;  // Mode différé n'est pas virtuel
+    }
     if (forceMode !== undefined) {
       return forceMode === 'virtual';
     }
@@ -82,7 +92,10 @@ export const CashStoreProvider: React.FC<CashStoreProviderProps> = ({
       return false;
     }
     return isVirtualFromUrl || isVirtualFromStore;
-  }, [forceMode, defaultMode, isVirtualFromUrl, isVirtualFromStore, location.pathname]);
+  }, [forceMode, defaultMode, isVirtualFromUrl, isVirtualFromStore, location.pathname, isDeferredFromUrl]);
+  
+  // B44-P1: Mode différé
+  const isDeferredMode = isDeferredFromUrl;
 
   // Activer/désactiver le mode virtuel dans le store
   React.useEffect(() => {
@@ -103,6 +116,9 @@ export const CashStoreProvider: React.FC<CashStoreProviderProps> = ({
   const virtualCategoryStore = useVirtualCategoryStore();
   const virtualPresetStore = useVirtualPresetStore();
 
+  // B44-P1: Store différé (saisie différée)
+  const deferredCashSessionStore = useDeferredCashSessionStore();
+
   // Initialiser les données virtuelles si nécessaire (une seule fois)
   const hasInitializedRef = React.useRef(false);
   React.useEffect(() => {
@@ -117,16 +133,19 @@ export const CashStoreProvider: React.FC<CashStoreProviderProps> = ({
 
   // Sélectionner les stores selon le mode
   const contextValue = useMemo<CashStoreContextValue>(() => ({
-    cashSessionStore: isVirtualMode ? virtualCashSessionStore : realCashSessionStore,
+    cashSessionStore: isDeferredMode ? deferredCashSessionStore : (isVirtualMode ? virtualCashSessionStore : realCashSessionStore),
     categoryStore: isVirtualMode ? virtualCategoryStore : realCategoryStore,
     presetStore: isVirtualMode ? virtualPresetStore : realPresetStore,
     isVirtualMode,
+    isDeferredMode,  // B44-P1
     enableVirtualMode: () => virtualStore.enableVirtualMode(),
     disableVirtualMode: () => virtualStore.disableVirtualMode()
   }), [
     isVirtualMode,
+    isDeferredMode,  // B44-P1
     realCashSessionStore,
     virtualCashSessionStore,
+    deferredCashSessionStore,  // B44-P1
     realCategoryStore,
     virtualCategoryStore,
     realPresetStore,

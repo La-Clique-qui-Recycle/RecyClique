@@ -193,3 +193,5 @@ B40-P5 (DB)
 - Composant admin : à identifier
 - Store Zustand : `cashSessionStore.ts`
 
+
+

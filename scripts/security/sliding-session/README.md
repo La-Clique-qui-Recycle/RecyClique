@@ -80,3 +80,5 @@ Pour plus de détails, voir:
 - **RFC Sliding Session**: `docs/architecture/sliding-session-rfc.md`
 - **Guide de prévention**: `docs/tests-problemes-p5-prevention.md`
 
+
+

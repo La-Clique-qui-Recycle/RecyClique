@@ -75,3 +75,5 @@ recommendations:
     - action: "Considérer l'ajout de tests de charge pour valider le comportement sous charge"
       refs: ["api/tests/load/"]
 
+
+

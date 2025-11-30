@@ -3,10 +3,10 @@ from __future__ import annotations
 from typing import Optional, List, Tuple
 from uuid import UUID
 from decimal import Decimal
-from datetime import date
+from datetime import date, datetime, timezone
 
 from sqlalchemy.orm import Session, selectinload
-from sqlalchemy import func, desc, and_
+from sqlalchemy import func, desc, and_, String
 from fastapi import HTTPException, status
 
 from recyclic_api.models import (
@@ -38,8 +38,39 @@ class ReceptionService:
         self.category_repo = CategoryRepository(db)
 
     # Postes
-    def open_poste(self, opened_by_user_id: UUID) -> PosteReception:
-        poste = PosteReception(opened_by_user_id=opened_by_user_id, status=PosteReceptionStatus.OPENED.value)
+    def open_poste(self, opened_by_user_id: UUID, opened_at: Optional[datetime] = None) -> PosteReception:
+        """
+        Ouvrir un poste de réception.
+        
+        Args:
+            opened_by_user_id: ID de l'utilisateur qui ouvre le poste
+            opened_at: Date d'ouverture optionnelle (pour saisie différée, uniquement ADMIN/SUPER_ADMIN)
+        
+        Returns:
+            PosteReception: Le poste créé
+        """
+        # Validation de la date si fournie
+        if opened_at is not None:
+            now = datetime.now(timezone.utc)
+            # Normaliser opened_at en UTC si nécessaire
+            if opened_at.tzinfo is None:
+                opened_at = opened_at.replace(tzinfo=timezone.utc)
+            elif opened_at.tzinfo != timezone.utc:
+                opened_at = opened_at.astimezone(timezone.utc)
+            
+            # Vérifier que la date n'est pas dans le futur
+            if opened_at > now:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="La date d'ouverture ne peut pas être dans le futur"
+                )
+        
+        # Créer le poste avec la date fournie ou None (utilisera la valeur par défaut)
+        poste = PosteReception(
+            opened_by_user_id=opened_by_user_id,
+            status=PosteReceptionStatus.OPENED.value,
+            opened_at=opened_at if opened_at is not None else None
+        )
         self.db.add(poste)
         self.db.commit()
         self.db.refresh(poste)
@@ -74,10 +105,27 @@ class ReceptionService:
         if not self.user_repo.get(benevole_user_id):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Utilisateur introuvable")
 
+        # Déterminer la date de création du ticket
+        # Si le poste est différé (opened_at < now()), utiliser opened_at du poste
+        ticket_created_at = None
+        if poste.opened_at:
+            now = datetime.now(timezone.utc)
+            # Normaliser opened_at en UTC si nécessaire
+            poste_opened_at = poste.opened_at
+            if poste_opened_at.tzinfo is None:
+                poste_opened_at = poste_opened_at.replace(tzinfo=timezone.utc)
+            elif poste_opened_at.tzinfo != timezone.utc:
+                poste_opened_at = poste_opened_at.astimezone(timezone.utc)
+            
+            # Si le poste est différé (date dans le passé), utiliser cette date
+            if poste_opened_at < now:
+                ticket_created_at = poste_opened_at
+
         ticket = TicketDepot(
             poste_id=poste.id,
             benevole_user_id=benevole_user_id,
             status=TicketDepotStatus.OPENED.value,
+            created_at=ticket_created_at if ticket_created_at is not None else None
         )
         return self.ticket_repo.add(ticket)
 
@@ -173,7 +221,17 @@ class ReceptionService:
         self.ligne_repo.delete(ligne)
 
     # Méthodes pour l'historique des tickets
-    def get_tickets_list(self, page: int = 1, per_page: int = 10, status: Optional[str] = None) -> Tuple[List[TicketDepot], int]:
+    def get_tickets_list(
+        self, 
+        page: int = 1, 
+        per_page: int = 10, 
+        status: Optional[str] = None,
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None,
+        benevole_id: Optional[UUID] = None,
+        search: Optional[str] = None,
+        include_empty: bool = False
+    ) -> Tuple[List[TicketDepot], int]:
         """Récupérer la liste paginée des tickets avec leurs informations de base."""
         offset = (page - 1) * per_page
         
@@ -183,9 +241,43 @@ class ReceptionService:
             selectinload(TicketDepot.lignes)
         ).order_by(desc(TicketDepot.created_at))
         
-        # Appliquer le filtre par statut si fourni
+        # Appliquer les filtres
         if status:
             query = query.filter(TicketDepot.status == status)
+        
+        if date_from:
+            query = query.filter(TicketDepot.created_at >= date_from)
+        
+        if date_to:
+            # Ajouter 23h59:59.999 pour inclure toute la journée
+            date_to_end = date_to.replace(hour=23, minute=59, second=59, microsecond=999999)
+            query = query.filter(TicketDepot.created_at <= date_to_end)
+        
+        if benevole_id:
+            query = query.filter(TicketDepot.benevole_user_id == benevole_id)
+        
+        if search:
+            # Recherche dans l'ID du ticket (UUID) ou le nom d'utilisateur du bénévole
+            search_lower = search.lower()
+            # Joindre avec User pour rechercher dans username
+            from recyclic_api.models import User
+            # Rechercher dans l'ID du ticket (convertir UUID en string) ou le username du bénévole
+            query = query.join(User, TicketDepot.benevole_user_id == User.id).filter(
+                (func.lower(User.username).contains(search_lower)) |
+                (func.lower(func.cast(TicketDepot.id, String)).contains(search_lower))
+            )
+        
+        # B44-P4: Exclure les tickets vides (sans lignes) par défaut, comme pour les sessions de caisse
+        if not include_empty:
+            # Exclure les tickets qui n'ont aucune ligne de dépôt
+            # On utilise une sous-requête pour compter les lignes par ticket
+            from recyclic_api.models import LigneDepot
+            tickets_with_lignes = (
+                self.db.query(LigneDepot.ticket_id)
+                .group_by(LigneDepot.ticket_id)
+                .subquery()
+            )
+            query = query.join(tickets_with_lignes, TicketDepot.id == tickets_with_lignes.c.ticket_id)
         
         # Compter le total
         total = query.count()
