@@ -424,13 +424,7 @@ const ReceptionSessionManager: React.FC = () => {
 
   const handleExportCSV = async (ticketId: string) => {
     try {
-      const blob = await receptionTicketsService.exportCSV(ticketId)
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `ticket-${ticketId}.csv`
-      a.click()
-      URL.revokeObjectURL(url)
+      await receptionTicketsService.exportCSV(ticketId)
     } catch (err) {
       console.error('Erreur lors du téléchargement du CSV:', err)
       alert('Erreur lors du téléchargement du CSV')

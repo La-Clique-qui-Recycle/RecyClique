@@ -35,6 +35,7 @@ export interface ReceptionTicketFilters {
   date_from?: string
   date_to?: string
   search?: string
+  include_empty?: boolean
 }
 
 export interface LigneResponse {
@@ -68,7 +69,7 @@ export const receptionTicketsService = {
     let hasMore = true
     
     while (hasMore) {
-      const listRes = await this.list({ ...params, page, per_page: perPage })
+      const listRes = await this.list({ ...params, page, per_page: perPage, include_empty: true })
       const batch = listRes?.tickets || []
       
       if (batch.length === 0) {
@@ -89,16 +90,19 @@ export const receptionTicketsService = {
       }
     }
     
-    const totalPoids = allTickets.reduce((sum, t) => {
+    // Filtrer les tickets vides pour les KPIs (exclure ceux avec 0 lignes)
+    const filteredTickets = allTickets.filter(t => t.total_lignes > 0)
+    
+    const totalPoids = filteredTickets.reduce((sum, t) => {
       const poids = typeof t.total_poids === 'number' ? t.total_poids : parseFloat(String(t.total_poids)) || 0
       return sum + poids
     }, 0)
-    const totalTickets = allTickets.length
-    const totalLignes = allTickets.reduce((sum, t) => {
+    const totalTickets = filteredTickets.length
+    const totalLignes = filteredTickets.reduce((sum, t) => {
       const lignes = typeof t.total_lignes === 'number' ? t.total_lignes : parseInt(String(t.total_lignes), 10) || 0
       return sum + lignes
     }, 0)
-    const benevolesUniques = new Set(allTickets.map(t => t.benevole_username)).size
+    const benevolesUniques = new Set(filteredTickets.map(t => t.benevole_username)).size
     
     return {
       total_poids: totalPoids,
@@ -118,11 +122,27 @@ export const receptionTicketsService = {
     return response.data
   },
 
-  async exportCSV(id: string): Promise<Blob> {
-    const response = await axiosClient.get(`/v1/reception/tickets/${id}/export-csv`, {
-      responseType: 'blob'
-    })
-    return response.data
+  /**
+   * Génère un token de téléchargement et lance le téléchargement direct via un lien `<a>`.
+   * Cette approche garantit que le navigateur effectue une requête HTTP classique et respecte
+   * le header Content-Disposition renvoyé par l'API.
+   */
+  async exportCSV(id: string): Promise<void> {
+    try {
+      const response = await axiosClient.post(`/v1/reception/tickets/${id}/download-token`)
+      const { download_url } = response.data as { download_url: string }
+
+      // Créer un lien temporaire et déclencher un clic (compatible pop-up blockers)
+      const link = document.createElement('a')
+      link.href = download_url
+      link.style.display = 'none'
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+    } catch (error: any) {
+      console.error('Erreur lors de l\'export CSV:', error)
+      throw error
+    }
   }
 }
 
