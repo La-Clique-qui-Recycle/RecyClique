@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query, Response, Body
+from fastapi import APIRouter, Depends, Query, Response, Body, Request
 from sqlalchemy.orm import Session
 from uuid import UUID
 from typing import Optional
@@ -10,7 +10,8 @@ import io
 
 from recyclic_api.core.database import get_db
 from recyclic_api.core.auth import require_role_strict
-from recyclic_api.models.user import UserRole
+from recyclic_api.models.user import UserRole, User
+from recyclic_api.utils.report_tokens import generate_download_token, verify_download_token
 from recyclic_api.schemas.reception import (
     OpenPosteRequest,
     OpenPosteResponse,
@@ -296,50 +297,118 @@ def get_ticket_detail(
     )
 
 
-@router.get("/tickets/{ticket_id}/export-csv")
-def export_ticket_csv(
+@router.post("/tickets/{ticket_id}/download-token")
+def generate_ticket_download_token(
     ticket_id: str,
     db: Session = Depends(get_db),
-    current_user=Depends(require_role_strict([UserRole.ADMIN, UserRole.SUPER_ADMIN])),
+    current_user: User = Depends(require_role_strict([UserRole.ADMIN, UserRole.SUPER_ADMIN])),
 ):
-    """Exporter un ticket de réception au format CSV."""
+    """Générer un token de téléchargement pour un ticket de réception (B44-P4)."""
+    from fastapi import HTTPException, status
+    
     service = ReceptionService(db)
     ticket = service.get_ticket_detail(UUID(ticket_id))
     
     if not ticket:
-        from fastapi import HTTPException, status
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket introuvable")
+    
+    # Générer le nom de fichier (même format que dans export_ticket_csv)
+    benevole_username = ticket.benevole.username or "utilisateur_inconnu"
+    benevole_safe = benevole_username.replace(' ', '_').replace('/', '_').replace('\\', '_')[:20]
+    date_str = ticket.created_at.strftime("%Y%m%d") if ticket.created_at else datetime.utcnow().strftime("%Y%m%d")
+    timestamp = ticket.created_at.strftime("%H%M%S") if ticket.created_at else datetime.utcnow().strftime("%H%M%S")
+    uuid_short = str(ticket.id).replace('-', '')[:8]
+    filename = f"rapport_reception_{date_str}_{benevole_safe}_{uuid_short}_{timestamp}.csv"
+    
+    # Générer le token (TTL de 60 secondes pour les téléchargements directs)
+    token = generate_download_token(filename, ttl_seconds=60)
+    
+    # Construire l'URL de téléchargement (pointant vers l'API)
+    # Le frontend utilisera cette URL directement pour le téléchargement
+    download_url = f"/api/v1/reception/tickets/{ticket_id}/export-csv?token={token}"
+    
+    return {"download_url": download_url, "filename": filename, "expires_in_seconds": 60}
+
+
+@router.get("/tickets/{ticket_id}/export-csv")
+def export_ticket_csv(
+    ticket_id: str,
+    token: str = Query(..., description="Token de téléchargement signé (obligatoire)"),
+    db: Session = Depends(get_db),
+):
+    """
+    Exporter un ticket de réception au format CSV.
+    
+    Authentification via token signé (généré via POST /tickets/{ticket_id}/download-token).
+    Le navigateur télécharge directement depuis cette URL, garantissant que le nom de fichier
+    depuis le header Content-Disposition est respecté.
+    """
+    from fastapi import HTTPException, status
+    
+    service = ReceptionService(db)
+    ticket = service.get_ticket_detail(UUID(ticket_id))
+    
+    if not ticket:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket introuvable")
+    
+    # Générer le nom de fichier (même format que dans generate_ticket_download_token)
+    benevole_username = ticket.benevole.username or "utilisateur_inconnu"
+    benevole_safe = benevole_username.replace(' ', '_').replace('/', '_').replace('\\', '_')[:20]
+    date_str = ticket.created_at.strftime("%Y%m%d") if ticket.created_at else datetime.utcnow().strftime("%Y%m%d")
+    timestamp = ticket.created_at.strftime("%H%M%S") if ticket.created_at else datetime.utcnow().strftime("%H%M%S")
+    uuid_short = str(ticket.id).replace('-', '')[:8]
+    filename = f"rapport_reception_{date_str}_{benevole_safe}_{uuid_short}_{timestamp}.csv"
+    
+    # Vérifier le token signé (obligatoire)
+    if not verify_download_token(token, filename):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Token de téléchargement invalide ou expiré")
     
     # Calculer les totaux
     total_lignes, total_poids = service._calculate_ticket_totals(ticket)
     
-    # Créer le contenu CSV
+    # Fonctions de formatage (identique aux sessions de caisse)
+    def _format_weight(value: Optional[float]) -> str:
+        """Format un poids avec virgule comme séparateur décimal (format français)"""
+        if value is None:
+            return ''
+        # Utiliser virgule au lieu de point pour les décimales (format français)
+        return f"{value:.3f}".replace('.', ',')
+    
+    def _format_date(dt: Optional[datetime]) -> str:
+        if dt is None:
+            return ''
+        return dt.strftime('%Y-%m-%d %H:%M:%S')
+    
+    # Créer le contenu CSV avec le même format que les sessions de caisse
     output = io.StringIO()
-    writer = csv.writer(output)
+    # Utiliser point-virgule comme délimiteur (standard français pour CSV)
+    # QUOTE_MINIMAL pour échapper automatiquement les guillemets et caractères spéciaux
+    writer = csv.writer(output, delimiter=';', quoting=csv.QUOTE_MINIMAL)
     
-    # Section résumé du ticket
-    writer.writerow(["Résumé du Ticket de Réception"])
-    writer.writerow([])
-    writer.writerow(["ID Ticket", str(ticket.id)])
-    writer.writerow(["ID Poste", str(ticket.poste_id)])
-    writer.writerow(["Bénévole", ticket.benevole.username or "Utilisateur inconnu"])
-    writer.writerow(["Date création", ticket.created_at.strftime("%Y-%m-%d %H:%M:%S")])
+    # Section 1: Résumé du ticket (format tabulaire lisible, identique aux sessions de caisse)
+    writer.writerow(['=== RÉSUMÉ DU TICKET DE RÉCEPTION ==='])
+    writer.writerow(['Champ', 'Valeur'])
+    writer.writerow(['ID Ticket', str(ticket.id)])
+    writer.writerow(['ID Poste', str(ticket.poste_id)])
+    writer.writerow(['Bénévole', ticket.benevole.username or "Utilisateur inconnu"])
+    writer.writerow(['Date création', _format_date(ticket.created_at)])
     if ticket.closed_at:
-        writer.writerow(["Date fermeture", ticket.closed_at.strftime("%Y-%m-%d %H:%M:%S")])
-    writer.writerow(["Statut", ticket.status])
-    writer.writerow(["Nombre de lignes", str(total_lignes)])
-    writer.writerow(["Poids total (kg)", str(total_poids)])
-    writer.writerow([])
+        writer.writerow(['Date fermeture', _format_date(ticket.closed_at)])
+    writer.writerow(['Statut', ticket.status])
+    writer.writerow(['Nombre de lignes', str(total_lignes)])
+    writer.writerow(['Poids total (kg)', _format_weight(total_poids)])
     
-    # Section détails des lignes
-    writer.writerow(["Détails des Lignes de Dépôt"])
-    writer.writerow([])
+    # Ligne vide pour séparation (avec le bon nombre de colonnes pour éviter les erreurs d'import)
+    writer.writerow(['', ''])  # 2 colonnes pour le résumé
+    
+    # Section 2: Détails des lignes de dépôt
+    writer.writerow(['=== DÉTAILS DES LIGNES DE DÉPÔT ==='])
     writer.writerow([
-        "ID Ligne",
-        "Catégorie",
-        "Poids (kg)",
-        "Destination",
-        "Notes"
+        'ID Ligne',
+        'Catégorie',
+        'Poids (kg)',
+        'Destination',
+        'Notes'
     ])
     
     # Données des lignes
@@ -352,17 +421,23 @@ def export_ticket_csv(
         if ligne.destination:
             destination_value = ligne.destination.value if hasattr(ligne.destination, 'value') else str(ligne.destination)
         
+        # Nettoyer les notes (retirer les retours à la ligne)
+        notes = (ligne.notes or "").replace('\n', ' ').replace('\r', ' ').strip()
+        
         writer.writerow([
             str(ligne.id),
             category_label,
-            str(ligne.poids_kg),
+            _format_weight(ligne.poids_kg),
             destination_value,
-            ligne.notes or ""
+            notes
         ])
     
     # Préparer la réponse
     csv_content = output.getvalue()
     output.close()
+    
+    # Encoder le contenu CSV en UTF-8 bytes avec BOM (identique aux sessions de caisse)
+    csv_bytes = csv_content.encode('utf-8-sig')  # BOM UTF-8 pour Excel
     
     # Générer un nom de fichier lisible (format similaire aux sessions de caisse)
     # Format: rapport_reception_YYYYMMDD_benevole_{uuid_tronque}_{timestamp}.csv
@@ -372,7 +447,7 @@ def export_ticket_csv(
     benevole_safe = benevole_username.replace(' ', '_').replace('/', '_').replace('\\', '_')[:20]
     
     date_str = ticket.created_at.strftime("%Y%m%d") if ticket.created_at else datetime.utcnow().strftime("%Y%m%d")
-    timestamp = datetime.utcnow().strftime("%H%M%S")
+    timestamp = ticket.created_at.strftime("%H%M%S") if ticket.created_at else datetime.utcnow().strftime("%H%M%S")
     
     # UUID tronqué (8 premiers caractères) pour identifier le ticket
     uuid_short = str(ticket.id).replace('-', '')[:8]
@@ -380,9 +455,12 @@ def export_ticket_csv(
     filename = f"rapport_reception_{date_str}_{benevole_safe}_{uuid_short}_{timestamp}.csv"
     
     return Response(
-        content=csv_content,
-        media_type="text/csv",
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
+        content=csv_bytes,
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f"attachment; filename=\"{filename}\"",
+            "Content-Length": str(len(csv_bytes))
+        }
     )
 
 

@@ -257,13 +257,7 @@ const ReceptionTicketDetail: React.FC = () => {
     if (!id) return
     
     try {
-      const blob = await receptionTicketsService.exportCSV(id)
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `ticket-${id}.csv`
-      a.click()
-      URL.revokeObjectURL(url)
+      await receptionTicketsService.exportCSV(id)
     } catch (err) {
       console.error('Erreur lors du téléchargement du CSV:', err)
       alert('Erreur lors du téléchargement du CSV')
