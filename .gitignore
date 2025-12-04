@@ -105,7 +105,22 @@ Thumbs.db
 
 # Logs
 *.log
+logs/
 .build-meta.env
+
+# Database backups and dumps (B46-P2, B46-P4)
+backups/
+*.dump
+
+# Database files (test databases)
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Temporary export files
+*.csv
+!docs/**/*.csv
 
 # Gemini CLI generated
 frontend/coverage/

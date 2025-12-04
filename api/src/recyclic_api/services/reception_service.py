@@ -230,7 +230,14 @@ class ReceptionService:
         date_to: Optional[datetime] = None,
         benevole_id: Optional[UUID] = None,
         search: Optional[str] = None,
-        include_empty: bool = False
+        include_empty: bool = False,
+        # B45-P2: Filtres avancés
+        poids_min: Optional[float] = None,
+        poids_max: Optional[float] = None,
+        categories: Optional[List[UUID]] = None,
+        destinations: Optional[List[str]] = None,
+        lignes_min: Optional[int] = None,
+        lignes_max: Optional[int] = None,
     ) -> Tuple[List[TicketDepot], int]:
         """Récupérer la liste paginée des tickets avec leurs informations de base."""
         offset = (page - 1) * per_page
@@ -278,6 +285,74 @@ class ReceptionService:
                 .subquery()
             )
             query = query.join(tickets_with_lignes, TicketDepot.id == tickets_with_lignes.c.ticket_id)
+        
+        # B45-P2: Filtres avancés - Poids total (min/max)
+        if poids_min is not None or poids_max is not None:
+            # Calculer le poids total par ticket (somme des poids_kg des lignes)
+            poids_total_subq = (
+                self.db.query(
+                    LigneDepot.ticket_id,
+                    func.sum(LigneDepot.poids_kg).label("total_poids")
+                )
+                .group_by(LigneDepot.ticket_id)
+                .subquery()
+            )
+            query = query.join(poids_total_subq, TicketDepot.id == poids_total_subq.c.ticket_id)
+            
+            if poids_min is not None:
+                query = query.filter(poids_total_subq.c.total_poids >= Decimal(str(poids_min)))
+            if poids_max is not None:
+                query = query.filter(poids_total_subq.c.total_poids <= Decimal(str(poids_max)))
+        
+        # B45-P2: Filtres avancés - Catégories (multi-sélection)
+        if categories and len(categories) > 0:
+            # Filtrer les tickets qui ont au moins une ligne avec une des catégories spécifiées
+            tickets_with_categories = (
+                self.db.query(LigneDepot.ticket_id)
+                .filter(LigneDepot.category_id.in_(categories))
+                .distinct()
+                .subquery()
+            )
+            query = query.join(tickets_with_categories, TicketDepot.id == tickets_with_categories.c.ticket_id)
+        
+        # B45-P2: Filtres avancés - Destinations (multi-sélection)
+        if destinations and len(destinations) > 0:
+            # Convertir les strings en enum Destination
+            dest_enums = []
+            for dest_str in destinations:
+                try:
+                    dest_enums.append(DBLigneDestination(dest_str))
+                except ValueError:
+                    # Ignorer les destinations invalides
+                    continue
+            
+            if dest_enums:
+                # Filtrer les tickets qui ont au moins une ligne avec une des destinations spécifiées
+                tickets_with_destinations = (
+                    self.db.query(LigneDepot.ticket_id)
+                    .filter(LigneDepot.destination.in_(dest_enums))
+                    .distinct()
+                    .subquery()
+                )
+                query = query.join(tickets_with_destinations, TicketDepot.id == tickets_with_destinations.c.ticket_id)
+        
+        # B45-P2: Filtres avancés - Nombre de lignes (min/max)
+        if lignes_min is not None or lignes_max is not None:
+            # Compter le nombre de lignes par ticket
+            lignes_count_subq = (
+                self.db.query(
+                    LigneDepot.ticket_id,
+                    func.count(LigneDepot.id).label("lignes_count")
+                )
+                .group_by(LigneDepot.ticket_id)
+                .subquery()
+            )
+            query = query.join(lignes_count_subq, TicketDepot.id == lignes_count_subq.c.ticket_id)
+            
+            if lignes_min is not None:
+                query = query.filter(lignes_count_subq.c.lignes_count >= lignes_min)
+            if lignes_max is not None:
+                query = query.filter(lignes_count_subq.c.lignes_count <= lignes_max)
         
         # Compter le total
         total = query.count()

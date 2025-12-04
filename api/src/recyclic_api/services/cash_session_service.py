@@ -7,7 +7,7 @@ from recyclic_api.models.cash_session import CashSession, CashSessionStatus
 from recyclic_api.models.cash_register import CashRegister
 from uuid import UUID
 from recyclic_api.models.user import User
-from recyclic_api.models.sale import Sale
+from recyclic_api.models.sale import Sale, PaymentMethod
 from recyclic_api.models.sale_item import SaleItem
 from recyclic_api.schemas.cash_session import CashSessionFilters
 
@@ -210,6 +210,124 @@ class CashSessionService:
                     CashSession.total_items.is_(None)   # Inclure les sessions non calculées
                 )
             )
+
+        # B45-P2: Filtres avancés - Montant (CA total)
+        if getattr(filters, 'amount_min', None) is not None:
+            # Exclure les sessions avec total_sales=None car on ne peut pas les comparer
+            query = query.filter(
+                and_(
+                    CashSession.total_sales.isnot(None),
+                    CashSession.total_sales >= filters.amount_min
+                )
+            )
+        if getattr(filters, 'amount_max', None) is not None:
+            # Exclure les sessions avec total_sales=None car on ne peut pas les comparer
+            query = query.filter(
+                and_(
+                    CashSession.total_sales.isnot(None),
+                    CashSession.total_sales <= filters.amount_max
+                )
+            )
+
+        # B45-P2: Filtres avancés - Variance
+        if getattr(filters, 'variance_threshold', None) is not None:
+            # Filtrer par seuil de variance (valeur absolue)
+            # Exclure les sessions avec variance=None car on ne peut pas les comparer
+            query = query.filter(
+                and_(
+                    CashSession.variance.isnot(None),
+                    func.abs(CashSession.variance) >= filters.variance_threshold
+                )
+            )
+        if getattr(filters, 'variance_has_variance', None) is not None:
+            if filters.variance_has_variance:
+                # Avec variance (non-null et != 0)
+                query = query.filter(
+                    and_(
+                        CashSession.variance.isnot(None),
+                        CashSession.variance != 0.0
+                    )
+                )
+            else:
+                # Sans variance (null ou = 0)
+                query = query.filter(
+                    or_(
+                        CashSession.variance.is_(None),
+                        CashSession.variance == 0.0
+                    )
+                )
+
+        # B45-P2: Filtres avancés - Durée de session
+        if getattr(filters, 'duration_min_hours', None) is not None or getattr(filters, 'duration_max_hours', None) is not None:
+            # Calculer la durée en heures (closed_at - opened_at)
+            # Seulement pour les sessions fermées (closed_at non null)
+            duration_seconds = func.extract('epoch', CashSession.closed_at - CashSession.opened_at)
+            duration_hours = duration_seconds / 3600.0
+            
+            if filters.duration_min_hours is not None:
+                query = query.filter(
+                    and_(
+                        CashSession.closed_at.isnot(None),  # Seulement sessions fermées
+                        duration_hours >= filters.duration_min_hours
+                    )
+                )
+            if filters.duration_max_hours is not None:
+                query = query.filter(
+                    and_(
+                        CashSession.closed_at.isnot(None),  # Seulement sessions fermées
+                        duration_hours <= filters.duration_max_hours
+                    )
+                )
+
+        # B45-P2: Filtres avancés - Méthodes de paiement (multi-sélection)
+        if getattr(filters, 'payment_methods', None) and len(filters.payment_methods) > 0:
+            # Filtrer les sessions qui ont au moins une vente avec une des méthodes de paiement spécifiées
+            # Utiliser EXISTS pour éviter les doublons
+            payment_method_enums = [PaymentMethod(method) for method in filters.payment_methods if method in [pm.value for pm in PaymentMethod]]
+            if payment_method_enums:
+                subquery = (
+                    self.db.query(Sale.id)
+                    .filter(
+                        and_(
+                            Sale.cash_session_id == CashSession.id,
+                            Sale.payment_method.in_(payment_method_enums)
+                        )
+                    )
+                    .exists()
+                )
+                query = query.filter(subquery)
+
+        # B45-P2: Filtres avancés - Présence de don
+        if getattr(filters, 'has_donation', None) is not None:
+            if filters.has_donation:
+                # Avec don (au moins une vente avec donation > 0)
+                subquery = (
+                    self.db.query(Sale.id)
+                    .filter(
+                        and_(
+                            Sale.cash_session_id == CashSession.id,
+                            Sale.donation.isnot(None),
+                            Sale.donation > 0.0
+                        )
+                    )
+                    .exists()
+                )
+                query = query.filter(subquery)
+            else:
+                # Sans don (aucune vente avec donation > 0)
+                # Utiliser NOT EXISTS pour les sessions sans don
+                subquery = (
+                    self.db.query(Sale.id)
+                    .filter(
+                        and_(
+                            Sale.cash_session_id == CashSession.id,
+                            Sale.donation.isnot(None),
+                            Sale.donation > 0.0
+                        )
+                    )
+                    .exists()
+                )
+                query = query.filter(~subquery)
 
         # Compter le total avant la pagination
         total = query.count()

@@ -1,9 +1,11 @@
-import React, { useEffect, useMemo, useState, useCallback } from 'react'
+import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import styled from 'styled-components'
-import { Calendar, Users, Scale, Package, Search, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react'
-import { receptionTicketsService, ReceptionTicketFilters, ReceptionTicketKPIs, ReceptionTicketListItem } from '../../services/receptionTicketsService'
+import { Calendar, Users, Scale, Package, Search, ChevronUp, ChevronDown, ChevronsUpDown, Download, FileSpreadsheet, FileText, FileSpreadsheetIcon } from 'lucide-react'
+import { receptionTicketsService, ReceptionTicketFilters, ReceptionTicketKPIs, ReceptionTicketListItem, receptionTicketFiltersUrl } from '../../services/receptionTicketsService'
 import { getUsers, User } from '../../services/usersService'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import { AdvancedFiltersAccordion, FiltersGridContainer, FilterInput, FilterMultiSelect } from '../../components/Admin/AdvancedFiltersAccordion'
+import axiosClient from '../../api/axiosClient'
 
 type SortField = 'created_at' | 'benevole_username' | 'status' | 'total_lignes' | 'total_poids'
 type SortDirection = 'asc' | 'desc' | null
@@ -12,10 +14,83 @@ const Container = styled.div`
   padding: 24px;
 `
 
+const TitleBar = styled.div`
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+`
+
 const Title = styled.h1`
-  margin: 0 0 20px 0;
+  margin: 0;
   font-size: 1.8rem;
   color: #1f2937;
+`
+
+const Toolbar = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  position: relative;
+`
+
+const Button = styled.button<{ $variant?: 'primary' | 'ghost' }>`
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: ${p => p.$variant === 'ghost' ? '1px solid #e5e7eb' : 'none'};
+  background: ${p => p.$variant === 'ghost' ? '#fff' : '#111827'};
+  color: ${p => p.$variant === 'ghost' ? '#111827' : '#fff'};
+  cursor: pointer;
+  
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+`
+
+const ExportButton = styled(Button)`
+  position: relative;
+`
+
+const DropdownMenu = styled.div<{ $open: boolean }>`
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 4px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  z-index: 1000;
+  display: ${p => p.$open ? 'block' : 'none'};
+  min-width: 180px;
+  overflow: hidden;
+`
+
+const DropdownItem = styled.button`
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 16px;
+  border: none;
+  background: #fff;
+  color: #111827;
+  cursor: pointer;
+  font-size: 0.9rem;
+  text-align: left;
+  
+  &:hover {
+    background: #f3f4f6;
+  }
+  
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
 `
 
 const FiltersBar = styled.div`
@@ -23,6 +98,27 @@ const FiltersBar = styled.div`
   grid-template-columns: repeat(4, minmax(180px, 1fr)) 1fr;
   gap: 12px;
   margin-bottom: 16px;
+`
+
+const SearchActionsRow = styled.div`
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+`
+
+const SearchBox = styled.div`
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+`
+
+const ActionsGroup = styled.div`
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
 `
 
 const Input = styled.input`
@@ -139,23 +235,6 @@ const ActionsCell = styled.div`
   gap: 8px;
 `
 
-const Button = styled.button<{ $variant?: 'primary' | 'ghost' }>`
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  border-radius: 8px;
-  border: ${p => p.$variant === 'ghost' ? '1px solid #e5e7eb' : 'none'};
-  background: ${p => p.$variant === 'ghost' ? '#fff' : '#111827'};
-  color: ${p => p.$variant === 'ghost' ? '#111827' : '#fff'};
-  cursor: pointer;
-  
-  &:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-`
-
 const PaginationContainer = styled.div`
   display: flex;
   align-items: center;
@@ -204,7 +283,13 @@ function formatWeight(value: number): string {
 
 const ReceptionSessionManager: React.FC = () => {
   const navigate = useNavigate()
-  const [filters, setFilters] = useState<ReceptionTicketFilters>({ page: 1, per_page: 20 })
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [filters, setFilters] = useState<ReceptionTicketFilters>(() => {
+    // B45-P2: Charger les filtres depuis l'URL au montage
+    const urlFilters = receptionTicketFiltersUrl.decode(searchParams)
+    // Par défaut, inclure les tickets vides pour voir tous les tickets
+    return { page: 1, per_page: 20, include_empty: true, ...urlFilters }
+  })
   const [kpis, setKpis] = useState<ReceptionTicketKPIs | null>(null)
   const [allTickets, setAllTickets] = useState<ReceptionTicketListItem[]>([]) // Tous les tickets chargés
   const [rows, setRows] = useState<ReceptionTicketListItem[]>([]) // Tickets paginés à afficher
@@ -212,9 +297,13 @@ const ReceptionSessionManager: React.FC = () => {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [benevoles, setBenevoles] = useState<{ id: string, label: string }[]>([])
+  const [categories, setCategories] = useState<{ id: string, name: string }[]>([])
   const [users, setUsers] = useState<User[]>([])
   const [sortField, setSortField] = useState<SortField>('created_at')
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc')
+  const [exportMenuOpen, setExportMenuOpen] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const exportMenuRef = useRef<HTMLDivElement>(null)
 
   // Fonction pour récupérer le nom de l'utilisateur
   const getUserName = useCallback((username: string): string => {
@@ -344,13 +433,17 @@ const ReceptionSessionManager: React.FC = () => {
   useEffect(() => {
     ;(async () => {
       try {
-        const usersData = await getUsers().catch(() => [])
+        const [usersData, categoriesData] = await Promise.all([
+          getUsers().catch(() => []),
+          axiosClient.get('/v1/reception/categories').then(res => res.data || []).catch(() => [])
+        ])
         const benevolesOpts = usersData.map((u) => ({ 
           id: u.id, 
           label: u.full_name || u.first_name || u.username || u.id 
         }))
         setBenevoles(benevolesOpts)
         setUsers(usersData)
+        setCategories(categoriesData.map((c: any) => ({ id: c.id, name: c.name })))
       } catch {}
     })()
   }, [])
@@ -361,6 +454,13 @@ const ReceptionSessionManager: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   
+  // B45-P2: Synchroniser les filtres avec l'URL
+  useEffect(() => {
+    const queryString = receptionTicketFiltersUrl.encode(filters)
+    const newSearchParams = new URLSearchParams(queryString)
+    setSearchParams(newSearchParams, { replace: true })
+  }, [filters, setSearchParams])
+
   // Recharger quand les filtres ou le tri changent (mais pas au montage initial)
   // Note: page et per_page ne déclenchent pas de rechargement car la pagination est côté client
   useEffect(() => {
@@ -369,7 +469,16 @@ const ReceptionSessionManager: React.FC = () => {
     }, 100)
     return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filters.status, filters.benevole_id, filters.search, filters.date_from, filters.date_to, sortField, sortDirection])
+  }, [
+    filters.status, filters.benevole_id, filters.search, 
+    filters.date_from, filters.date_to,
+    // B45-P2: Filtres avancés - utiliser JSON.stringify pour comparer les tableaux
+    filters.poids_min, filters.poids_max, 
+    JSON.stringify(filters.categories || []),
+    JSON.stringify(filters.destinations || []),
+    filters.lignes_min, filters.lignes_max,
+    sortField, sortDirection
+  ])
 
   const onFilterChange = (patch: Partial<ReceptionTicketFilters>) => {
     const next = { ...filters, ...patch, page: 1 } // Reset pagination when filters change
@@ -431,9 +540,61 @@ const ReceptionSessionManager: React.FC = () => {
     }
   }
 
+  // Fermer le menu d'export si on clique ailleurs
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(event.target as Node)) {
+        setExportMenuOpen(false)
+      }
+    }
+    if (exportMenuOpen) {
+      document.addEventListener('mousedown', handleClickOutside)
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+    }
+  }, [exportMenuOpen])
+
+  const handleExport = async (format: 'csv' | 'excel') => {
+    setExportMenuOpen(false)
+    setExporting(true)
+    try {
+      // Préparer les filtres pour l'export (sans pagination)
+      // Formater les dates pour l'API (ISO 8601 avec heure)
+      const exportFilters: ReceptionTicketFilters = {
+        date_from: filters.date_from ? `${filters.date_from}T00:00:00.000Z` : undefined,
+        date_to: filters.date_to ? `${filters.date_to}T23:59:59.999Z` : undefined,
+        status: filters.status,
+        benevole_id: filters.benevole_id,
+        search: filters.search,
+        include_empty: filters.include_empty
+      }
+      
+      await receptionTicketsService.exportBulk(exportFilters, format)
+    } catch (error: any) {
+      console.error('Erreur lors de l\'export:', error)
+      alert(`Erreur lors de l'export: ${error.message || 'Erreur inconnue'}`)
+    } finally {
+      setExporting(false)
+    }
+  }
+
   return (
     <Container>
-      <Title>Sessions de Réception</Title>
+      <TitleBar>
+        <Title>Sessions de Réception</Title>
+        <Toolbar>
+          <Button
+            $variant="ghost"
+            onClick={() => navigate('/admin/import/legacy')}
+            type="button"
+            title="Importer l'historique depuis un CSV nettoyé (template offline)"
+          >
+            <FileSpreadsheetIcon size={16} />
+            <span>Importer CSV legacy</span>
+          </Button>
+        </Toolbar>
+      </TitleBar>
 
       <FiltersBar>
         <Input 
@@ -461,8 +622,8 @@ const ReceptionSessionManager: React.FC = () => {
         </Select>
       </FiltersBar>
 
-      <FiltersBar>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <SearchActionsRow>
+        <SearchBox>
           <Search size={16} />
           <Input 
             placeholder="Recherche (ID ticket ou bénévole)" 
@@ -470,16 +631,89 @@ const ReceptionSessionManager: React.FC = () => {
             onChange={e => onFilterChange({ search: e.target.value || undefined })} 
             onKeyDown={e => e.key === 'Enter' && onApplyFilters()} 
           />
-        </div>
-        <div />
-        <div />
-        <div />
-        <div />
-      </FiltersBar>
+        </SearchBox>
+        <ActionsGroup>
+          <Button onClick={onApplyFilters}>Appliquer les filtres</Button>
+          <Toolbar ref={exportMenuRef}>
+            <ExportButton 
+              onClick={() => setExportMenuOpen(!exportMenuOpen)}
+              disabled={exporting || total === 0}
+              $variant="primary"
+            >
+              <Download size={16} />
+              {exporting ? 'Export en cours...' : 'Exporter (CSV/Excel)'}
+            </ExportButton>
+            <DropdownMenu $open={exportMenuOpen}>
+              <DropdownItem onClick={() => handleExport('csv')} disabled={exporting}>
+                <FileText size={16} />
+                Exporter en CSV
+              </DropdownItem>
+              <DropdownItem onClick={() => handleExport('excel')} disabled={exporting}>
+                <FileSpreadsheet size={16} />
+                Exporter en Excel
+              </DropdownItem>
+            </DropdownMenu>
+          </Toolbar>
+        </ActionsGroup>
+      </SearchActionsRow>
 
-      <div style={{ marginBottom: 8 }}>
-        <Button onClick={onApplyFilters}>Appliquer les filtres</Button>
-      </div>
+      {/* B45-P2: Filtres avancés */}
+      <AdvancedFiltersAccordion title="Filtres Avancés">
+        <FiltersGridContainer>
+          <FilterInput
+            label="Poids minimum (kg)"
+            type="number"
+            value={filters.poids_min}
+            onChange={(v) => onFilterChange({ poids_min: v ? parseFloat(v) : undefined })}
+            placeholder="0.00"
+            min={0}
+            step={0.01}
+          />
+          <FilterInput
+            label="Poids maximum (kg)"
+            type="number"
+            value={filters.poids_max}
+            onChange={(v) => onFilterChange({ poids_max: v ? parseFloat(v) : undefined })}
+            placeholder="0.00"
+            min={0}
+            step={0.01}
+          />
+          <FilterMultiSelect
+            label="Catégories"
+            selected={filters.categories || []}
+            onChange={(selected) => onFilterChange({ categories: selected.length > 0 ? selected : undefined })}
+            options={categories.map(c => ({ value: c.id, label: c.name }))}
+          />
+          <FilterMultiSelect
+            label="Destinations"
+            selected={filters.destinations || []}
+            onChange={(selected) => onFilterChange({ destinations: selected.length > 0 ? selected : undefined })}
+            options={[
+              { value: 'MAGASIN', label: 'Magasin' },
+              { value: 'RECYCLAGE', label: 'Recyclage' },
+              { value: 'DECHETERIE', label: 'Déchetterie' }
+            ]}
+          />
+          <FilterInput
+            label="Nombre minimum de lignes"
+            type="number"
+            value={filters.lignes_min}
+            onChange={(v) => onFilterChange({ lignes_min: v ? parseInt(v, 10) : undefined })}
+            placeholder="0"
+            min={0}
+            step={1}
+          />
+          <FilterInput
+            label="Nombre maximum de lignes"
+            type="number"
+            value={filters.lignes_max}
+            onChange={(v) => onFilterChange({ lignes_max: v ? parseInt(v, 10) : undefined })}
+            placeholder="0"
+            min={0}
+            step={1}
+          />
+        </FiltersGridContainer>
+      </AdvancedFiltersAccordion>
 
       <KPICards>
         <Card>

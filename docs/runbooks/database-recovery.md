@@ -4,9 +4,10 @@
 
 Ce guide détaille les procédures de récupération de la base de données PostgreSQL pour l'application Recyclic. Il couvre tous les scénarios de récupération, des tests simples aux situations de crise.
 
-**Version:** 1.0
+**Version:** 1.1
 **Date:** 2025-01-27
 **Auteur:** James (Dev Agent)
+**Mise à jour:** Ajout de la méthode d'import via UI Admin (B46-P3)
 
 ---
 
@@ -182,6 +183,146 @@ docker-compose logs -f postgres
 # 6. Vérifier une fois la récupération terminée
 docker-compose exec postgres psql -U recyclic -d recyclic -c "SELECT now();"
 ```
+
+### 2.5. Import de Base de Données via Interface Admin (UI)
+
+**Contexte:** Restauration de la base de données via l'interface d'administration web. Méthode recommandée pour les Super-Admins ayant accès à l'interface web.
+
+**Prérequis:**
+- Accès Super-Admin à l'interface web
+- Fichier de sauvegarde au format `.dump` (format binaire PostgreSQL)
+- Taille du fichier < 500MB
+
+**Procédure:**
+
+1. **Accéder à l'interface Admin**
+   - Se connecter en tant que Super-Admin
+   - Naviguer vers `Administration > Settings`
+   - Section "Base de Données"
+
+2. **Sélectionner le fichier de sauvegarde**
+   - Cliquer sur "Import de sauvegarde"
+   - Une modale s'ouvre avec des avertissements de sécurité
+   - Sélectionner le fichier `.dump` à importer
+   - **Important:** Le fichier doit être au format `.dump` (format binaire PostgreSQL)
+
+3. **Confirmer l'import**
+   - Lire attentivement les avertissements
+   - Recopier **"RESTAURER"** dans le champ de confirmation
+   - Cliquer sur "Importer"
+
+4. **Suivre la progression**
+   - L'interface affiche la progression de l'import
+   - L'opération peut prendre plusieurs minutes selon la taille du fichier
+   - Un message de succès s'affiche une fois l'import terminé
+
+**Sécurité et Sauvegarde Automatique:**
+- Un backup automatique est créé dans `/backups` avant l'import
+- Format: `pre_restore_YYYYMMDD_HHMMSS.dump`
+- Ce backup permet de restaurer l'état précédent en cas d'échec
+
+**Validation du Fichier:**
+- Le système valide automatiquement le fichier avec `pg_restore --list` avant l'import
+- Seuls les fichiers `.dump` valides sont acceptés
+- Les fichiers corrompus ou invalides sont rejetés avec un message d'erreur clair
+
+**Audit et Traçabilité:**
+- Chaque import (réussi ou échoué) est enregistré dans le journal d'audit (`audit_logs`)
+- Détails enregistrés: utilisateur, nom du fichier, taille, durée d'exécution, résultat
+- Consultation possible via l'interface Admin > Audit Logs
+
+### 2.6. Rollback en Cas d'Échec UI (Restauration Manuelle)
+
+**Contexte:** Si l'import via UI échoue ou si la base de données est dans un état incohérent après l'import, une restauration manuelle est nécessaire.
+
+**Symptômes:**
+- Erreur lors de l'import via UI
+- Base de données corrompue après import
+- Services API/Bot/Frontend ne démarrent pas correctement
+
+**Procédure de Rollback:**
+
+1. **Identifier le backup de sécurité**
+   - Le backup automatique est créé dans `/backups` (volume monté)
+   - Format: `pre_restore_YYYYMMDD_HHMMSS.dump`
+   - Lister les backups disponibles:
+   ```bash
+   docker-compose exec api ls -lh /backups/pre_restore_*.dump
+   ```
+
+2. **Arrêter les services dépendants**
+   ```bash
+   docker-compose stop api bot frontend
+   ```
+
+3. **Restaurer depuis le backup de sécurité**
+   ```bash
+   # Identifier le backup le plus récent
+   BACKUP_FILE=$(docker-compose exec -T api ls -t /backups/pre_restore_*.dump | head -1)
+   
+   # Restaurer via pg_restore
+   docker-compose exec -T postgres pg_restore \
+     -U recyclic \
+     -d recyclic \
+     --clean \
+     --if-exists \
+     --no-owner \
+     --no-privileges \
+     < "$BACKUP_FILE"
+   ```
+
+   **Alternative avec fichier local:**
+   ```bash
+   # Si le backup est accessible localement
+   docker-compose exec -T postgres pg_restore \
+     -U recyclic \
+     -d recyclic \
+     --clean \
+     --if-exists \
+     --no-owner \
+     --no-privileges \
+     /backups/pre_restore_YYYYMMDD_HHMMSS.dump
+   ```
+
+4. **Vérifier la restauration**
+   ```bash
+   # Vérifier la connexion
+   docker-compose exec postgres psql -U recyclic -d recyclic -c "SELECT COUNT(*) FROM users;"
+   
+   # Vérifier l'intégrité des tables principales
+   docker-compose exec postgres psql -U recyclic -d recyclic -c "
+   SELECT tablename, n_live_tup 
+   FROM pg_stat_user_tables 
+   ORDER BY tablename;"
+   ```
+
+5. **Redémarrer les services**
+   ```bash
+   docker-compose start api bot frontend
+   
+   # Vérifier que les services démarrent correctement
+   docker-compose ps
+   docker-compose logs api | tail -20
+   ```
+
+6. **Valider le fonctionnement**
+   ```bash
+   # Tester l'API
+   curl -f http://localhost:8000/health
+   
+   # Tester l'interface web
+   curl -f http://localhost:4444
+   ```
+
+**En Cas d'Échec du Rollback:**
+- Si le backup de sécurité est également corrompu, utiliser une sauvegarde plus ancienne
+- Consulter les logs d'audit pour identifier la cause de l'échec
+- Suivre la procédure 2.3 (Récupération après Perte Complète) si nécessaire
+
+**Prévention:**
+- Toujours vérifier l'intégrité du fichier `.dump` avant l'import
+- Tester l'import sur un environnement de staging avant la production
+- Conserver plusieurs backups de sécurité (quotidiens, hebdomadaires)
 
 ---
 

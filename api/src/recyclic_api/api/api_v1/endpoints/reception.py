@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query, Response, Body, Request
 from sqlalchemy.orm import Session
 from uuid import UUID
-from typing import Optional
+from typing import Optional, List
 from datetime import date, datetime
 import csv
 import io
@@ -202,6 +202,13 @@ def get_tickets(
     benevole_id: Optional[str] = Query(None, description="ID du bénévole"),
     search: Optional[str] = Query(None, description="Recherche textuelle (ID ticket ou nom bénévole)"),
     include_empty: bool = Query(False, description="B44-P4: Inclure les tickets vides (sans lignes)"),
+    # B45-P2: Filtres avancés
+    poids_min: Optional[float] = Query(None, ge=0, description="Poids minimum total du ticket (kg)"),
+    poids_max: Optional[float] = Query(None, ge=0, description="Poids maximum total du ticket (kg)"),
+    categories: Optional[List[str]] = Query(None, description="Catégories (multi-sélection)"),
+    destinations: Optional[List[str]] = Query(None, description="Destinations (multi-sélection)"),
+    lignes_min: Optional[int] = Query(None, ge=0, description="Nombre minimum de lignes"),
+    lignes_max: Optional[int] = Query(None, ge=0, description="Nombre maximum de lignes"),
     db: Session = Depends(get_db),
     current_user=Depends(require_role_strict([UserRole.USER, UserRole.ADMIN, UserRole.SUPER_ADMIN])),
 ):
@@ -217,6 +224,15 @@ def get_tickets(
             from fastapi import HTTPException, status
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="benevole_id invalide")
     
+    # Convertir les catégories en UUIDs
+    category_uuids = None
+    if categories:
+        try:
+            category_uuids = [UUID(cat_id) for cat_id in categories]
+        except ValueError:
+            from fastapi import HTTPException, status
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="categories invalides")
+    
     tickets, total = service.get_tickets_list(
         page=page, 
         per_page=per_page, 
@@ -225,7 +241,13 @@ def get_tickets(
         date_to=date_to,
         benevole_id=benevole_uuid,
         search=search,
-        include_empty=include_empty
+        include_empty=include_empty,
+        poids_min=poids_min,
+        poids_max=poids_max,
+        categories=category_uuids,
+        destinations=destinations,
+        lignes_min=lignes_min,
+        lignes_max=lignes_max,
     )
     
     # Calculer les totaux pour chaque ticket

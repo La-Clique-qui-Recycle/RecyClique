@@ -40,6 +40,7 @@ class AuditActionType(str, enum.Enum):
     SYSTEM_CONFIG_CHANGED = "system_config_changed"
     DATA_EXPORTED = "data_exported"
     BACKUP_CREATED = "backup_created"
+    DB_IMPORT = "db_import"
 
 class AuditLog(Base):
     """Journal d'audit centralisé pour toutes les actions importantes"""

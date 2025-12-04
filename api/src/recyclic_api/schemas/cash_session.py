@@ -138,7 +138,9 @@ class CashSessionListResponse(BaseModel):
 class CashSessionFilters(BaseModel):
     """Schéma pour les filtres de recherche des sessions."""
     skip: int = Field(0, ge=0, description="Nombre de sessions à ignorer")
-    limit: int = Field(20, ge=1, le=100, description="Nombre maximum de sessions à retourner")
+    # Augmentation de la limite max pour permettre les exports (le=10000 au lieu de 100)
+    # La limite de l'endpoint API REST reste à 100 via Query param
+    limit: int = Field(20, ge=1, le=10000, description="Nombre maximum de sessions à retourner")
     status: Optional[CashSessionStatus] = Field(None, description="Filtrer par statut")
     operator_id: Optional[str] = Field(None, description="Filtrer par opérateur")
     site_id: Optional[str] = Field(None, description="Filtrer par site")
@@ -147,6 +149,15 @@ class CashSessionFilters(BaseModel):
     date_to: Optional[datetime] = Field(None, description="Date de fin")
     search: Optional[str] = Field(None, description="Recherche textuelle (nom opérateur ou ID de session)")
     include_empty: bool = Field(False, description="B44-P3: Inclure les sessions vides (sans transaction) dans les résultats")
+    # B45-P2: Filtres avancés
+    amount_min: Optional[float] = Field(None, ge=0, description="Montant minimum (CA total)")
+    amount_max: Optional[float] = Field(None, ge=0, description="Montant maximum (CA total)")
+    variance_threshold: Optional[float] = Field(None, description="Seuil de variance (écart minimum)")
+    variance_has_variance: Optional[bool] = Field(None, description="Filtrer par présence/absence de variance (true=avec variance, false=sans variance)")
+    duration_min_hours: Optional[float] = Field(None, ge=0, description="Durée minimum de session (en heures)")
+    duration_max_hours: Optional[float] = Field(None, ge=0, description="Durée maximum de session (en heures)")
+    payment_methods: Optional[List[str]] = Field(None, description="Méthodes de paiement (multi-sélection)")
+    has_donation: Optional[bool] = Field(None, description="Filtrer par présence de don (true=avec don, false=sans don)")
 
 
 class CashSessionStats(BaseModel):

@@ -7,6 +7,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./backups:/backups
     ports:
       - "5432:5432"
     healthcheck:
@@ -66,11 +67,18 @@ services:
       # Configuration pour les tests
       TEST_DATABASE_URL: postgresql://recyclic:${POSTGRES_PASSWORD}@postgres:5432/recyclic_test
       # TESTING: "true"  # Désactivé - ne doit être activé que lors des tests
+      # Legacy Import - LLM Fallback (B47-P5)
+      LEGACY_IMPORT_LLM_PROVIDER: ${LEGACY_IMPORT_LLM_PROVIDER:-}
+      LEGACY_IMPORT_LLM_MODEL: ${LEGACY_IMPORT_LLM_MODEL:-}
+      LEGACY_IMPORT_LLM_BATCH_SIZE: ${LEGACY_IMPORT_LLM_BATCH_SIZE:-20}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_API_BASE_URL: ${OPENROUTER_API_BASE_URL:-https://openrouter.ai/api/v1}
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:
       - ./api/src:/app/src
       - ./api/tests:/app/tests
+      - ./backups:/backups
     depends_on:
       postgres:
         condition: service_healthy
@@ -132,6 +140,13 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_PORT: 5432
       POSTGRES_DB: recyclic
+      # Legacy Import - LLM Fallback (B47-P5) - pas utilisé directement par Alembic,
+      # mais gardé pour cohérence en cas d'accès à Settings dans les migrations.
+      LEGACY_IMPORT_LLM_PROVIDER: ${LEGACY_IMPORT_LLM_PROVIDER:-}
+      LEGACY_IMPORT_LLM_MODEL: ${LEGACY_IMPORT_LLM_MODEL:-}
+      LEGACY_IMPORT_LLM_BATCH_SIZE: ${LEGACY_IMPORT_LLM_BATCH_SIZE:-20}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_API_BASE_URL: ${OPENROUTER_API_BASE_URL:-https://openrouter.ai/api/v1}
     depends_on:
       postgres:
         condition: service_healthy
@@ -238,6 +253,7 @@ services:
 
 volumes:
   postgres_data:
+  # backups volume is mounted from ./backups directory on host
 
 networks:
   recyclic-network:

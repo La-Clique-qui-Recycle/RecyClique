@@ -12,6 +12,7 @@ vi.mock('../../../services/receptionTicketsService', () => ({
     list: vi.fn(),
     getDetail: vi.fn(),
     exportCSV: vi.fn(),
+    exportBulk: vi.fn(),
   }
 }))
 
@@ -304,6 +305,187 @@ describe('ReceptionSessionManager', () => {
         expect(perPageSelect).toHaveProperty('value', '50')
       }
     })
+  })
+
+  it('renders export button when tickets exist', async () => {
+    render(
+      <MemoryRouter>
+        <ReceptionSessionManager />
+      </MemoryRouter>
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText('Exporter tout')).toBeInTheDocument()
+    })
+  })
+
+  it('disables export button when no tickets', async () => {
+    vi.mocked(receptionTicketsService.list).mockResolvedValue({
+      tickets: [],
+      total: 0,
+      page: 1,
+      per_page: 20,
+      total_pages: 0
+    })
+
+    render(
+      <MemoryRouter>
+        <ReceptionSessionManager />
+      </MemoryRouter>
+    )
+
+    await waitFor(() => {
+      const exportButton = screen.queryByText('Exporter tout')
+      if (exportButton) {
+        expect(exportButton.closest('button')).toBeDisabled()
+      }
+    })
+  })
+
+  it('opens export menu when clicking export button', async () => {
+    render(
+      <MemoryRouter>
+        <ReceptionSessionManager />
+      </MemoryRouter>
+    )
+
+    await waitFor(() => {
+      const exportButton = screen.getByText('Exporter tout')
+      fireEvent.click(exportButton)
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('Exporter en CSV')).toBeInTheDocument()
+      expect(screen.getByText('Exporter en Excel')).toBeInTheDocument()
+    })
+  })
+
+  it('calls exportBulk with CSV format when clicking CSV option', async () => {
+    vi.mocked(receptionTicketsService.exportBulk).mockResolvedValue()
+
+    // Mock window.URL et document pour téléchargement
+    global.URL.createObjectURL = vi.fn(() => 'blob:url')
+    global.URL.revokeObjectURL = vi.fn()
+
+    render(
+      <MemoryRouter>
+        <ReceptionSessionManager />
+      </MemoryRouter>
+    )
+
+    await waitFor(() => {
+      const exportButton = screen.getByText('Exporter tout')
+      fireEvent.click(exportButton)
+    })
+
+    await waitFor(() => {
+      const csvOption = screen.getByText('Exporter en CSV')
+      fireEvent.click(csvOption)
+    })
+
+    await waitFor(() => {
+      expect(receptionTicketsService.exportBulk).toHaveBeenCalledWith(
+        expect.objectContaining({
+          date_from: undefined,
+          date_to: undefined,
+          status: undefined,
+          benevole_id: undefined,
+          search: undefined,
+          include_empty: false
+        }),
+        'csv'
+      )
+    })
+  })
+
+  it('calls exportBulk with Excel format when clicking Excel option', async () => {
+    vi.mocked(receptionTicketsService.exportBulk).mockResolvedValue()
+
+    // Mock window.URL et document pour téléchargement
+    global.URL.createObjectURL = vi.fn(() => 'blob:url')
+    global.URL.revokeObjectURL = vi.fn()
+
+    render(
+      <MemoryRouter>
+        <ReceptionSessionManager />
+      </MemoryRouter>
+    )
+
+    await waitFor(() => {
+      const exportButton = screen.getByText('Exporter tout')
+      fireEvent.click(exportButton)
+    })
+
+    await waitFor(() => {
+      const excelOption = screen.getByText('Exporter en Excel')
+      fireEvent.click(excelOption)
+    })
+
+    await waitFor(() => {
+      expect(receptionTicketsService.exportBulk).toHaveBeenCalledWith(
+        expect.any(Object),
+        'excel'
+      )
+    })
+  })
+
+  it('shows loading state during export', async () => {
+    // Mock exportBulk pour être lent
+    vi.mocked(receptionTicketsService.exportBulk).mockImplementation(
+      () => new Promise(resolve => setTimeout(resolve, 100))
+    )
+
+    render(
+      <MemoryRouter>
+        <ReceptionSessionManager />
+      </MemoryRouter>
+    )
+
+    await waitFor(() => {
+      const exportButton = screen.getByText('Exporter tout')
+      fireEvent.click(exportButton)
+    })
+
+    await waitFor(() => {
+      const csvOption = screen.getByText('Exporter en CSV')
+      fireEvent.click(csvOption)
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('Export en cours...')).toBeInTheDocument()
+    })
+  })
+
+  it('handles export errors', async () => {
+    const mockError = new Error('Export failed')
+    vi.mocked(receptionTicketsService.exportBulk).mockRejectedValue(mockError)
+
+    // Mock window.alert
+    const mockAlert = vi.spyOn(window, 'alert').mockImplementation(() => {})
+
+    render(
+      <MemoryRouter>
+        <ReceptionSessionManager />
+      </MemoryRouter>
+    )
+
+    await waitFor(() => {
+      const exportButton = screen.getByText('Exporter tout')
+      fireEvent.click(exportButton)
+    })
+
+    await waitFor(() => {
+      const csvOption = screen.getByText('Exporter en CSV')
+      fireEvent.click(csvOption)
+    })
+
+    await waitFor(() => {
+      expect(mockAlert).toHaveBeenCalledWith(
+        expect.stringContaining('Erreur lors de l\'export')
+      )
+    })
+
+    mockAlert.mockRestore()
   })
 })
 

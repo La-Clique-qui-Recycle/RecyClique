@@ -27,6 +27,7 @@ from .endpoints import (
     activity_router as activity,
     presets_router as presets,
     transactions_router as transactions,
+    legacy_import_router as legacy_import,
 )
 
 api_router = APIRouter()
@@ -59,4 +60,5 @@ api_router.include_router(webhooks, prefix="/webhooks", tags=["webhooks"])
 api_router.include_router(activity, prefix="/activity", tags=["activity"])
 api_router.include_router(presets, prefix="/presets", tags=["presets"])
 api_router.include_router(transactions, prefix="/transactions", tags=["transactions"])
+api_router.include_router(legacy_import, prefix="/admin", tags=["admin"])
 
