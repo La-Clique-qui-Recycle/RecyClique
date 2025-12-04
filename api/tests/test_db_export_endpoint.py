@@ -36,9 +36,9 @@ class TestDatabaseExportEndpoint:
         # Mock FileResponse pour éviter l'erreur de fichier inexistant
         from fastapi.responses import Response
         mock_file_response.return_value = Response(
-            content=b"SQL content",
-            media_type="application/sql",
-            headers={"content-disposition": "attachment; filename=recyclic_db_export_test.sql"}
+            content=b"Dump content",
+            media_type="application/octet-stream",
+            headers={"content-disposition": "attachment; filename=recyclic_db_export_test.dump"}
         )
 
         # Act
@@ -171,9 +171,9 @@ class TestDatabaseExportEndpoint:
         # Mock FileResponse
         from fastapi.responses import Response
         mock_file_response.return_value = Response(
-            content=b"SQL content",
-            media_type="application/sql",
-            headers={"content-disposition": "attachment; filename=recyclic_db_export_20250101_120000.sql"}
+            content=b"Dump content",
+            media_type="application/octet-stream",
+            headers={"content-disposition": "attachment; filename=recyclic_db_export_20250101_120000.dump"}
         )
 
         # Act
@@ -185,4 +185,12 @@ class TestDatabaseExportEndpoint:
         call_args = mock_file_response.call_args
         filename = call_args.kwargs.get('filename', '')
         assert "recyclic_db_export_" in filename
-        assert ".sql" in filename
+        assert ".dump" in filename
+        # Vérifier que pg_dump utilise le format custom (-F c) et compression (-Z 9)
+        subprocess_call = mock_subprocess.call_args
+        assert subprocess_call is not None
+        cmd_args = subprocess_call[0][0] if subprocess_call[0] else []
+        assert "-F" in cmd_args
+        assert "c" in cmd_args[cmd_args.index("-F") + 1] if "-F" in cmd_args else False
+        assert "-Z" in cmd_args
+        assert "9" in cmd_args[cmd_args.index("-Z") + 1] if "-Z" in cmd_args else False

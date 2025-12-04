@@ -23,6 +23,7 @@ from .setting import Setting
 from .permission import Permission, Group, user_groups, group_permissions
 from .audit_log import AuditLog, AuditActionType
 from .email_log import EmailLog, EmailStatus, EmailType
+from .legacy_category_mapping_cache import LegacyCategoryMappingCache
 
 __all__ = [
     "Base",
@@ -59,4 +60,5 @@ __all__ = [
     "EmailLog",
     "EmailStatus",
     "EmailType",
+    "LegacyCategoryMappingCache",
 ]

@@ -6,7 +6,7 @@ from typing import List
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
 from recyclic_api.utils.report_tokens import generate_download_token, verify_download_token
@@ -18,6 +18,11 @@ from recyclic_api.core.database import get_db
 from recyclic_api.models.cash_session import CashSession
 from recyclic_api.models.user import User, UserRole
 from recyclic_api.schemas.report import ReportEntry, ReportListResponse
+from recyclic_api.schemas.cash_session import CashSessionFilters
+from pydantic import BaseModel, Field
+from typing import Optional, Literal
+from uuid import UUID
+from datetime import datetime
 
 router = APIRouter()
 
@@ -278,6 +283,235 @@ def download_cash_session_report(
         raise HTTPException(status_code=500, detail="Erreur lors de la génération du rapport")
 
 
+# === SCHÉMAS POUR EXPORTS BULK ===
+
+class BulkExportFilters(BaseModel):
+    """Filtres pour export bulk de sessions de caisse."""
+    date_from: Optional[datetime] = None
+    date_to: Optional[datetime] = None
+    status: Optional[str] = None
+    operator_id: Optional[str] = None
+    site_id: Optional[str] = None
+    search: Optional[str] = None
+    include_empty: bool = False
 
 
+class BulkExportRequest(BaseModel):
+    """Requête pour export bulk."""
+    filters: BulkExportFilters
+    format: Literal["csv", "excel"] = Field(..., description="Format d'export: csv ou excel")
+
+
+class BulkReceptionExportFilters(BaseModel):
+    """Filtres pour export bulk de tickets de réception."""
+    date_from: Optional[datetime] = None
+    date_to: Optional[datetime] = None
+    status: Optional[str] = None
+    benevole_id: Optional[str] = None
+    search: Optional[str] = None
+    include_empty: bool = False
+
+
+class BulkReceptionExportRequest(BaseModel):
+    """Requête pour export bulk de tickets de réception."""
+    filters: BulkReceptionExportFilters
+    format: Literal["csv", "excel"] = Field(..., description="Format d'export: csv ou excel")
+
+
+# === ENDPOINTS EXPORTS BULK ===
+
+@conditional_rate_limit("10/minute")
+@router.post(
+    "/cash-sessions/export-bulk",
+    summary="Exporter toutes les sessions de caisse filtrées",
+    description="""
+    Exporte toutes les sessions de caisse correspondant aux filtres en format CSV ou Excel.
+    
+    **Format CSV** : Fichier consolidé avec toutes les sessions (une ligne par session).
+    **Format Excel** : Fichier avec deux onglets :
+    - "Résumé" : Vue synthétique avec totaux
+    - "Détails" : Toutes les informations détaillées
+    
+    **Permissions** : ADMIN ou SUPER_ADMIN uniquement
+    **Limite** : Maximum 10 000 sessions par export
+    """
+)
+def export_bulk_cash_sessions(
+    request_body: BulkExportRequest,
+    request: Request,
+    current_user: User = Depends(require_role_strict([UserRole.ADMIN, UserRole.SUPER_ADMIN])),
+    db: Session = Depends(get_db),
+):
+    """Exporte toutes les sessions de caisse filtrées en CSV ou Excel."""
+    from recyclic_api.services.report_service import (
+        generate_bulk_cash_sessions_csv,
+        generate_bulk_cash_sessions_excel
+    )
+    
+    try:
+        # Créer un objet CashSessionFilters avec limit=10000 pour l'export
+        # On utilise model_construct pour éviter la validation Pydantic qui limite limit à 100
+        filters = CashSessionFilters.model_construct(
+            skip=0,
+            limit=10000,  # Limite de sécurité pour export
+            status=request_body.filters.status,
+            operator_id=request_body.filters.operator_id,
+            site_id=request_body.filters.site_id,
+            date_from=request_body.filters.date_from,
+            date_to=request_body.filters.date_to,
+            search=request_body.filters.search,
+            include_empty=request_body.filters.include_empty
+        )
+        
+        # Générer l'export selon le format
+        if request_body.format == "csv":
+            buffer = generate_bulk_cash_sessions_csv(db, filters)
+            media_type = "text/csv"
+            extension = "csv"
+        else:  # excel
+            buffer = generate_bulk_cash_sessions_excel(db, filters)
+            media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            extension = "xlsx"
+        
+        # Générer le nom de fichier
+        date_str = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        filename = f"export_sessions_caisse_{date_str}.{extension}"
+        
+        log_admin_access(
+            str(current_user.id),
+            current_user.username or "Unknown",
+            "/admin/reports/cash-sessions/export-bulk",
+            success=True,
+        )
+        
+        return StreamingResponse(
+            iter([buffer.getvalue()]),
+            media_type=media_type,
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"'
+            }
+        )
+        
+    except ValueError as e:
+        log_admin_access(
+            str(current_user.id),
+            current_user.username or "Unknown",
+            "/admin/reports/cash-sessions/export-bulk",
+            success=False,
+            error_message=str(e),
+        )
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error generating bulk export: {e}", exc_info=True)
+        log_admin_access(
+            str(current_user.id),
+            current_user.username or "Unknown",
+            "/admin/reports/cash-sessions/export-bulk",
+            success=False,
+            error_message=f"export_generation_failed: {str(e)}",
+        )
+        raise HTTPException(status_code=500, detail="Erreur lors de la génération de l'export")
+
+
+@conditional_rate_limit("10/minute")
+@router.post(
+    "/reception-tickets/export-bulk",
+    summary="Exporter tous les tickets de réception filtrés",
+    description="""
+    Exporte tous les tickets de réception correspondant aux filtres en format CSV ou Excel.
+    
+    **Format CSV** : Fichier consolidé avec tous les tickets (une ligne par ticket).
+    **Format Excel** : Fichier avec deux onglets :
+    - "Résumé" : Vue synthétique avec totaux
+    - "Détails" : Toutes les informations détaillées
+    
+    **Permissions** : ADMIN ou SUPER_ADMIN uniquement
+    **Limite** : Maximum 10 000 tickets par export
+    """
+)
+def export_bulk_reception_tickets(
+    request_body: BulkReceptionExportRequest,
+    request: Request,
+    current_user: User = Depends(require_role_strict([UserRole.ADMIN, UserRole.SUPER_ADMIN])),
+    db: Session = Depends(get_db),
+):
+    """Exporte tous les tickets de réception filtrés en CSV ou Excel."""
+    from recyclic_api.services.report_service import (
+        generate_bulk_reception_tickets_csv,
+        generate_bulk_reception_tickets_excel
+    )
+    
+    try:
+        # Convertir benevole_id en UUID si fourni
+        benevole_uuid = None
+        if request_body.filters.benevole_id:
+            try:
+                benevole_uuid = UUID(request_body.filters.benevole_id)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="benevole_id invalide")
+        
+        # Générer l'export selon le format
+        if request_body.format == "csv":
+            buffer = generate_bulk_reception_tickets_csv(
+                db,
+                status=request_body.filters.status,
+                date_from=request_body.filters.date_from,
+                date_to=request_body.filters.date_to,
+                benevole_id=benevole_uuid,
+                search=request_body.filters.search,
+                include_empty=request_body.filters.include_empty
+            )
+            media_type = "text/csv"
+            extension = "csv"
+        else:  # excel
+            buffer = generate_bulk_reception_tickets_excel(
+                db,
+                status=request_body.filters.status,
+                date_from=request_body.filters.date_from,
+                date_to=request_body.filters.date_to,
+                benevole_id=benevole_uuid,
+                search=request_body.filters.search,
+                include_empty=request_body.filters.include_empty
+            )
+            media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            extension = "xlsx"
+        
+        # Générer le nom de fichier
+        date_str = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        filename = f"export_tickets_reception_{date_str}.{extension}"
+        
+        log_admin_access(
+            str(current_user.id),
+            current_user.username or "Unknown",
+            "/admin/reports/reception-tickets/export-bulk",
+            success=True,
+        )
+        
+        return StreamingResponse(
+            iter([buffer.getvalue()]),
+            media_type=media_type,
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"'
+            }
+        )
+        
+    except ValueError as e:
+        log_admin_access(
+            str(current_user.id),
+            current_user.username or "Unknown",
+            "/admin/reports/reception-tickets/export-bulk",
+            success=False,
+            error_message=str(e),
+        )
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error generating bulk reception export: {e}", exc_info=True)
+        log_admin_access(
+            str(current_user.id),
+            current_user.username or "Unknown",
+            "/admin/reports/reception-tickets/export-bulk",
+            success=False,
+            error_message=f"export_generation_failed: {str(e)}",
+        )
+        raise HTTPException(status_code=500, detail="Erreur lors de la génération de l'export")
 

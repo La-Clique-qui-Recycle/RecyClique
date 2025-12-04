@@ -313,6 +313,15 @@ async def get_cash_sessions(
     date_to: Optional[datetime] = Query(None, description="Date de fin (ISO 8601)"),
     search: Optional[str] = Query(None, description="Recherche textuelle (nom opérateur ou ID de session)"),
     include_empty: bool = Query(False, description="B44-P3: Inclure les sessions vides (sans transaction)"),
+    # B45-P2: Filtres avancés
+    amount_min: Optional[float] = Query(None, ge=0, description="Montant minimum (CA total)"),
+    amount_max: Optional[float] = Query(None, ge=0, description="Montant maximum (CA total)"),
+    variance_threshold: Optional[float] = Query(None, description="Seuil de variance (écart minimum)"),
+    variance_has_variance: Optional[bool] = Query(None, description="Filtrer par présence/absence de variance"),
+    duration_min_hours: Optional[float] = Query(None, ge=0, description="Durée minimum de session (en heures)"),
+    duration_max_hours: Optional[float] = Query(None, ge=0, description="Durée maximum de session (en heures)"),
+    payment_methods: Optional[List[str]] = Query(None, description="Méthodes de paiement (multi-sélection)"),
+    has_donation: Optional[bool] = Query(None, description="Filtrer par présence de don"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role_strict([UserRole.USER, UserRole.ADMIN, UserRole.SUPER_ADMIN]))
 ):
@@ -328,6 +337,14 @@ async def get_cash_sessions(
         date_to=date_to,
         search=search,
         include_empty=include_empty,
+        amount_min=amount_min,
+        amount_max=amount_max,
+        variance_threshold=variance_threshold,
+        variance_has_variance=variance_has_variance,
+        duration_min_hours=duration_min_hours,
+        duration_max_hours=duration_max_hours,
+        payment_methods=payment_methods,
+        has_donation=has_donation,
     )
     
     sessions, total = service.get_sessions_with_filters(filters)

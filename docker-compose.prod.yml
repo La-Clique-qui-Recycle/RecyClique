@@ -66,6 +66,8 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
+    volumes:
+      - ./backups:/backups
     networks:
       - recyclic-prod-network
       - traefik-public

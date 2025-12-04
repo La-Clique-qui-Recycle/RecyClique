@@ -399,22 +399,22 @@ export const adminService = {
 
   /**
    * Exporte la base de données (réservé aux Super-Admins)
-   * Télécharge un fichier SQL de backup de la base de données
+   * Télécharge un fichier .dump (format binaire PostgreSQL) de backup de la base de données
    */
   async exportDatabase(): Promise<void> {
     try {
       // Utiliser axiosClient directement car c'est un téléchargement de fichier
       const response = await axiosClient.post('/v1/admin/db/export', {}, {
         responseType: 'blob', // Important pour recevoir un fichier binaire
-        timeout: 300000, // 5 minutes timeout (export peut être long)
+        timeout: 1200000, // 20 minutes timeout (import peut être long, surtout avec --clean qui supprime les contraintes)
       });
 
-      // Créer un blob à partir de la réponse
-      const blob = new Blob([response.data], { type: 'application/sql' });
+      // Créer un blob à partir de la réponse (format binaire)
+      const blob = new Blob([response.data], { type: 'application/octet-stream' });
 
       // Extraire le nom du fichier depuis les headers
       const contentDisposition = response.headers['content-disposition'];
-      let filename = 'recyclique_db_export.sql';
+      let filename = 'recyclic_db_export.dump';
 
       if (contentDisposition) {
         const filenameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
@@ -509,7 +509,7 @@ export const adminService = {
 
   /**
    * Importe une sauvegarde de base de données (réservé aux Super-Admins)
-   * Remplace la base de données existante par le contenu du fichier SQL
+   * Remplace la base de données existante par le contenu du fichier .dump (format binaire PostgreSQL)
    */
   async importDatabase(file: File): Promise<{ message: string; imported_file: string; backup_created: string; backup_path: string; timestamp: string }> {
     try {
@@ -644,6 +644,167 @@ export const adminService = {
       return response.data;
     } catch (error) {
       console.error('Erreur lors de la réinitialisation du PIN:', error);
+      throw error;
+    }
+  },
+
+  /**
+   * Récupère les logs d'audit pour les imports de base de données
+   */
+  async getDatabaseImportHistory(page: number = 1, pageSize: number = 5): Promise<{
+    entries: Array<{
+      id: string;
+      timestamp: string;
+      actor_username: string | null;
+      description: string;
+      details: {
+        filename?: string;
+        file_size_mb?: number;
+        duration_seconds?: number;
+        success: boolean;
+        error_message?: string;
+        backup_created?: string;
+      };
+    }>;
+    total: number;
+    page: number;
+    page_size: number;
+    total_pages: number;
+  }> {
+    try {
+      const response = await axiosClient.get('/v1/admin/audit-log', {
+        params: {
+          page,
+          page_size: pageSize,
+          action_type: 'db_import'
+        }
+      });
+      return response.data;
+    } catch (error) {
+      console.error('Erreur lors de la récupération de l\'historique des imports:', error);
+      throw error;
+    }
+  },
+
+  /**
+   * Analyse un CSV legacy pour proposer des mappings de catégories
+   * @param file Fichier CSV nettoyé à analyser
+   * @param confidenceThreshold Seuil de confiance pour le fuzzy matching (0-100, optionnel)
+   */
+  async analyzeLegacyImport(
+    file: File,
+    confidenceThreshold?: number
+  ): Promise<{
+    mappings: Record<string, { category_id: string; category_name: string; confidence: number }>;
+    unmapped: string[];
+    statistics: {
+      total_lines: number;
+      valid_lines: number;
+      error_lines: number;
+      unique_categories: number;
+      mapped_categories: number;
+      unmapped_categories: number;
+    };
+    errors: string[];
+  }> {
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      if (confidenceThreshold !== undefined) {
+        formData.append('confidence_threshold', confidenceThreshold.toString());
+      }
+
+      const response = await axiosClient.post('/v1/admin/import/legacy/analyze', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+        timeout: 300000, // 5 minutes timeout
+      });
+
+      return response.data;
+    } catch (error) {
+      console.error('Erreur lors de l\'analyse du CSV legacy:', error);
+      throw error;
+    }
+  },
+
+  /**
+   * Exécute l'import legacy avec le CSV et le fichier de mapping validé
+   * @param csvFile Fichier CSV nettoyé à importer
+   * @param mappingFile Fichier JSON de mapping validé
+   */
+  async executeLegacyImport(
+    csvFile: File,
+    mappingFile: File
+  ): Promise<{
+    report: {
+      postes_created: number;
+      postes_reused: number;
+      tickets_created: number;
+      lignes_imported: number;
+      errors: string[];
+      total_errors: number;
+    };
+    message: string;
+  }> {
+    try {
+      const formData = new FormData();
+      formData.append('csv_file', csvFile);
+      formData.append('mapping_file', mappingFile);
+
+      const response = await axiosClient.post('/v1/admin/import/legacy/execute', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+        timeout: 600000, // 10 minutes timeout pour l'import
+      });
+
+      return response.data;
+    } catch (error) {
+      console.error('Erreur lors de l\'import legacy:', error);
+      throw error;
+    }
+  },
+
+  /**
+   * Télécharge le template CSV offline pour les réceptions
+   * Story B47-P4: Template CSV Offline & Documentation
+   */
+  async downloadReceptionOfflineTemplate(): Promise<void> {
+    try {
+      const response = await axiosClient.get('/v1/admin/templates/reception-offline.csv', {
+        responseType: 'blob',
+      });
+
+      // Créer un blob à partir de la réponse
+      const blob = new Blob([response.data], { type: 'text/csv; charset=utf-8' });
+
+      // Extraire le nom du fichier depuis les headers
+      const contentDisposition = response.headers['content-disposition'];
+      let filename = 'template-reception-offline.csv';
+
+      if (contentDisposition) {
+        const filenameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+        if (filenameMatch && filenameMatch[1]) {
+          filename = filenameMatch[1].replace(/['"]/g, '');
+        }
+      }
+
+      // Créer un lien temporaire et déclencher le téléchargement
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+
+      // Nettoyage
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+
+      console.log(`Template CSV offline téléchargé: ${filename}`);
+    } catch (error) {
+      console.error('Erreur lors du téléchargement du template:', error);
       throw error;
     }
   }

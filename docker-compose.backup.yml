@@ -1,8 +1,7 @@
 # Configuration Docker Compose pour les sauvegardes automatisées
 # Auteur: James (Dev Agent)
 # Date: 2025-01-27
-
-version: '3.8'
+# Mise à jour: 2025-12-03 (correction warnings Docker Compose)
 
 services:
   # Service de sauvegarde PostgreSQL programmé
@@ -65,5 +64,5 @@ volumes:
 
 networks:
   default:
-    external:
-      name: recyclic-network
+    name: recyclic-network
+    external: true

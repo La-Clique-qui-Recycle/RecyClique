@@ -209,6 +209,23 @@ class SavedView(Base):
 
 ## 7. Testing
 
+### ⚠️ CRITIQUE - Leçons Apprises sur les Tests
+
+**Références obligatoires avant de créer les tests** :
+- **[docs/tests-problemes-p5-prevention.md](../tests-problemes-p5-prevention.md)** - Checklist complète de prévention (OBLIGATOIRE avant de créer les tests)
+- **[docs/tests-problemes-brief.md](../tests-problemes-brief.md)** - Résumé des problèmes rencontrés (B42-P2, B42-P3)
+- **[docs/tests-problemes-pattern-analyse.md](../tests-problemes-pattern-analyse.md)** - Analyse des patterns d'échecs
+- **[docs/tests-problemes-QUICK-FIX.md](../tests-problemes-QUICK-FIX.md)** - Corrections rapides
+- **[docs/tests-problemes-guide-agents.md](../tests-problemes-guide-agents.md)** - Guide complet pour agents dev
+
+**Problèmes récurrents à éviter** :
+- Tests non montés dans Docker (vérifier `docker-compose.yml`)
+- Imports incorrects (`import jwt` au lieu de `from jose import jwt`)
+- Node.js WSL incompatible (vérifier version 18+)
+- Tests créés mais jamais exécutés (exécuter immédiatement après création)
+
+**Action immédiate** : Vérifier Docker config, Node.js version, et exécuter les tests après création.
+
 ### Standards de Tests
 
 - **Tests unitaires** : Jest (frontend) + pytest (backend)
