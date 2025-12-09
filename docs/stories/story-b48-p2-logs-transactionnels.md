@@ -1,6 +1,6 @@
 # Story B48-P2: Logs Transactionnels (Monitoring Bug Tickets Fantômes)
 
-**Statut:** Draft  
+**Statut:** Ready for Development  
 **Épopée:** [EPIC-B48 – Améliorations Opérationnelles v1.3.2](../epics/epic-b48-ameliorations-operationnelles-v1.3.2.md)  
 **Module:** Backend API  
 **Priorité:** HAUTE (sécurité/débogage)
@@ -421,6 +421,7 @@ transaction_logger.setLevel(logging.INFO)
 | Date | Version | Description | Author |
 |------|---------|-------------|--------|
 | 2025-12-09 | 1.0 | Création story | Sarah (PO) |
+| 2025-12-09 | 1.1 | Améliorations agent SM (interface consultation logs, format JSON détaillé, logging asynchrone, estimation détaillée) | SM Agent |
 
 ---
 
