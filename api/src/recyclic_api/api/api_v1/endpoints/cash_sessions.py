@@ -1,5 +1,5 @@
 import logging
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -815,13 +815,22 @@ async def get_cash_session_stats(
     date_to: Optional[datetime] = Query(None, description="Date de fin (ISO 8601)"),
     site_id: Optional[str] = Query(None, description="Filtrer par ID de site"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)  # Changed: Allow all authenticated users
+    current_user: User = Depends(get_current_user),  # Changed: Allow all authenticated users
+    response: Response = Response(),
 ):
     """
     Récupère les statistiques des sessions de caisse (KPIs agrégés).
 
     Seuls les administrateurs peuvent voir les statistiques.
+    
+    **⚠️ DEPRECATED:** This endpoint is deprecated. Use `/v1/stats/live` instead.
+    This endpoint will be removed in 3 months (2025-03-09).
     """
+    # Add deprecation headers (Story B48-P7)
+    response.headers["Deprecation"] = "true"
+    response.headers["Sunset"] = "Mon, 09 Mar 2025 00:00:00 GMT"
+    response.headers["Link"] = '</v1/stats/live>; rel="successor-version"'
+    
     service = CashSessionService(db)
 
     stats = service.get_session_stats(date_from=date_from, date_to=date_to, site_id=site_id)

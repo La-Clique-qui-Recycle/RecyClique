@@ -120,6 +120,7 @@ export const CategorySelector: React.FC<CategorySelectorProps> = ({
           data-testid={`category-${category.id}`}
           data-selected={selectedCategory === category.id ? 'true' : 'false'}
           aria-pressed={selectedCategory === category.id}
+          title={category.official_name ? `Dénomination officielle : ${category.official_name}` : undefined}  // Story B48-P5: Tooltip avec nom complet officiel si présent
           aria-label={
             shortcutKeys[category.id]
               ? `Sélectionner la catégorie ${category.name}. Raccourci clavier: ${shortcutKeys[category.id].toUpperCase()}`
@@ -128,7 +129,7 @@ export const CategorySelector: React.FC<CategorySelectorProps> = ({
           style={{ position: 'relative' }}
           tabIndex={-1}
         >
-          <CategoryName>{category.name}</CategoryName>
+          <CategoryName>{category.name}</CategoryName>  {/* Story B48-P5: Nom court/rapide (toujours utilisé) */}
           {category.description && (
             <CategoryDescription>{category.description}</CategoryDescription>
           )}

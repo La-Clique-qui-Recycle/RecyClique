@@ -33,7 +33,9 @@ import {
   IconDownload,
   IconFileTypePdf,
   IconFileSpreadsheet,
-  IconFileTypeCsv
+  IconFileTypeCsv,
+  IconArchive,
+  IconRestore
 } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 import { Category, categoryService } from '../../services/categoryService';
@@ -54,12 +56,13 @@ const AdminCategories: React.FC = () => {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [deleteExisting, setDeleteExisting] = useState(false);
   const [executeErrors, setExecuteErrors] = useState<string[]>([]);
+  const [includeArchived, setIncludeArchived] = useState(false); // Story B48-P1: Toggle pour afficher les éléments archivés
 
   const fetchCategories = async () => {
     setLoading(true);
     setError(null);
     try {
-      const data = await categoryService.getCategories();
+      const data = await categoryService.getCategories(undefined, includeArchived);
       setCategories(data);
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Erreur lors du chargement des catégories');
@@ -75,7 +78,7 @@ const AdminCategories: React.FC = () => {
 
   useEffect(() => {
     fetchCategories();
-  }, []);
+  }, [includeArchived]); // Story B48-P1: Recharger quand le toggle change
 
   // Déplier par défaut toutes les catégories racines
   useEffect(() => {
@@ -168,7 +171,33 @@ const AdminCategories: React.FC = () => {
     }
   };
 
-  const handleSubmit = async (data: { name: string; parent_id?: string | null; price?: number | null; max_price?: number | null }) => {
+  // Story B48-P1: Restaurer une catégorie archivée
+  const handleRestore = async (category: Category) => {
+    try {
+      await categoryService.restoreCategory(category.id);
+      notifications.show({
+        title: 'Succès',
+        message: 'Catégorie restaurée avec succès',
+        color: 'green',
+      });
+      fetchCategories();
+    } catch (err: any) {
+      const errorDetail = err.response?.data?.detail;
+      let errorMessage = 'Impossible de restaurer la catégorie';
+      if (typeof errorDetail === 'string') {
+        errorMessage = errorDetail;
+      } else if (errorDetail?.detail) {
+        errorMessage = errorDetail.detail;
+      }
+      notifications.show({
+        title: 'Erreur',
+        message: errorMessage,
+        color: 'red',
+      });
+    }
+  };
+
+  const handleSubmit = async (data: { name: string; official_name?: string | null; parent_id?: string | null; price?: number | null; max_price?: number | null }) => {
     try {
       if (editingCategory) {
         await categoryService.updateCategory(editingCategory.id, data);
@@ -276,7 +305,8 @@ const AdminCategories: React.FC = () => {
   const CategoryTreeItem: React.FC<{
     category: Category & { children: Category[] };
     level: number;
-  }> = ({ category, level }) => {
+    includeArchived: boolean;
+  }> = ({ category, level, includeArchived }) => {
     const isExpanded = expandedCategories.has(category.id);
     const hasChildren = category.children.length > 0;
     const indent = level * 20;
@@ -297,16 +327,56 @@ const AdminCategories: React.FC = () => {
                 </ActionIcon>
               )}
               {!hasChildren && <Box w={20} />}
-              <Text size="sm" fw={level === 0 ? 600 : 400}>
+              {/* Story B48-P1: Icône archive pour catégories archivées */}
+              {category.deleted_at && (
+                <IconArchive size={16} style={{ color: 'var(--mantine-color-gray-6)' }} />
+              )}
+              <Text 
+                size="sm" 
+                fw={level === 0 ? 600 : 400}
+                style={{ 
+                  opacity: category.deleted_at ? 0.6 : 1,
+                  fontStyle: category.deleted_at ? 'italic' : 'normal',
+                  color: category.deleted_at ? 'var(--mantine-color-gray-6)' : undefined
+                }}
+                title={category.official_name ? `Dénomination officielle : ${category.official_name}` : undefined}
+              >
+                {/* Story B48-P5: Nom court/rapide (toujours utilisé) */}
                 {category.name}
               </Text>
             </Group>
           </td>
           <td>
-            <Badge color={category.is_active ? 'green' : 'gray'}>
-              {category.is_active ? 'Actif' : 'Inactif'}
-            </Badge>
+            <Text 
+              size="xs" 
+              c="dimmed"
+              style={{ 
+                opacity: category.deleted_at ? 0.6 : 1,
+                fontStyle: category.deleted_at ? 'italic' : 'normal'
+              }}
+              title={category.official_name ? `Dénomination officielle : ${category.official_name}` : undefined}
+            >
+              {category.official_name || '-'}  {/* Story B48-P5: Nom complet officiel (optionnel) */}
+            </Text>
           </td>
+          {/* Story B48-P1: Colonne date d'archivage - affichée uniquement si includeArchived */}
+          {includeArchived && (
+            <td>
+              {category.deleted_at ? (
+                <Text size="xs" c="dimmed">
+                  {new Date(category.deleted_at).toLocaleDateString('fr-FR', {
+                    year: 'numeric',
+                    month: 'short',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                  })}
+                </Text>
+              ) : (
+                <Text size="xs" c="dimmed">—</Text>
+              )}
+            </td>
+          )}
           <td>
             {category.price != null && Number(category.price) !== 0
               ? `${Number(category.price).toFixed(2)} €`
@@ -338,6 +408,7 @@ const AdminCategories: React.FC = () => {
                 key={child.id}
                 category={child}
                 level={level + 1}
+                includeArchived={includeArchived}
               />
             ))}
           </>
@@ -442,11 +513,21 @@ const AdminCategories: React.FC = () => {
           <Tabs.Panel value="management" pt="md">
             <Paper shadow="sm" p="md" withBorder pos="relative">
               <LoadingOverlay visible={loading} />
+              {/* Story B48-P1: Toggle pour afficher les éléments archivés */}
+              <Group mb="md" justify="space-between">
+                <Checkbox
+                  label="Afficher les éléments archivés"
+                  checked={includeArchived}
+                  onChange={(e) => setIncludeArchived(e.currentTarget.checked)}
+                  data-testid="include-archived-toggle"
+                />
+              </Group>
               <Table striped highlightOnHover>
             <thead>
               <tr>
-                <th>Nom</th>
-                <th>Statut</th>
+                <th>Nom d'affichage</th>
+                <th>Nom complet officiel</th>
+                {includeArchived && <th>Date d'archivage</th>}
                 <th>Prix minimum</th>
                 <th>Prix maximum</th>
                 <th>Actions</th>
@@ -459,11 +540,12 @@ const AdminCategories: React.FC = () => {
                     key={category.id}
                     category={category}
                     level={0}
+                    includeArchived={includeArchived}
                   />
                 ))
               ) : (
                 <tr>
-                  <td colSpan={3}>
+                  <td colSpan={includeArchived ? 6 : 5}>
                     <Text ta="center" c="dimmed">
                       Aucune catégorie trouvée
                     </Text>
@@ -499,22 +581,89 @@ const AdminCategories: React.FC = () => {
         onClose={() => setModalOpen(false)}
         title={editingCategory ? 'Modifier la catégorie' : 'Nouvelle catégorie'}
       >
-        <CategoryForm
-          category={editingCategory}
-          onSubmit={handleSubmit}
-          onCancel={() => setModalOpen(false)}
-          onDelete={async () => {
-            if (!editingCategory) return;
-            try {
-              await categoryService.hardDeleteCategory(editingCategory.id);
-              setCategories(prev => prev.filter(c => c.id !== editingCategory.id));
-              notifications.show({ title: 'Supprimée', message: 'Catégorie supprimée définitivement', color: 'green' });
-              setModalOpen(false);
-            } catch (e: any) {
-              notifications.show({ title: 'Erreur', message: e?.response?.data?.detail || 'Suppression échouée', color: 'red' });
-            }
-          }}
-        />
+        <Stack>
+          {/* Story B48-P1: Bouton Restaurer pour catégories archivées */}
+          {editingCategory?.deleted_at && (
+            <Alert color="blue" icon={<IconArchive size={16} />}>
+              <Group justify="space-between">
+                <div>
+                  <Text size="sm" fw={500}>Cette catégorie est archivée</Text>
+                  <Text size="xs" c="dimmed">
+                    Archivée le {new Date(editingCategory.deleted_at).toLocaleDateString('fr-FR', {
+                      year: 'numeric',
+                      month: 'long',
+                      day: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit'
+                    })}
+                  </Text>
+                </div>
+                <Button
+                  leftSection={<IconRestore size={16} />}
+                  variant="light"
+                  color="blue"
+                  onClick={async () => {
+                    if (!editingCategory) return;
+                    if (window.confirm('Êtes-vous sûr de vouloir restaurer cette catégorie ?')) {
+                      await handleRestore(editingCategory);
+                      setModalOpen(false);
+                    }
+                  }}
+                  data-testid="restore-category-button"
+                >
+                  Restaurer
+                </Button>
+              </Group>
+            </Alert>
+          )}
+          <CategoryForm
+            category={editingCategory}
+            onSubmit={handleSubmit}
+            onCancel={() => setModalOpen(false)}
+            onDelete={async () => {
+              if (!editingCategory) return;
+              let hasUsage = true; // Default to true to be safe
+              try {
+                // Check if category has usage to decide between hard delete and soft delete
+                const usage = await categoryService.checkCategoryUsage(editingCategory.id);
+                hasUsage = usage.has_usage;
+                
+                if (!usage.has_usage) {
+                  // No usage: hard delete (permanent deletion)
+                  await categoryService.hardDeleteCategory(editingCategory.id);
+                  notifications.show({ 
+                    title: 'Catégorie supprimée', 
+                    message: 'La catégorie a été supprimée définitivement car elle n\'était utilisée nulle part.', 
+                    color: 'green' 
+                  });
+                } else {
+                  // Has usage: soft delete (archive)
+                  await categoryService.deleteCategory(editingCategory.id);
+                  notifications.show({ 
+                    title: 'Catégorie archivée', 
+                    message: 'La catégorie a été archivée. Elle est masquée des sélecteurs mais reste disponible dans l\'historique.', 
+                    color: 'green' 
+                  });
+                }
+                setModalOpen(false);
+                fetchCategories(); // Recharger pour mettre à jour l'affichage
+              } catch (e: any) {
+                const errorDetail = e?.response?.data?.detail;
+                let errorMessage = hasUsage ? 'Archivage échoué' : 'Suppression échouée';
+                if (typeof errorDetail === 'string') {
+                  errorMessage = errorDetail;
+                } else if (errorDetail?.detail) {
+                  errorMessage = errorDetail.detail;
+                }
+                notifications.show({ 
+                  title: 'Erreur', 
+                  message: errorMessage, 
+                  color: 'red' 
+                });
+              }
+            }}
+          />
+        </Stack>
       </Modal>
 
       <Modal

@@ -2,7 +2,8 @@ import api from './api';
 
 export interface Category {
   id: string;
-  name: string;
+  name: string;  // Story B48-P5: Nom court/rapide (toujours utilisé pour l'affichage)
+  official_name?: string | null;  // Story B48-P5: Nom complet officiel (optionnel, pour tooltips)
   is_active: boolean;
   parent_id?: string | null;
   price?: number | null;
@@ -12,10 +13,12 @@ export interface Category {
   shortcut_key?: string | null;
   created_at: string;
   updated_at: string;
+  deleted_at?: string | null; // Story B48-P1: Soft delete timestamp
 }
 
 export interface CategoryCreate {
-  name: string;
+  name: string;  // Story B48-P5: Nom court/rapide (obligatoire)
+  official_name?: string | null;  // Story B48-P5: Nom complet officiel (optionnel)
   parent_id?: string | null;
   price?: number | null;
   max_price?: number | null;
@@ -25,7 +28,8 @@ export interface CategoryCreate {
 }
 
 export interface CategoryUpdate {
-  name?: string;
+  name?: string;  // Story B48-P5: Nom court/rapide
+  official_name?: string | null;  // Story B48-P5: Nom complet officiel (optionnel)
   is_active?: boolean;
   parent_id?: string | null;
   price?: number | null;
@@ -42,9 +46,12 @@ class CategoryService {
   /**
    * Get all categories
    * @param isActive - Optional filter by active status
+   * @param includeArchived - Story B48-P1: Include archived categories (deleted_at IS NOT NULL)
    */
-  async getCategories(isActive?: boolean): Promise<Category[]> {
-    const params = isActive !== undefined ? { is_active: isActive } : {};
+  async getCategories(isActive?: boolean, includeArchived?: boolean): Promise<Category[]> {
+    const params: any = {};
+    if (isActive !== undefined) params.is_active = isActive;
+    if (includeArchived !== undefined) params.include_archived = includeArchived;
     const response = await api.get('/v1/categories/', { params });
     return response.data;
   }
@@ -96,10 +103,27 @@ class CategoryService {
   }
 
   /**
+   * Story B48-P1: Restore a soft-deleted category (sets deleted_at to null)
+   */
+  async restoreCategory(id: string): Promise<Category> {
+    const response = await api.post(`/v1/categories/${id}/restore`);
+    return response.data;
+  }
+
+  /**
    * Get direct children of a category
    */
   async getCategoryChildren(id: string): Promise<Category[]> {
     const response = await api.get(`/v1/categories/${id}/children`);
+    return response.data;
+  }
+
+  /**
+   * Check if a category has any usage (transactions, preset buttons, children)
+   * Returns true if category can be safely hard-deleted (no usage)
+   */
+  async checkCategoryUsage(id: string): Promise<{ has_usage: boolean; can_hard_delete: boolean }> {
+    const response = await api.get(`/v1/categories/${id}/has-usage`);
     return response.data;
   }
 

@@ -13,6 +13,7 @@ from recyclic_api.models.sale_item import SaleItem
 from recyclic_api.models.cash_session import CashSession
 from recyclic_api.models.user import User, UserRole
 from recyclic_api.schemas.sale import SaleResponse, SaleCreate, SaleUpdate
+from recyclic_api.core.logging import log_transaction_event
 
 router = APIRouter()
 auth_scheme = HTTPBearer(auto_error=False)
@@ -184,5 +185,39 @@ async def create_sale(
         cash_session.current_amount = cash_session.initial_amount + cash_session.total_sales
 
         db.commit()
+    
+    # B48-P2: Logger la validation paiement
+    # Construire l'état du panier AVANT validation (items reçus dans la requête)
+    cart_state_before = {
+        "items_count": len(sale_data.items),
+        "items": [
+            {
+                "id": f"item-{idx}",
+                "category": item.category,
+                "weight": item.weight,
+                "price": item.total_price
+            }
+            for idx, item in enumerate(sale_data.items)
+        ],
+        "total": sale_data.total_amount
+    }
+    
+    # État du panier APRÈS validation (devrait être vide car le frontend vide le panier après succès)
+    cart_state_after = {
+        "items_count": 0,
+        "items": [],
+        "total": 0.0
+    }
+    
+    log_transaction_event("PAYMENT_VALIDATED", {
+        "user_id": str(user_id),
+        "session_id": str(sale_data.cash_session_id),
+        "transaction_id": str(db_sale.id),
+        "cart_state_before": cart_state_before,
+        "cart_state_after": cart_state_after,
+        "payment_method": sale_data.payment_method.value if hasattr(sale_data.payment_method, 'value') else str(sale_data.payment_method),
+        "amount": float(sale_data.total_amount)
+    })
+    
     db.refresh(db_sale)
     return db_sale

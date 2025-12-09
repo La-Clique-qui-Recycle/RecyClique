@@ -3,19 +3,21 @@ Statistics and analytics endpoints.
 """
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
-from typing import Optional, List
+from typing import Optional, List, Literal
 from datetime import date, datetime
 import logging
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from recyclic_api.core.database import get_db
-from recyclic_api.core.auth import get_current_user, require_admin_role
-from recyclic_api.models.user import User
+from recyclic_api.core.auth import get_current_user, require_admin_role, require_role_strict
+from recyclic_api.models.user import User, UserRole
 from recyclic_api.services.stats_service import StatsService
+from recyclic_api.services.reception_stats_service import ReceptionLiveStatsService
 from recyclic_api.schemas.stats import (
     ReceptionSummaryStats,
     CategoryStats,
+    UnifiedLiveStatsResponse,
 )
 
 router = APIRouter(tags=["stats"])
@@ -111,3 +113,34 @@ def get_reception_by_category(
         start_date=start_date,
         end_date=end_date
     )
+
+
+@router.get("/live", response_model=UnifiedLiveStatsResponse)
+async def get_unified_live_stats(
+    period_type: Literal["24h", "daily"] = Query("daily", description="Type de période (daily=minuit-minuit, 24h=24h glissantes)"),
+    site_id: Optional[str] = Query(None, description="Filtrer par ID de site (optionnel)"),
+    db: Session = Depends(get_db),
+    current_user=Depends(require_role_strict([UserRole.ADMIN, UserRole.SUPER_ADMIN])),
+):
+    """
+    Get unified live statistics for all modules (caisse + réception).
+    
+    Returns consistent KPIs with same period (daily by default).
+    
+    **Stats incluses :**
+    - Caisse : tickets_count, last_ticket_amount, ca, donations, weight_out_sales
+    - Réception : tickets_open, tickets_closed_24h, items_received
+    - Matière : weight_in (entrées), weight_out (sorties)
+    
+    **Période :**
+    - `daily` (défaut) : Journée complète (minuit-minuit UTC)
+    - `24h` : 24 heures glissantes (rétrocompatibilité)
+    
+    **Permissions :** Admin ou Super Admin uniquement
+    """
+    service = ReceptionLiveStatsService(db)
+    stats = await service.get_unified_live_stats(
+        period_type=period_type,
+        site_id=site_id
+    )
+    return UnifiedLiveStatsResponse(**stats)

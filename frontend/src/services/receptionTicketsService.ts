@@ -9,6 +9,10 @@ export interface ReceptionTicketListItem {
   status: 'open' | 'closed'
   total_lignes: number
   total_poids: number
+  // B48-P6: Répartition des poids par flux
+  poids_entree: number
+  poids_direct: number
+  poids_sortie: number
 }
 
 export interface ReceptionTicketListResponse {
@@ -53,6 +57,7 @@ export interface LigneResponse {
   poids_kg: number
   destination?: string
   notes?: string
+  is_exit?: boolean
 }
 
 export interface ReceptionTicketDetail {
