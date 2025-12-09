@@ -289,3 +289,8 @@ class TestReceptionStatsDeferred:
         # Verify that both normal tickets are included
         assert stats["tickets_open"] == 2, "Should count both normal tickets"
 
+
+
+
+
+

@@ -34,7 +34,16 @@ class LegacyImportStatistics(BaseModel):
     unique_categories: int
     mapped_categories: int
     unmapped_categories: int
+    # Statistiques LLM enrichies (B47-P6)
+    llm_attempted: bool = False
+    llm_model_used: Optional[str] = None
+    llm_batches_total: int = 0
+    llm_batches_succeeded: int = 0
+    llm_batches_failed: int = 0
     llm_mapped_categories: int = 0
+    llm_unmapped_after_llm: int = 0
+    llm_last_error: Optional[str] = None
+    llm_avg_confidence: Optional[float] = None
     llm_provider_used: Optional[str] = None
 
 
@@ -61,3 +70,21 @@ class LegacyImportExecuteResponse(BaseModel):
     report: ImportReport
     message: str = "Import terminé avec succès"
 
+
+class LLMModelInfo(BaseModel):
+    """Informations sur un modèle LLM OpenRouter disponible pour l'import legacy."""
+
+    id: str
+    name: str
+    provider: Optional[str] = None
+    is_free: bool = False
+    context_length: Optional[int] = None
+    pricing: Optional[Dict[str, str]] = None
+
+
+class LLMModelsResponse(BaseModel):
+    """Réponse de l'endpoint listant les modèles LLM OpenRouter."""
+
+    models: List[LLMModelInfo]
+    error: Optional[str] = None
+    default_model_id: Optional[str] = None

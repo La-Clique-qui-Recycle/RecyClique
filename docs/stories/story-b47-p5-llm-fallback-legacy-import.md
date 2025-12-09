@@ -3,7 +3,7 @@
 **Statut:** Done  
 **Épopée:** [EPIC-B47 – Import Legacy CSV & Template Offline](../epics/epic-b47-import-legacy-csv-template-offline.md)  
 **Module:** Backend API + Frontend Admin  
-**Priorité:** B47-P5  
+**Priorité:** Moyenne  
 
 ---
 

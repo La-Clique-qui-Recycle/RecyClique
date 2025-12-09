@@ -379,3 +379,8 @@ Recommandations pour la future story de spécification :
   - Prioriser B46-P1 pour définir un flux unique, sûr et aligné sur les scripts d’ops et les règles projet.
 
 
+
+
+
+
+

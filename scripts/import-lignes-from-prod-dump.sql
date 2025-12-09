@@ -7,3 +7,8 @@
 -- Copier les données de ligne_depot depuis le dump
 COPY public.ligne_depot (id, ticket_id, poids_kg, notes, destination, category_id) FROM stdin;
 
+
+
+
+
+

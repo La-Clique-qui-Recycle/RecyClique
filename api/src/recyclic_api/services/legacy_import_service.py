@@ -86,6 +86,22 @@ class LegacyImportService:
 
         return OpenRouterCategoryMappingClient()
 
+    def _build_llm_client_with_model(self, model_id: str) -> Optional[LLMCategoryMappingClient]:
+        """
+        Construit un client LLM avec un modèle spécifique (override).
+
+        Args:
+            model_id: ID du modèle LLM à utiliser (ex: "mistralai/mistral-7b-instruct:free")
+
+        Returns:
+            Client LLM configuré avec le modèle spécifié, ou None si le provider n'est pas configuré
+        """
+        provider = (settings.LEGACY_IMPORT_LLM_PROVIDER or "").strip().lower()
+        if provider != "openrouter":
+            return None
+
+        return OpenRouterCategoryMappingClient(model=model_id)
+
     def _get_cached_mapping(self, source_name: str) -> Optional[CategoryMappingLike]:
         """
         Récupère un mapping depuis le cache persistant si disponible.
@@ -344,19 +360,45 @@ class LegacyImportService:
 
     # ---------- Analyze ----------
 
-    def analyze(self, file_bytes: bytes, confidence_threshold: float | None = None) -> Dict[str, Any]:
+    def analyze(
+        self,
+        file_bytes: bytes,
+        confidence_threshold: float | None = None,
+        llm_model_override: str | None = None,
+    ) -> Dict[str, Any]:
         """
         Analyse le CSV et propose des mappings de catégories.
         
         Args:
             file_bytes: Contenu du fichier CSV
             confidence_threshold: Seuil de confiance pour le matching (défaut: 80%)
+            llm_model_override: ID du modèle LLM à utiliser (override de la config, optionnel)
         
         Returns:
             Dict avec mappings proposés, catégories non mappables, et statistiques
         """
         if confidence_threshold is None:
             confidence_threshold = self.DEFAULT_CONFIDENCE_THRESHOLD
+
+        # Déterminer le client LLM à utiliser (override ou défaut)
+        llm_client_to_use = self._llm_client
+        llm_model_used: Optional[str] = None
+
+        if llm_model_override:
+            llm_client_to_use = self._build_llm_client_with_model(llm_model_override)
+            llm_model_used = llm_model_override
+            logger.info(
+                "LegacyImport analyze: utilisation du modèle LLM override: %s",
+                llm_model_override,
+            )
+        elif self._llm_client:
+            # Utiliser le modèle de la config par défaut
+            if hasattr(self._llm_client, "_model") and self._llm_client._model:
+                llm_model_used = self._llm_client._model
+            logger.info(
+                "LegacyImport analyze: utilisation du modèle LLM configuré: %s",
+                llm_model_used or "non spécifié",
+            )
         
         # Décoder le CSV
         try:
@@ -436,11 +478,19 @@ class LegacyImportService:
         mappings = mapping_result["mappings"]
         unmapped = mapping_result["unmapped"]
 
+        # Statistiques LLM enrichies (T3)
+        llm_attempted = False
         llm_mapped_count = 0
         llm_provider_used: Optional[str] = None
+        llm_batches_total = 0
+        llm_batches_succeeded = 0
+        llm_batches_failed = 0
+        llm_last_error: Optional[str] = None
+        llm_confidences: List[float] = []
 
         # Fallback LLM optionnel si des catégories restent unmapped
-        if unmapped and self._llm_client is not None:
+        if unmapped and llm_client_to_use is not None:
+            llm_attempted = True
             try:
                 # Travail uniquement sur les catégories uniques déjà collectées
                 known_categories = [c["name"] for c in self._load_categories()]
@@ -451,24 +501,256 @@ class LegacyImportService:
                 remaining_unmapped: List[str] = []
 
                 logger.info(
-                    "LegacyImport analyze: %d catégories unmapped avant LLM (provider=%s, batch_size=%d)",
+                    "LegacyImport analyze: %d catégories unmapped avant LLM (provider=%s, model=%s, batch_size=%d)",
                     len(unmapped),
-                    self._llm_client.provider_name,
+                    llm_client_to_use.provider_name,
+                    llm_model_used or "non spécifié",
                     batch_size,
                 )
 
                 for i in range(0, len(unmapped), batch_size):
                     batch = unmapped[i : i + batch_size]
-                    suggestions = self._llm_client.suggest_mappings(batch, known_categories)
+                    llm_batches_total += 1
+
+                    try:
+                        suggestions = llm_client_to_use.suggest_mappings(batch, known_categories)
+                        llm_batches_succeeded += 1
+
+                        if suggestions:
+                            llm_provider_used = llm_client_to_use.provider_name
+
+                        logger.debug(
+                            "LegacyImport analyze: appel LLM pour batch de %d catégories (exemples=%s)",
+                            len(batch),
+                            batch[:5],
+                        )
+
+                        for source_name in batch:
+                            suggestion = suggestions.get(source_name)
+                            if not suggestion:
+                                remaining_unmapped.append(source_name)
+                                continue
+
+                            target_name = suggestion.get("target_name")
+                            confidence = float(suggestion.get("confidence", 0.0))
+
+                            # Clamp du score dans [0, 100]
+                            if confidence < 0:
+                                confidence = 0.0
+                            if confidence > 100:
+                                confidence = 100.0
+
+                            llm_confidences.append(confidence)
+
+                            # Retrouver la catégorie cible correspondante
+                            target = next(
+                                (c for c in self._load_categories() if c["name"] == target_name),
+                                None,
+                            )
+                            if not target:
+                                remaining_unmapped.append(source_name)
+                                continue
+
+                            mappings[source_name] = {
+                                "category_id": target["id"],
+                                "category_name": target["name"],
+                                "confidence": round(confidence, 2),
+                            }
+                            llm_mapped_count += 1
+
+                            # Stocker dans le cache pour réutilisation future
+                            try:
+                                self._store_mapping_in_cache(
+                                    source_name=source_name,
+                                    target_category_id=UUID(target["id"]),
+                                    provider=llm_client_to_use.provider_name,
+                                    confidence=confidence,
+                                )
+                            except Exception:
+                                # Toute erreur est déjà loggée en interne
+                                pass
+
+                    except Exception as batch_exc:  # noqa: BLE001
+                        llm_batches_failed += 1
+                        error_msg = str(batch_exc)
+                        # Tronquer l'erreur à 200 caractères
+                        if len(error_msg) > 200:
+                            error_msg = error_msg[:200]
+                        llm_last_error = error_msg
+
+                        logger.error(
+                            "LegacyImport analyze: erreur lors du batch LLM %d/%d: %s",
+                            i // batch_size + 1,
+                            (len(unmapped) + batch_size - 1) // batch_size,
+                            batch_exc,
+                            exc_info=True,
+                        )
+                        # En cas d'erreur batch, toutes les catégories du batch restent unmapped
+                        remaining_unmapped.extend(batch)
+
+                logger.info(
+                    "LegacyImport analyze: %d catégories mappées par LLM, %d restantes unmapped "
+                    "(batches: %d réussis, %d échoués)",
+                    llm_mapped_count,
+                    len(remaining_unmapped),
+                    llm_batches_succeeded,
+                    llm_batches_failed,
+                )
+
+                unmapped = remaining_unmapped
+
+            except Exception as exc:  # noqa: BLE001
+                # Best-effort : logguer mais ne pas casser l'analyse
+                error_msg = str(exc)
+                if len(error_msg) > 200:
+                    error_msg = error_msg[:200]
+                llm_last_error = error_msg
+                logger.error(
+                    "Erreur lors du fallback LLM dans LegacyImportService.analyze: %s",
+                    exc,
+                    exc_info=True,
+                )
+                # On conserve simplement la liste `unmapped` issue du fuzzy+cache
+        elif unmapped and llm_client_to_use is None:
+            logger.info(
+                "LegacyImport analyze: %d catégories unmapped mais aucun client LLM configuré (provider ou modèle absent).",
+                len(unmapped),
+            )
+
+        # Calculer la confiance moyenne LLM
+        llm_avg_confidence: Optional[float] = None
+        if llm_confidences:
+            llm_avg_confidence = round(sum(llm_confidences) / len(llm_confidences), 2)
+
+        return {
+            "mappings": mappings,
+            "unmapped": unmapped,
+            "statistics": {
+                "total_lines": total_lines,
+                "valid_lines": len(rows),
+                "error_lines": len(errors),
+                "unique_categories": len(unique_categories),
+                "mapped_categories": len(mappings),
+                "unmapped_categories": len(unmapped),
+                # Statistiques LLM enrichies (T3)
+                "llm_attempted": llm_attempted,
+                "llm_model_used": llm_model_used,
+                "llm_batches_total": llm_batches_total,
+                "llm_batches_succeeded": llm_batches_succeeded,
+                "llm_batches_failed": llm_batches_failed,
+                "llm_mapped_categories": llm_mapped_count,
+                "llm_unmapped_after_llm": len(unmapped),
+                "llm_last_error": llm_last_error,
+                "llm_avg_confidence": llm_avg_confidence,
+                "llm_provider_used": llm_provider_used,
+            },
+            "errors": errors
+        }
+
+    # ---------- LLM-only (relance ciblée) ----------
+
+    def analyze_llm_only(
+        self,
+        unmapped_categories: List[str],
+        llm_model_override: str | None = None,
+    ) -> Dict[str, Any]:
+        """
+        Relance uniquement le LLM sur des catégories spécifiques (sans fuzzy matching).
+
+        Args:
+            unmapped_categories: Liste des catégories à mapper via LLM uniquement
+            llm_model_override: ID du modèle LLM à utiliser (override de la config, optionnel)
+
+        Returns:
+            Dict avec nouveaux mappings LLM proposés + statistiques LLM
+        """
+        if not unmapped_categories:
+            return {
+                "mappings": {},
+                "statistics": {
+                    "llm_attempted": False,
+                    "llm_model_used": None,
+                    "llm_batches_total": 0,
+                    "llm_batches_succeeded": 0,
+                    "llm_batches_failed": 0,
+                    "llm_mapped_categories": 0,
+                    "llm_unmapped_after_llm": 0,
+                    "llm_last_error": None,
+                    "llm_avg_confidence": None,
+                    "llm_provider_used": None,
+                },
+            }
+
+        # Déterminer le client LLM à utiliser (override ou défaut)
+        llm_client_to_use = self._llm_client
+        llm_model_used: Optional[str] = None
+
+        if llm_model_override:
+            llm_client_to_use = self._build_llm_client_with_model(llm_model_override)
+            llm_model_used = llm_model_override
+            logger.info(
+                "LegacyImport analyze_llm_only: utilisation du modèle LLM override: %s",
+                llm_model_override,
+            )
+        elif self._llm_client:
+            if hasattr(self._llm_client, "_model") and self._llm_client._model:
+                llm_model_used = self._llm_client._model
+            logger.info(
+                "LegacyImport analyze_llm_only: utilisation du modèle LLM configuré: %s",
+                llm_model_used or "non spécifié",
+            )
+
+        if llm_client_to_use is None:
+            return {
+                "mappings": {},
+                "statistics": {
+                    "llm_attempted": False,
+                    "llm_model_used": None,
+                    "llm_batches_total": 0,
+                    "llm_batches_succeeded": 0,
+                    "llm_batches_failed": 0,
+                    "llm_mapped_categories": 0,
+                    "llm_unmapped_after_llm": len(unmapped_categories),
+                    "llm_last_error": "Aucun client LLM configuré",
+                    "llm_avg_confidence": None,
+                    "llm_provider_used": None,
+                },
+            }
+
+        # Statistiques LLM
+        llm_attempted = True
+        mappings: Dict[str, Dict[str, Any]] = {}
+        llm_mapped_count = 0
+        llm_provider_used: Optional[str] = None
+        llm_batches_total = 0
+        llm_batches_succeeded = 0
+        llm_batches_failed = 0
+        llm_last_error: Optional[str] = None
+        llm_confidences: List[float] = []
+        remaining_unmapped: List[str] = []
+
+        try:
+            known_categories = [c["name"] for c in self._load_categories()]
+            batch_size = settings.LEGACY_IMPORT_LLM_BATCH_SIZE or 20
+            batch_size = max(1, batch_size)
+
+            logger.info(
+                "LegacyImport analyze_llm_only: %d catégories à mapper via LLM (model=%s, batch_size=%d)",
+                len(unmapped_categories),
+                llm_model_used or "non spécifié",
+                batch_size,
+            )
+
+            for i in range(0, len(unmapped_categories), batch_size):
+                batch = unmapped_categories[i : i + batch_size]
+                llm_batches_total += 1
+
+                try:
+                    suggestions = llm_client_to_use.suggest_mappings(batch, known_categories)
+                    llm_batches_succeeded += 1
 
                     if suggestions:
-                        llm_provider_used = self._llm_client.provider_name
-
-                    logger.debug(
-                        "LegacyImport analyze: appel LLM pour batch de %d catégories (exemples=%s)",
-                        len(batch),
-                        batch[:5],
-                    )
+                        llm_provider_used = llm_client_to_use.provider_name
 
                     for source_name in batch:
                         suggestion = suggestions.get(source_name)
@@ -479,13 +761,13 @@ class LegacyImportService:
                         target_name = suggestion.get("target_name")
                         confidence = float(suggestion.get("confidence", 0.0))
 
-                        # Clamp du score dans [0, 100]
                         if confidence < 0:
                             confidence = 0.0
                         if confidence > 100:
                             confidence = 100.0
 
-                        # Retrouver la catégorie cible correspondante
+                        llm_confidences.append(confidence)
+
                         target = next(
                             (c for c in self._load_categories() if c["name"] == target_name),
                             None,
@@ -501,54 +783,70 @@ class LegacyImportService:
                         }
                         llm_mapped_count += 1
 
-                        # Stocker dans le cache pour réutilisation future
                         try:
                             self._store_mapping_in_cache(
                                 source_name=source_name,
                                 target_category_id=UUID(target["id"]),
-                                provider=self._llm_client.provider_name,
+                                provider=llm_client_to_use.provider_name,
                                 confidence=confidence,
                             )
                         except Exception:
-                            # Toute erreur est déjà loggée en interne
                             pass
 
-                logger.info(
-                    "LegacyImport analyze: %d catégories mappées par LLM, %d restantes unmapped",
-                    llm_mapped_count,
-                    len(remaining_unmapped),
-                )
+                except Exception as batch_exc:  # noqa: BLE001
+                    llm_batches_failed += 1
+                    error_msg = str(batch_exc)
+                    if len(error_msg) > 200:
+                        error_msg = error_msg[:200]
+                    llm_last_error = error_msg
 
-                unmapped = remaining_unmapped
+                    logger.error(
+                        "LegacyImport analyze_llm_only: erreur lors du batch LLM %d: %s",
+                        i // batch_size + 1,
+                        batch_exc,
+                        exc_info=True,
+                    )
+                    remaining_unmapped.extend(batch)
 
-            except Exception as exc:  # noqa: BLE001
-                # Best-effort : logguer mais ne pas casser l'analyse
-                logger.error(
-                    "Erreur lors du fallback LLM dans LegacyImportService.analyze: %s",
-                    exc,
-                    exc_info=True,
-                )
-                # On conserve simplement la liste `unmapped` issue du fuzzy+cache
-        elif unmapped and self._llm_client is None:
             logger.info(
-                "LegacyImport analyze: %d catégories unmapped mais aucun client LLM configuré (provider ou modèle absent).",
-                len(unmapped),
+                "LegacyImport analyze_llm_only: %d catégories mappées par LLM, %d restantes "
+                "(batches: %d réussis, %d échoués)",
+                llm_mapped_count,
+                len(remaining_unmapped),
+                llm_batches_succeeded,
+                llm_batches_failed,
             )
+
+        except Exception as exc:  # noqa: BLE001
+            error_msg = str(exc)
+            if len(error_msg) > 200:
+                error_msg = error_msg[:200]
+            llm_last_error = error_msg
+            logger.error(
+                "Erreur lors de analyze_llm_only: %s",
+                exc,
+                exc_info=True,
+            )
+            remaining_unmapped = unmapped_categories
+
+        llm_avg_confidence: Optional[float] = None
+        if llm_confidences:
+            llm_avg_confidence = round(sum(llm_confidences) / len(llm_confidences), 2)
 
         return {
             "mappings": mappings,
-            "unmapped": unmapped,
             "statistics": {
-                "total_lines": total_lines,
-                "valid_lines": len(rows),
-                "error_lines": len(errors),
-                "unique_categories": len(unique_categories),
-                "mapped_categories": len(mappings),
-                "unmapped_categories": len(unmapped),
+                "llm_attempted": llm_attempted,
+                "llm_model_used": llm_model_used,
+                "llm_batches_total": llm_batches_total,
+                "llm_batches_succeeded": llm_batches_succeeded,
+                "llm_batches_failed": llm_batches_failed,
                 "llm_mapped_categories": llm_mapped_count,
+                "llm_unmapped_after_llm": len(remaining_unmapped),
+                "llm_last_error": llm_last_error,
+                "llm_avg_confidence": llm_avg_confidence,
                 "llm_provider_used": llm_provider_used,
             },
-            "errors": errors
         }
 
     # ---------- Execute ----------

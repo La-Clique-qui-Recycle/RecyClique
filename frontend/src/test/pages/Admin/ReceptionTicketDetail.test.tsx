@@ -232,3 +232,8 @@ describe('ReceptionTicketDetail', () => {
   })
 })
 
+
+
+
+
+
