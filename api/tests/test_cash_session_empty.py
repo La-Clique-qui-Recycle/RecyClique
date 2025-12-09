@@ -278,3 +278,8 @@ class TestEmptySessionEndpoint:
         # Vérifier que la session avec transactions est aussi dans les résultats
         assert str(non_empty_cash_session.id) in session_ids
 
+
+
+
+
+

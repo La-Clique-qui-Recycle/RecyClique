@@ -196,3 +196,8 @@ wsl -e bash -lc "cd /mnt/d/Users/Strophe/Documents/1-IA/La\ Clique\ Qui\ Recycle
 
 
 
+
+
+
+
+

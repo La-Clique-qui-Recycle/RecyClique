@@ -185,3 +185,8 @@ class TestCashSessionStatsDeferred:
         assert stats["open_sessions"] == 1, "Should count open session"
         assert stats["closed_sessions"] == 1, "Should count closed session"
 
+
+
+
+
+

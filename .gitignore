@@ -132,3 +132,14 @@ test_reception_api.js
 
 # other datas
 /docs/photos_imports/*
+
+# Meeting transcriptions (BMAD Workflow)
+# Ignorer les fichiers audio et transcriptions, mais garder la structure
+meetings/**/*.mp3
+meetings/**/*.wav
+meetings/**/*.m4a
+meetings/**/*.flac
+meetings/**/*.ogg
+meetings/**/transcriptions/*.json
+meetings/**/logs/*.log
+meetings/**/state.json

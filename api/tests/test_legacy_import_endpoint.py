@@ -96,6 +96,34 @@ class TestLegacyImportAnalyzeEndpoint:
         
         assert r.status_code == 200
 
+    def test_analyze_with_llm_model_override(self, admin_client, db_session):
+        """Test l'analyse avec override du modèle LLM (B47-P6)."""
+        cat = Category(name="Vaisselle", is_active=True)
+        db_session.add(cat)
+        db_session.commit()
+        
+        csv_content = (
+            "date,category,poids_kg,destination,notes\n"
+            "2025-01-15,UnknownCategory,5.5,MAGASIN,\n"
+        )
+        
+        files = {
+            "file": ("test.csv", make_csv(csv_content), "text/csv"),
+        }
+        data = {"llm_model_id": "mistralai/mistral-7b-instruct:free"}
+        r = admin_client.post(
+            "/api/v1/admin/import/legacy/analyze",
+            files=files,
+            data=data
+        )
+        
+        assert r.status_code == 200
+        result = r.json()
+        # Vérifier que les statistiques LLM sont présentes
+        assert "llm_attempted" in result["statistics"]
+        assert "llm_model_used" in result["statistics"]
+        assert "llm_batches_total" in result["statistics"]
+
 
 class TestLegacyImportExecuteEndpoint:
     """Tests pour l'endpoint execute."""

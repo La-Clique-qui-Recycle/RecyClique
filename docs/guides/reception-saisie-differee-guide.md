@@ -166,3 +166,8 @@ Si vous rencontrez des problèmes avec la saisie différée :
 - **Permissions** : Requiert ADMIN ou SUPER_ADMIN pour `opened_at`
 - **Validation** : `opened_at <= now()` (pas de futur)
 
+
+
+
+
+

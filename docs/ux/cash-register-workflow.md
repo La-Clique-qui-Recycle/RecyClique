@@ -217,3 +217,8 @@ En cas de problème, rollback possible par :
 **Document de référence :** `docs/ux/reception-workflow.md` pour patterns UX
 
 
+
+
+
+
+

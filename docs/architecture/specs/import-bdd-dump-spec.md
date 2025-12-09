@@ -116,3 +116,8 @@ L'API doit avoir accès en écriture au volume de backups pour y déposer le "Ba
 2.  **B46-P2** : Mise à jour Frontend (Textes, Extensions fichiers).
 3.  **Release** : Communication aux admins "Le format de sauvegarde a changé pour plus de fiabilité".
 
+
+
+
+
+

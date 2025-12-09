@@ -687,13 +687,40 @@ export const adminService = {
   },
 
   /**
+   * Récupère la liste des modèles LLM OpenRouter disponibles pour l'import legacy
+   * Story B47-P6: Amélioration UX LLM
+   */
+  async getLegacyImportLLMModels(): Promise<{
+    models: Array<{
+      id: string;
+      name: string;
+      provider: string | null;
+      is_free: boolean;
+      context_length: number | null;
+      pricing: { prompt: string; completion: string } | null;
+    }>;
+    error: string | null;
+    default_model_id: string | null;
+  }> {
+    try {
+      const response = await axiosClient.get('/v1/admin/import/legacy/llm-models');
+      return response.data;
+    } catch (error) {
+      console.error('Erreur lors de la récupération des modèles LLM:', error);
+      throw error;
+    }
+  },
+
+  /**
    * Analyse un CSV legacy pour proposer des mappings de catégories
    * @param file Fichier CSV nettoyé à analyser
    * @param confidenceThreshold Seuil de confiance pour le fuzzy matching (0-100, optionnel)
+   * @param llmModelId ID du modèle LLM à utiliser (override de la config, optionnel)
    */
   async analyzeLegacyImport(
     file: File,
-    confidenceThreshold?: number
+    confidenceThreshold?: number,
+    llmModelId?: string | null
   ): Promise<{
     mappings: Record<string, { category_id: string; category_name: string; confidence: number }>;
     unmapped: string[];
@@ -704,6 +731,16 @@ export const adminService = {
       unique_categories: number;
       mapped_categories: number;
       unmapped_categories: number;
+      llm_attempted: boolean;
+      llm_model_used: string | null;
+      llm_batches_total: number;
+      llm_batches_succeeded: number;
+      llm_batches_failed: number;
+      llm_mapped_categories: number;
+      llm_unmapped_after_llm: number;
+      llm_last_error: string | null;
+      llm_avg_confidence: number | null;
+      llm_provider_used: string | null;
     };
     errors: string[];
   }> {
@@ -712,6 +749,9 @@ export const adminService = {
       formData.append('file', file);
       if (confidenceThreshold !== undefined) {
         formData.append('confidence_threshold', confidenceThreshold.toString());
+      }
+      if (llmModelId) {
+        formData.append('llm_model_id', llmModelId);
       }
 
       const response = await axiosClient.post('/v1/admin/import/legacy/analyze', formData, {
@@ -724,6 +764,45 @@ export const adminService = {
       return response.data;
     } catch (error) {
       console.error('Erreur lors de l\'analyse du CSV legacy:', error);
+      throw error;
+    }
+  },
+
+  /**
+   * Relance uniquement le LLM sur des catégories spécifiques (sans refaire le fuzzy matching)
+   * Story B47-P6: Amélioration UX LLM
+   * @param unmappedCategories Liste des catégories à mapper via LLM uniquement
+   * @param llmModelId ID du modèle LLM à utiliser (optionnel, utilise la config par défaut si non fourni)
+   */
+  async analyzeLegacyImportLLMOnly(
+    unmappedCategories: string[],
+    llmModelId?: string | null
+  ): Promise<{
+    mappings: Record<string, { category_id: string; category_name: string; confidence: number }>;
+    statistics: {
+      llm_attempted: boolean;
+      llm_model_used: string | null;
+      llm_batches_total: number;
+      llm_batches_succeeded: number;
+      llm_batches_failed: number;
+      llm_mapped_categories: number;
+      llm_unmapped_after_llm: number;
+      llm_last_error: string | null;
+      llm_avg_confidence: number | null;
+      llm_provider_used: string | null;
+    };
+  }> {
+    try {
+      const response = await axiosClient.post('/v1/admin/import/legacy/analyze/llm-only', {
+        unmapped_categories: unmappedCategories,
+        llm_model_id: llmModelId || null,
+      }, {
+        timeout: 300000, // 5 minutes timeout
+      });
+
+      return response.data;
+    } catch (error) {
+      console.error('Erreur lors de la relance LLM ciblée:', error);
       throw error;
     }
   },

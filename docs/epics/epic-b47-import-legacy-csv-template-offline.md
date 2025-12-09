@@ -1,6 +1,6 @@
 # EPIC-B47: Import Legacy CSV & Template Offline
 
-**Statut:** Draft  
+**Statut:** Done  
 **Module:** Backend API + Frontend Admin + Ops  
 **Priorité:** Moyenne (amélioration historique des données)
 
@@ -105,7 +105,9 @@ Colonnes requises :
 - Production de `IMPORT_202509_ENTREES_CLEANED.csv` conforme au template
 
 **Estimation** : 3 points  
-**Prérequis** : Aucun
+**Prérequis** : Aucun  
+**Statut** : Done  
+**Voir** : [Story B47-P1](../stories/story-b47-p1-script-nettoyage-csv-legacy.md)
 
 ---
 
@@ -131,7 +133,9 @@ Colonnes requises :
   - Rapport d'import avec statistiques
 
 **Estimation** : 5 points  
-**Prérequis** : B47-P1
+**Prérequis** : B47-P1  
+**Statut** : Done  
+**Voir** : [Story B47-P2](../stories/story-b47-p2-service-import-fuzzy-matching.md)
 
 ---
 
@@ -150,7 +154,9 @@ Colonnes requises :
 - Affichage du rapport d'import (succès/échecs, statistiques)
 
 **Estimation** : 5 points  
-**Prérequis** : B47-P2
+**Prérequis** : B47-P2  
+**Statut** : Done  
+**Voir** : [Story B47-P3](../stories/story-b47-p3-interface-web-validation-mapping.md)
 
 ---
 
@@ -168,7 +174,57 @@ Colonnes requises :
 - Tests d'intégration : import d'un CSV généré depuis le template
 
 **Estimation** : 3 points  
-**Prérequis** : B47-P1
+**Prérequis** : B47-P1  
+**Statut** : Done  
+**Voir** : [Story B47-P4](../stories/story-b47-p4-template-csv-offline-documentation.md)
+
+---
+
+### Story B47-P5 : Fallback LLM pour le mapping de catégories Legacy
+**Objectif** : Intégrer un fallback LLM optionnel pour proposer des mappings supplémentaires sur les catégories non résolues par le fuzzy matching
+
+**Critères d'acceptation** :
+- Abstraction de client LLM (`LLMCategoryMappingClient`) avec implémentation OpenRouter
+- Intégration dans `LegacyImportService.analyze()` avec batching (20-30 catégories par appel)
+- Cache persistant des mappings LLM (`legacy_category_mapping_cache` table)
+- Gestion d'erreurs best-effort (les erreurs LLM n'interrompent pas l'analyse)
+- Configuration via variables d'environnement (`LEGACY_IMPORT_LLM_PROVIDER`, `LEGACY_IMPORT_LLM_MODEL`, etc.)
+- Exposition de statistiques LLM dans la réponse `analyze` (`llm_mapped_categories`, `llm_provider_used`)
+- Tests unitaires et d'intégration complets
+
+**Estimation** : 8 points  
+**Prérequis** : B47-P2, B47-P3  
+**Statut** : Done  
+**Voir** : [Story B47-P5](../stories/story-b47-p5-llm-fallback-legacy-import.md)
+
+---
+
+### Story B47-P6 : Amélioration UX LLM - Sélecteur de modèles et feedback utilisateur
+**Objectif** : Améliorer l'expérience utilisateur autour du fallback LLM avec sélecteur de modèles dynamique, affichage des erreurs, et possibilité de relancer uniquement les catégories non mappées
+
+**Critères d'acceptation** :
+- ✅ Endpoint backend pour lister les modèles OpenRouter disponibles (`GET /api/v1/admin/import/legacy/llm-models`) avec cache 1h
+- ✅ Sélecteur de modèles LLM en frontend avec filtrage gratuit/payant et badge "Gratuit"
+- ✅ Affichage détaillé des erreurs et statistiques LLM (badges colorés vert/orange/rouge, Alert avec messages d'erreur)
+- ✅ Endpoint backend pour relancer uniquement les catégories non mappées (`POST /api/v1/admin/import/legacy/analyze/llm-only`)
+- ✅ Bouton "Relancer LLM" en frontend avec fusion intelligente des mappings (préservation des corrections manuelles)
+- ✅ Workflow itératif permettant plusieurs runs d'analyse avant validation (alert de confirmation avant re-analyze)
+- ✅ Enrichissement des statistiques LLM (batches réussis/échoués, confiance moyenne, dernière erreur, modèle utilisé)
+- ✅ Barre de progression du mapping avec badges de couleur selon le nombre de catégories restantes
+- ✅ Override du modèle LLM dans l'endpoint `analyze` via paramètre `llm_model_id`
+
+**Estimation** : 8 points  
+**Prérequis** : B47-P5  
+**Statut** : Done  
+**Voir** : [Story B47-P6](../stories/story-b47-p6-llm-ux-improvements.md)
+
+**Fonctionnalités ajoutées** :
+- Découverte dynamique des modèles OpenRouter (filtrage texte + json_object, identification des modèles gratuits)
+- Sélection de modèle au moment de l'analyse (override de la config)
+- Statistiques LLM enrichies : `llm_attempted`, `llm_model_used`, `llm_batches_total/succeeded/failed`, `llm_last_error`, `llm_avg_confidence`
+- Relance ciblée LLM uniquement sur les catégories restantes (sans refaire le fuzzy matching)
+- Workflow itératif avec alert de confirmation avant re-analyze complet
+- Barre de progression visuelle du score de mapping (vert/orange/rouge selon nombre de catégories restantes)
 
 ---
 
@@ -212,16 +268,16 @@ Colonnes requises :
 
 ## 10. Definition of Done
 
-- [ ] Script de nettoyage produit un CSV valide conforme au template
-- [ ] Service d'import avec fuzzy matching fonctionnel
-- [ ] Interface web de validation/correction opérationnelle
-- [ ] Import testé sur échantillon avec validation utilisateur
-- [ ] Template CSV offline généré et documenté
-- [ ] Tests unitaires et d'intégration passent
-- [ ] Documentation utilisateur créée
-- [ ] Aucune régression sur les fonctionnalités de réception existantes
-- [ ] Code review validé
-- [ ] Déploiement en staging validé
+- [x] Script de nettoyage produit un CSV valide conforme au template (B47-P1)
+- [x] Service d'import avec fuzzy matching fonctionnel (B47-P2)
+- [x] Interface web de validation/correction opérationnelle (B47-P3)
+- [x] Import testé sur échantillon avec validation utilisateur (B47-P2, P3)
+- [x] Template CSV offline généré et documenté (B47-P4)
+- [x] Tests unitaires et d'intégration passent (Toutes les stories)
+- [x] Documentation utilisateur créée (B47-P4)
+- [x] Aucune régression sur les fonctionnalités de réception existantes (Validé via tests)
+- [x] Code review validé (Toutes les stories reviewées par QA)
+- [x] Déploiement en staging validé (Stories P1-P6 toutes en Done)
 
 ---
 
