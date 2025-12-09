@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import styled from 'styled-components';
 import { Button, Modal } from '@mantine/core';
@@ -7,7 +7,7 @@ import { IconCalendar } from '@tabler/icons-react';
 import { Receipt, Plus, X, Eye, Calendar, User, Package, Weight, List, Clock } from 'lucide-react';
 import { useReception } from '../contexts/ReceptionContext';
 import { useAuthStore } from '../stores/authStore';
-import { getReceptionTickets } from '../services/api';
+import { receptionTicketsService } from '../services/receptionTicketsService';
 import { UserRole } from '../services/adminService';
 import { receptionService } from '../services/receptionService';
 
@@ -288,15 +288,70 @@ const NoTickets = styled.div`
   font-style: italic;
 `;
 
+// Styles pour la pagination
+const PaginationContainer = styled.div`
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid #e0e0e0;
+  flex-wrap: wrap;
+  gap: 15px;
+`;
+
+const PaginationInfo = styled.div`
+  color: #666;
+  font-size: 0.9rem;
+`;
+
+const PaginationControls = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 10px;
+`;
+
+const PageButton = styled.button`
+  padding: 8px 16px;
+  background: ${props => props.disabled ? '#f5f5f5' : '#2e7d32'};
+  color: ${props => props.disabled ? '#999' : 'white'};
+  border: none;
+  border-radius: 4px;
+  cursor: ${props => props.disabled ? 'not-allowed' : 'pointer'};
+  font-size: 0.9rem;
+  transition: background-color 0.2s;
+
+  &:hover:not(:disabled) {
+    background: #1b5e20;
+  }
+`;
+
+const PerPageSelect = styled.select`
+  padding: 8px 12px;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  background: white;
+
+  &:focus {
+    outline: none;
+    border-color: #2e7d32;
+  }
+`;
+
 const Reception: React.FC = () => {
   const navigate = useNavigate();
   const { poste, isLoading, error, isDeferredMode, posteDate, openPoste, closePoste, createTicket } = useReception();
   const user = useAuthStore((s) => s.currentUser);
   
-  // État pour les tickets récents
+  // État pour les tickets récents avec pagination
   const [recentTickets, setRecentTickets] = useState([]);
   const [ticketsLoading, setTicketsLoading] = useState(false);
   const [ticketsError, setTicketsError] = useState(null);
+  const [ticketsPage, setTicketsPage] = useState(1);
+  const [ticketsPerPage, setTicketsPerPage] = useState(5);
+  const [ticketsTotal, setTicketsTotal] = useState(0);
   
   // État pour le modal de saisie différée
   const [deferredModalOpen, setDeferredModalOpen] = useState(false);
@@ -306,20 +361,25 @@ const Reception: React.FC = () => {
   // Vérifier si l'utilisateur peut accéder à la saisie différée
   const canUseDeferred = user?.role === UserRole.ADMIN || user?.role === UserRole.SUPER_ADMIN;
 
-  // Charger les tickets récents
-  const loadRecentTickets = async () => {
+  // Charger les tickets récents avec pagination
+  const loadRecentTickets = useCallback(async (page: number, perPage: number) => {
     setTicketsLoading(true);
     setTicketsError(null);
     try {
-      const response = await getReceptionTickets(1, 5); // 5 tickets récents
+      const response = await receptionTicketsService.list({ 
+        page, 
+        per_page: perPage,
+        include_empty: false
+      });
       setRecentTickets(response.tickets || []);
+      setTicketsTotal(response.total || 0);
     } catch (err) {
       console.error('Erreur lors du chargement des tickets:', err);
       setTicketsError('Impossible de charger les tickets récents');
     } finally {
       setTicketsLoading(false);
     }
-  };
+  }, []);
 
   // Ouvrir automatiquement le poste au premier accès (seulement pour les utilisateurs non-admin)
   // Les admins choisissent manuellement entre mode normal et mode différé
@@ -331,10 +391,10 @@ const Reception: React.FC = () => {
     }
   }, [poste, isLoading, error, openPoste, deferredModalOpen, canUseDeferred]);
 
-  // Charger les tickets récents au montage du composant
+  // Charger les tickets récents au montage et quand la pagination change
   useEffect(() => {
-    loadRecentTickets();
-  }, []);
+    loadRecentTickets(ticketsPage, ticketsPerPage);
+  }, [ticketsPage, ticketsPerPage, loadRecentTickets]);
 
   const handleNewTicket = async () => {
     try {
@@ -662,47 +722,90 @@ const Reception: React.FC = () => {
         ) : recentTickets.length === 0 ? (
           <NoTickets>Aucun ticket de réception trouvé</NoTickets>
         ) : (
-          <TicketsList>
-            {recentTickets.map((ticket) => (
-              <TicketCard key={ticket.id} onClick={() => handleViewTicket(ticket.id, ticket.status)}>
-                <TicketHeader>
-                  <TicketId>Ticket #{ticket.id.slice(-8)}</TicketId>
-                  <TicketStatus status={ticket.status}>
-                    {ticket.status === 'closed' ? 'Fermé' : 'Ouvert'}
-                  </TicketStatus>
-                </TicketHeader>
-                
-                <TicketInfo>
-                  <InfoItem>
-                    <Calendar size={16} />
-                    {formatDate(ticket.created_at)}
-                  </InfoItem>
-                  <InfoItem>
-                    <User size={16} />
-                    {ticket.benevole_username}
-                  </InfoItem>
-                  <InfoItem>
-                    <Package size={16} />
-                    {ticket.total_lignes} article{ticket.total_lignes > 1 ? 's' : ''}
-                  </InfoItem>
-                  <InfoItem>
-                    <Weight size={16} />
-                    {formatWeight(ticket.total_poids)}
-                  </InfoItem>
-                </TicketInfo>
-                
-                <TicketActions>
-                  <ViewButton onClick={(e) => {
-                    e.stopPropagation();
-                    handleViewTicket(ticket.id, ticket.status);
-                  }}>
-                    <Eye size={16} />
-                    {ticket.status === 'closed' ? 'Voir les détails' : 'Modifier'}
-                  </ViewButton>
-                </TicketActions>
-              </TicketCard>
-            ))}
-          </TicketsList>
+          <>
+            <TicketsList>
+              {recentTickets.map((ticket) => (
+                <TicketCard key={ticket.id} onClick={() => handleViewTicket(ticket.id, ticket.status)}>
+                  <TicketHeader>
+                    <TicketId>Ticket #{ticket.id.slice(-8)}</TicketId>
+                    <TicketStatus status={ticket.status}>
+                      {ticket.status === 'closed' ? 'Fermé' : 'Ouvert'}
+                    </TicketStatus>
+                  </TicketHeader>
+                  
+                  <TicketInfo>
+                    <InfoItem>
+                      <Calendar size={16} />
+                      {formatDate(ticket.created_at)}
+                    </InfoItem>
+                    <InfoItem>
+                      <User size={16} />
+                      {ticket.benevole_username}
+                    </InfoItem>
+                    <InfoItem>
+                      <Package size={16} />
+                      {ticket.total_lignes} article{ticket.total_lignes > 1 ? 's' : ''}
+                    </InfoItem>
+                    <InfoItem>
+                      <Weight size={16} />
+                      {formatWeight(ticket.total_poids)}
+                    </InfoItem>
+                  </TicketInfo>
+                  
+                  <TicketActions>
+                    <ViewButton onClick={(e) => {
+                      e.stopPropagation();
+                      handleViewTicket(ticket.id, ticket.status);
+                    }}>
+                      <Eye size={16} />
+                      {ticket.status === 'closed' ? 'Voir les détails' : 'Modifier'}
+                    </ViewButton>
+                  </TicketActions>
+                </TicketCard>
+              ))}
+            </TicketsList>
+            
+            {/* Pagination */}
+            {ticketsTotal > 0 && (
+              <PaginationContainer>
+                <PaginationInfo>
+                  Affichage de {Math.min((ticketsPage - 1) * ticketsPerPage + 1, ticketsTotal)} à {Math.min(ticketsPage * ticketsPerPage, ticketsTotal)} sur {ticketsTotal} ticket{ticketsTotal > 1 ? 's' : ''}
+                </PaginationInfo>
+                <PaginationControls>
+                  <label style={{ fontSize: '0.9rem', color: '#666' }} htmlFor="tickets-per-page">
+                    Par page:
+                  </label>
+                  <PerPageSelect
+                    id="tickets-per-page"
+                    value={ticketsPerPage}
+                    onChange={(e) => {
+                      const newPerPage = parseInt(e.target.value, 10);
+                      setTicketsPerPage(newPerPage);
+                      setTicketsPage(1); // Reset à la page 1 quand on change le nombre par page
+                    }}
+                  >
+                    <option value="5">5</option>
+                    <option value="10">10</option>
+                    <option value="20">20</option>
+                    <option value="50">50</option>
+                    <option value="100">100</option>
+                  </PerPageSelect>
+                  <PageButton
+                    onClick={() => setTicketsPage(p => Math.max(1, p - 1))}
+                    disabled={ticketsPage === 1}
+                  >
+                    Précédent
+                  </PageButton>
+                  <PageButton
+                    onClick={() => setTicketsPage(p => p + 1)}
+                    disabled={ticketsPage * ticketsPerPage >= ticketsTotal}
+                  >
+                    Suivant
+                  </PageButton>
+                </PaginationControls>
+              </PaginationContainer>
+            )}
+          </>
         )}
       </RecentTicketsSection>
     </ReceptionContainer>

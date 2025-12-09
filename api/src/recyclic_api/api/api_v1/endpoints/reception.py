@@ -112,12 +112,14 @@ def add_ligne(
         poids_kg=float(payload.poids_kg),
         destination=payload.destination,
         notes=payload.notes,
+        is_exit=payload.is_exit if payload.is_exit is not None else False,
     )
     
     # Récupérer le nom de la catégorie
+    from recyclic_api.services.category_service import CategoryService
     category_label = "Catégorie inconnue"
     if ligne.category:
-        category_label = ligne.category.name
+        category_label = ligne.category.name  # Story B48-P5: Utilise name (nom court/rapide)
     
     return {
         "id": str(ligne.id),
@@ -127,6 +129,7 @@ def add_ligne(
         "poids_kg": ligne.poids_kg,
         "destination": ligne.destination,
         "notes": ligne.notes,
+        "is_exit": ligne.is_exit,
     }
 
 
@@ -135,14 +138,17 @@ def get_categories(
     db: Session = Depends(get_db),
     current_user=Depends(require_role_strict([UserRole.USER, UserRole.ADMIN, UserRole.SUPER_ADMIN])),
 ):
-    """Récupérer les catégories disponibles."""
+    """Récupérer les catégories disponibles.
+    
+    Story B48-P5: Retourne name (nom court/rapide) pour l'affichage opérationnel.
+    """
     categories = db.query(Category).filter(
         Category.is_active == True
     ).all()
     return [
         {
             "id": str(cat.id),
-            "name": cat.name
+            "name": cat.name  # Story B48-P5: Nom court/rapide (toujours utilisé)
         }
         for cat in categories
     ]
@@ -162,12 +168,14 @@ def update_ligne(
         poids_kg=float(payload.poids_kg) if payload.poids_kg is not None else None,
         destination=payload.destination,
         notes=payload.notes,
+        is_exit=payload.is_exit,
     )
     
     # Récupérer le nom de la catégorie
+    from recyclic_api.services.category_service import CategoryService
     category_label = "Catégorie inconnue"
     if ligne.category:
-        category_label = ligne.category.name
+        category_label = ligne.category.name  # Story B48-P5: Utilise name (nom court/rapide)
     
     return {
         "id": str(ligne.id),
@@ -177,6 +185,7 @@ def update_ligne(
         "poids_kg": ligne.poids_kg,
         "destination": ligne.destination,
         "notes": ligne.notes,
+        "is_exit": ligne.is_exit,
     }
 
 
@@ -253,7 +262,7 @@ def get_tickets(
     # Calculer les totaux pour chaque ticket
     ticket_summaries = []
     for ticket in tickets:
-        total_lignes, total_poids = service._calculate_ticket_totals(ticket)
+        total_lignes, total_poids, poids_entree, poids_direct, poids_sortie = service._calculate_ticket_totals(ticket)
         ticket_summaries.append(TicketSummaryResponse(
             id=str(ticket.id),
             poste_id=str(ticket.poste_id),
@@ -262,7 +271,10 @@ def get_tickets(
             closed_at=ticket.closed_at,
             status=ticket.status,
             total_lignes=total_lignes,
-            total_poids=total_poids
+            total_poids=total_poids,
+            poids_entree=poids_entree,
+            poids_direct=poids_direct,
+            poids_sortie=poids_sortie
         ))
     
     total_pages = (total + per_page - 1) // per_page
@@ -305,7 +317,8 @@ def get_ticket_detail(
             category_label=category_label,
             poids_kg=ligne.poids_kg,
             destination=ligne.destination,
-            notes=ligne.notes
+            notes=ligne.notes,
+            is_exit=ligne.is_exit
         ))
     
     return TicketDetailResponse(
@@ -525,7 +538,7 @@ def get_lignes_depot(
             ticket_id=str(ligne.ticket_id),
             poste_id=str(ligne.ticket.poste_id),
             benevole_username=ligne.ticket.benevole.username or "Utilisateur inconnu",
-            category_label=ligne.category.name if ligne.category else "Catégorie inconnue",
+            category_label=ligne.category.name if ligne.category else "Catégorie inconnue",  # Story B48-P5: Nom court/rapide
             poids_kg=ligne.poids_kg,
             destination=ligne.destination,
             notes=ligne.notes,
@@ -593,7 +606,7 @@ def export_lignes_depot_csv(
             str(ligne.ticket_id),
             str(ligne.ticket.poste_id),
             ligne.ticket.benevole.username or "Utilisateur inconnu",
-            ligne.category.name if ligne.category else "Catégorie inconnue",
+            ligne.category.name if ligne.category else "Catégorie inconnue",  # Story B48-P5: Nom court/rapide
             str(ligne.poids_kg),
             ligne.destination.value if ligne.destination else "",
             ligne.notes or "",
@@ -638,6 +651,7 @@ async def get_live_reception_stats(
     site_id: Optional[str] = Query(None, description="Optional site filter for future multi-site support"),
     db: Session = Depends(get_db),
     current_user=Depends(require_role_strict([UserRole.ADMIN, UserRole.SUPER_ADMIN])),
+    response: Response = Response(),
 ):
     """
     Get live reception statistics for admin dashboard.
@@ -646,7 +660,15 @@ async def get_live_reception_stats(
     turnover, donations, and weight metrics for the last 24 hours.
 
     Requires admin or super-admin permissions.
+    
+    **⚠️ DEPRECATED:** This endpoint is deprecated. Use `/v1/stats/live` instead.
+    This endpoint will be removed in 3 months (2025-03-09).
     """
+    # Add deprecation headers (Story B48-P7)
+    response.headers["Deprecation"] = "true"
+    response.headers["Sunset"] = "Mon, 09 Mar 2025 00:00:00 GMT"
+    response.headers["Link"] = '</v1/stats/live>; rel="successor-version"'
+    
     if not settings.LIVE_RECEPTION_STATS_ENABLED:
         # Return zeros when feature is disabled (backward compatibility)
         return ReceptionLiveStatsResponse(

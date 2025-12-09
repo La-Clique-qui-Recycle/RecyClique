@@ -144,7 +144,7 @@ class ReceptionService:
 
 
     # Lignes de dépôt
-    def create_ligne(self, *, ticket_id: UUID, category_id: UUID, poids_kg: float, destination: Optional[str], notes: Optional[str]) -> LigneDepot:
+    def create_ligne(self, *, ticket_id: UUID, category_id: UUID, poids_kg: float, destination: Optional[str], notes: Optional[str], is_exit: Optional[bool] = False) -> LigneDepot:
         """Créer une ligne de dépôt avec règles métier: poids>0 et ticket ouvert."""
         ticket: Optional[TicketDepot] = self.ticket_repo.get(ticket_id)
         if not ticket:
@@ -164,12 +164,22 @@ class ReceptionService:
         if destination is not None:
             dest_value = DBLigneDestination(destination)
 
+        # Story B48-P3: Validation is_exit + destination
+        # Si is_exit=true, destination doit être RECYCLAGE ou DECHETERIE (pas MAGASIN)
+        if is_exit is True:
+            if dest_value is None or dest_value not in [DBLigneDestination.RECYCLAGE, DBLigneDestination.DECHETERIE]:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Une sortie de stock (is_exit=true) ne peut avoir comme destination que RECYCLAGE ou DECHETERIE"
+                )
+
         ligne = LigneDepot(
             ticket_id=ticket.id,
             category_id=category_id,
             poids_kg=poids_kg,
             destination=dest_value,
             notes=notes,
+            is_exit=is_exit if is_exit is not None else False,
         )
         return self.ligne_repo.add(ligne)
 
@@ -181,6 +191,7 @@ class ReceptionService:
         poids_kg: Optional[float] = None,
         destination: Optional[str] = None,
         notes: Optional[str] = None,
+        is_exit: Optional[bool] = None,
     ) -> LigneDepot:
         ligne: Optional[LigneDepot] = self.ligne_repo.get(ligne_id)
         if not ligne:
@@ -207,6 +218,20 @@ class ReceptionService:
 
         if notes is not None:
             ligne.notes = notes
+
+        # Story B48-P3: Mise à jour is_exit avec validation
+        if is_exit is not None:
+            # Si on passe is_exit à True, vérifier que la destination est valide
+            final_is_exit = is_exit
+            final_destination = ligne.destination if destination is None else DBLigneDestination(destination)
+            
+            if final_is_exit is True:
+                if final_destination not in [DBLigneDestination.RECYCLAGE, DBLigneDestination.DECHETERIE]:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail="Une sortie de stock (is_exit=true) ne peut avoir comme destination que RECYCLAGE ou DECHETERIE"
+                    )
+            ligne.is_exit = final_is_exit
 
         return self.ligne_repo.update(ligne)
 
@@ -369,11 +394,34 @@ class ReceptionService:
             selectinload(TicketDepot.lignes).selectinload(LigneDepot.category)
         ).filter(TicketDepot.id == ticket_id).first()
 
-    def _calculate_ticket_totals(self, ticket: TicketDepot) -> Tuple[int, Decimal]:
-        """Calculer le nombre de lignes et le poids total d'un ticket."""
+    def _calculate_ticket_totals(self, ticket: TicketDepot) -> Tuple[int, Decimal, Decimal, Decimal, Decimal]:
+        """
+        Calculer le nombre de lignes et les poids par flux d'un ticket.
+        
+        Returns:
+            (total_lignes, total_poids, poids_entree, poids_direct, poids_sortie)
+        """
         total_lignes = len(ticket.lignes)
-        total_poids = sum(ligne.poids_kg for ligne in ticket.lignes)
-        return total_lignes, total_poids
+        total_poids = Decimal(0)
+        poids_entree = Decimal(0)  # is_exit=false AND destination=MAGASIN
+        poids_direct = Decimal(0)   # is_exit=false AND destination IN (RECYCLAGE, DECHETERIE)
+        poids_sortie = Decimal(0)   # is_exit=true
+        
+        for ligne in ticket.lignes:
+            poids = ligne.poids_kg
+            total_poids += poids
+            
+            if ligne.is_exit:
+                # Sortie de boutique
+                poids_sortie += poids
+            elif ligne.destination == 'MAGASIN':
+                # Entrée en boutique
+                poids_entree += poids
+            elif ligne.destination in ('RECYCLAGE', 'DECHETERIE'):
+                # Recyclage/déchetterie direct
+                poids_direct += poids
+        
+        return total_lignes, total_poids, poids_entree, poids_direct, poids_sortie
 
     def get_lignes_depot_filtered(
         self,

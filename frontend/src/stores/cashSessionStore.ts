@@ -93,6 +93,10 @@ interface CashSessionState {
   // Scroll state for ticket display
   ticketScrollState: ScrollState;
 
+  // B48-P2: Flag pour tracker si un TICKET_OPENED a été loggé pour la session courante
+  // Permet de détecter l'anomalie "ITEM_ADDED_WITHOUT_TICKET"
+  ticketOpenedLogged: boolean;
+
   // Actions
   setCurrentSession: (session: CashSession | null) => void;
   setSessions: (sessions: CashSession[]) => void;
@@ -135,6 +139,7 @@ export const useCashSessionStore = create<CashSessionState>()(
         currentSaleNote: null,  // Story B40-P1: Notes sur les tickets de caisse
         loading: false,
         error: null,
+        ticketOpenedLogged: false,  // B48-P2: Flag pour détecter anomalies (ITEM_ADDED_WITHOUT_TICKET)
         ticketScrollState: {
           scrollTop: 0,
           scrollHeight: 0,
@@ -145,7 +150,10 @@ export const useCashSessionStore = create<CashSessionState>()(
         },
 
         // Setters
-        setCurrentSession: (session) => set({ currentSession: session }),
+        setCurrentSession: (session) => set({ 
+          currentSession: session,
+          ticketOpenedLogged: false  // B48-P2: Réinitialiser le flag lors d'un changement de session
+        }),
         setSessions: (sessions) => set({ sessions }),
         setLoading: (loading) => set({ loading }),
         setError: (error) => set({ error }),
@@ -160,9 +168,72 @@ export const useCashSessionStore = create<CashSessionState>()(
             notes: item.notes
           };
 
-          set((state) => ({
+          const state = get();
+          const wasEmpty = state.currentSaleItems.length === 0;
+          
+          set({
             currentSaleItems: [...state.currentSaleItems, newItem]
-          }));
+          });
+
+          // B48-P2: Détection d'anomalies et logging
+          if (state.currentSession) {
+            // Import dynamique et appel asynchrone (fire-and-forget)
+            import('../services/transactionLogService').then(({ transactionLogService }) => {
+              const cartState = {
+                items_count: state.currentSaleItems.length + 1,  // +1 car on vient d'ajouter l'item
+                items: [...state.currentSaleItems, newItem].map(item => ({
+                  id: item.id,
+                  category: item.category,
+                  weight: item.weight,
+                  price: item.total
+                })),
+                total: [...state.currentSaleItems, newItem].reduce((sum, item) => sum + item.total, 0)
+              };
+
+              // Détecter anomalie: si un item est ajouté alors qu'aucun TICKET_OPENED n'a été loggé
+              // pour cette session (AC #3: "Si une action 'Ajout Item' arrive alors qu'aucun ticket n'est explicitement 'ouvert'")
+              if (!state.ticketOpenedLogged) {
+                // Anomalie détectée: ITEM_ADDED_WITHOUT_TICKET
+                transactionLogService.logAnomaly(
+                  state.currentSession!.id,
+                  cartState,
+                  "Item added but no ticket is explicitly opened"
+                ).catch((err) => {
+                  console.error('[TransactionLog] Erreur lors du log ANOMALY_DETECTED:', err);
+                });
+
+                // Logger aussi TICKET_OPENED pour marquer l'ouverture du ticket (même si c'est une anomalie)
+                // Cela permet de suivre l'état du ticket même en cas d'anomalie
+                transactionLogService.logTicketOpened(
+                  state.currentSession!.id,
+                  cartState,
+                  true // Anomalie: ticket ouvert implicitement
+                ).then(() => {
+                  // Marquer que TICKET_OPENED a été loggé
+                  set({ ticketOpenedLogged: true });
+                }).catch((err) => {
+                  console.error('[TransactionLog] Erreur lors du log TICKET_OPENED:', err);
+                });
+              } else if (wasEmpty) {
+                // Cas normal: panier était vide, on ouvre un nouveau ticket
+                // (TICKET_OPENED a déjà été loggé précédemment, donc pas d'anomalie)
+                transactionLogService.logTicketOpened(
+                  state.currentSession!.id,
+                  cartState,
+                  false // Pas d'anomalie
+                ).then(() => {
+                  // Marquer que TICKET_OPENED a été loggé
+                  set({ ticketOpenedLogged: true });
+                }).catch((err) => {
+                  console.error('[TransactionLog] Erreur lors du log TICKET_OPENED:', err);
+                });
+              }
+              // Si le panier n'était pas vide et qu'un TICKET_OPENED a déjà été loggé,
+              // c'est normal (ajout d'item à un ticket existant), pas besoin de logger
+            }).catch((err) => {
+              console.error('[TransactionLog] Erreur lors de l\'import du service:', err);
+            }); // Logger les erreurs d'import pour diagnostic
+          }
         },
 
         removeSaleItem: (itemId: string) => {
@@ -194,9 +265,22 @@ export const useCashSessionStore = create<CashSessionState>()(
         },
 
         clearCurrentSale: () => {
+          const state = get();
+          const cartStateBefore = state.currentSaleItems.length > 0 ? {
+            items_count: state.currentSaleItems.length,
+            items: state.currentSaleItems.map(item => ({
+              id: item.id,
+              category: item.category,
+              weight: item.weight,
+              price: item.total
+            })),
+            total: state.currentSaleItems.reduce((sum, item) => sum + item.total, 0)
+          } : undefined;
+
           set({
             currentSaleItems: [],
             currentSaleNote: null,  // Story B40-P1: Réinitialiser la note lors du clear
+            ticketOpenedLogged: false,  // B48-P2: Réinitialiser le flag lors du reset
             ticketScrollState: {
               scrollTop: 0,
               scrollHeight: 0,
@@ -206,6 +290,24 @@ export const useCashSessionStore = create<CashSessionState>()(
               isScrollable: false
             }
           });
+
+          // B48-P2: Logger TICKET_RESET avec l'état du panier avant le reset
+          if (cartStateBefore && state.currentSession) {
+            // Import dynamique et appel asynchrone (fire-and-forget)
+            import('../services/transactionLogService').then(({ transactionLogService }) => {
+              // Détecter anomalie: si le panier n'était pas vide alors qu'il aurait dû l'être
+              // (mais en fait, c'est normal de reset un panier non vide)
+              transactionLogService.logTicketReset(
+                state.currentSession!.id,
+                cartStateBefore,
+                false // Pas d'anomalie par défaut
+              ).catch((err) => {
+                console.error('[TransactionLog] Erreur lors du log TICKET_RESET:', err);
+              }); // Logger les erreurs pour diagnostic
+            }).catch((err) => {
+              console.error('[TransactionLog] Erreur lors de l\'import du service:', err);
+            }); // Logger les erreurs d'import pour diagnostic
+          }
         },
 
         // Scroll actions

@@ -233,15 +233,17 @@ async def test_update_category_duplicate_name(async_client: AsyncClient, super_a
     assert "already exists" in response.json()["detail"]
 
 
-# Test DELETE /categories/{id} - Soft delete category
+# Test DELETE /categories/{id} - Soft delete category (Story B48-P1: uses deleted_at)
 @pytest.mark.asyncio
 async def test_delete_category_success(async_client: AsyncClient, super_admin_token: str, sample_category: Category):
-    """Test successful soft delete by super admin"""
+    """Test successful soft delete by super admin (Story B48-P1: sets deleted_at)"""
     headers = {"Authorization": f"Bearer {super_admin_token}"}
     response = await async_client.delete(f"/api/v1/categories/{sample_category.id}", headers=headers)
     assert response.status_code == 200
     data = response.json()
-    assert data["is_active"] is False
+    # Story B48-P1: deleted_at doit être défini
+    assert data["deleted_at"] is not None
+    # is_active peut rester True (comportement flexible)
 
 
 @pytest.mark.asyncio
@@ -685,3 +687,111 @@ async def test_update_leaf_category_add_price_succeeds(async_client: AsyncClient
     assert response.status_code == 200
     data = response.json()
     assert float(data["price"]) == 149.99
+
+
+# Story B48-P1: Tests pour Soft Delete avec deleted_at
+@pytest.mark.asyncio
+async def test_delete_category_sets_deleted_at(async_client: AsyncClient, super_admin_token: str, sample_category: Category):
+    """Test que DELETE /categories/{id} définit deleted_at (Story B48-P1)"""
+    headers = {"Authorization": f"Bearer {super_admin_token}"}
+    response = await async_client.delete(f"/api/v1/categories/{sample_category.id}", headers=headers)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["deleted_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_delete_category_with_active_children_fails(async_client: AsyncClient, super_admin_token: str, db_session: Session):
+    """Test que DELETE /categories/{id} échoue si enfants actifs (Story B48-P1)"""
+    headers = {"Authorization": f"Bearer {super_admin_token}"}
+    
+    # Créer parent
+    parent = Category(name="Parent", is_active=True)
+    db_session.add(parent)
+    db_session.commit()
+    
+    # Créer enfant actif
+    child = Category(name="Child", is_active=True, parent_id=parent.id, deleted_at=None)
+    db_session.add(child)
+    db_session.commit()
+    
+    # Tentative de suppression du parent
+    response = await async_client.delete(f"/api/v1/categories/{parent.id}", headers=headers)
+    assert response.status_code == 422
+    data = response.json()
+    assert "active_children_count" in data
+    assert data["active_children_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_restore_category_endpoint(async_client: AsyncClient, super_admin_token: str, db_session: Session):
+    """Test POST /categories/{id}/restore pour restaurer une catégorie archivée (Story B48-P1)"""
+    headers = {"Authorization": f"Bearer {super_admin_token}"}
+    
+    # Créer catégorie archivée
+    from datetime import datetime, timezone
+    category = Category(name="Archived", is_active=True, deleted_at=datetime.now(timezone.utc))
+    db_session.add(category)
+    db_session.commit()
+    
+    # Restaurer
+    response = await async_client.post(f"/api/v1/categories/{category.id}/restore", headers=headers)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["deleted_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_get_categories_include_archived_param(async_client: AsyncClient, normal_user_token: str, db_session: Session):
+    """Test GET /categories avec paramètre include_archived (Story B48-P1)"""
+    headers = {"Authorization": f"Bearer {normal_user_token}"}
+    
+    # Créer catégories actives et archivées
+    from datetime import datetime, timezone
+    active = Category(name="Active", is_active=True, deleted_at=None)
+    archived = Category(name="Archived", is_active=True, deleted_at=datetime.now(timezone.utc))
+    db_session.add_all([active, archived])
+    db_session.commit()
+    
+    # Sans include_archived (défaut: False)
+    response = await async_client.get("/api/v1/categories/", headers=headers)
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["name"] == "Active"
+    
+    # Avec include_archived=True
+    response = await async_client.get("/api/v1/categories/?include_archived=true", headers=headers)
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 2
+    names = {cat["name"] for cat in data}
+    assert "Active" in names
+    assert "Archived" in names
+
+
+@pytest.mark.asyncio
+async def test_operational_endpoints_exclude_archived(async_client: AsyncClient, normal_user_token: str, db_session: Session):
+    """Test que les endpoints opérationnels excluent les catégories archivées (Story B48-P1)"""
+    headers = {"Authorization": f"Bearer {normal_user_token}"}
+    
+    # Créer catégories actives et archivées
+    from datetime import datetime, timezone
+    active = Category(name="Active", is_active=True, deleted_at=None, is_visible=True)
+    archived = Category(name="Archived", is_active=True, deleted_at=datetime.now(timezone.utc), is_visible=True)
+    db_session.add_all([active, archived])
+    db_session.commit()
+    
+    # Test entry-tickets endpoint
+    response = await async_client.get("/api/v1/categories/entry-tickets", headers=headers)
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["name"] == "Active"
+    
+    # Test sale-tickets endpoint
+    response = await async_client.get("/api/v1/categories/sale-tickets", headers=headers)
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["name"] == "Active"

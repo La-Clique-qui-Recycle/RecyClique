@@ -1020,6 +1020,7 @@ export const SaleWizard: React.FC<SaleWizardProps> = ({ onItemComplete, numpadCa
                     data-testid={`subcategory-${subcat.id}`}
                     data-selected={selectedSubcategory === subcat.id ? 'true' : 'false'}
                     aria-pressed={selectedSubcategory === subcat.id}
+                    title={subcat.official_name ? `Dénomination officielle : ${subcat.official_name}` : undefined}  // Story B48-P5: Tooltip avec nom complet officiel si présent
                     aria-label={
                       shortcutKeys[subcat.id]
                         ? `Sélectionner la sous-catégorie ${subcat.name}. Raccourci clavier: ${shortcutKeys[subcat.id].toUpperCase()}`
@@ -1028,7 +1029,7 @@ export const SaleWizard: React.FC<SaleWizardProps> = ({ onItemComplete, numpadCa
                     style={{ position: 'relative' }}
                     tabIndex={-1}
                   >
-                    <CategoryName>{subcat.name}</CategoryName>
+                    <CategoryName>{subcat.name}</CategoryName>  {/* Story B48-P5: Nom court/rapide (toujours utilisé) */}
                     <CategoryDescription>{formatPrice()}</CategoryDescription>
                     {shortcutKeys[subcat.id] && (
                       <ShortcutBadge

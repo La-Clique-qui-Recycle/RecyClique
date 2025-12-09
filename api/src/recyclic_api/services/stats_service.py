@@ -48,6 +48,10 @@ class StatsService:
         """
         Get summary statistics for reception data.
 
+        Story B48-P1: Cette méthode NE FILTRE PAS sur `Category.deleted_at` pour conserver
+        les données historiques complètes. Les catégories archivées doivent rester incluses
+        dans les statistiques pour la comptabilité et les déclarations éco-organismes.
+
         Args:
             start_date: Optional start date filter (inclusive)
             end_date: Optional end date filter (inclusive)
@@ -61,6 +65,9 @@ class StatsService:
         # Validate date range
         self._validate_date_range(start_date, end_date)
         # Build base query
+        # Story B48-P1: Ne PAS filtrer Category.deleted_at - conserver toutes les catégories pour stats historiques
+        # Story B48-P3: Exclure is_exit=true pour weight_in (poids reçu, pas sorti)
+        from sqlalchemy import or_
         query = self.db.query(
             func.coalesce(func.sum(LigneDepot.poids_kg), 0).label('total_weight'),
             func.count(LigneDepot.id).label('total_items'),
@@ -68,6 +75,9 @@ class StatsService:
         ).join(
             TicketDepot,
             LigneDepot.ticket_id == TicketDepot.id
+        ).filter(
+            # Story B48-P3: Exclure les sorties (is_exit=true), inclure is_exit IS NULL pour rétrocompatibilité
+            or_(LigneDepot.is_exit == False, LigneDepot.is_exit.is_(None))
         )
 
         # Apply date filters if provided
@@ -103,6 +113,16 @@ class StatsService:
         """
         Get reception statistics grouped by category.
 
+        Story B48-P1: Cette méthode NE FILTRE PAS sur `Category.deleted_at` pour conserver
+        les données historiques complètes. Les catégories archivées doivent rester visibles
+        dans les statistiques pour :
+        - La comptabilité (traçabilité des transactions passées)
+        - Les déclarations éco-organismes (mapping des catégories historiques)
+        - L'intégrité des données (pas de perte d'information dans les rapports)
+
+        Seules les APIs opérationnelles (caisse/réception) filtrent `deleted_at IS NULL`
+        pour masquer les catégories archivées des sélecteurs.
+
         Args:
             start_date: Optional start date filter (inclusive)
             end_date: Optional end date filter (inclusive)
@@ -116,6 +136,7 @@ class StatsService:
         # Validate date range
         self._validate_date_range(start_date, end_date)
         # Build base query
+        # Story B48-P1: Ne PAS filtrer Category.deleted_at - conserver toutes les catégories pour stats historiques
         query = self.db.query(
             Category.name.label('category_name'),
             func.coalesce(func.sum(LigneDepot.poids_kg), 0).label('total_weight'),

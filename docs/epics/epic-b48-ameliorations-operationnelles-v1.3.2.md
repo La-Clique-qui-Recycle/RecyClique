@@ -59,6 +59,29 @@ Finaliser la version 1.3.2 avec les améliorations opérationnelles urgentes pou
 - **Dépendance** : B48-P1 (Soft Delete) doit être terminée
 - **Pré-requis** : Recommandations UI/UX de l'agent BMAD
 
+### Story B48-P5 : Double Dénomination des Catégories
+- Migration DB : Ajout colonne `display_name` (nullable) sur table `categories`
+- Backend : Helper function `get_display_name()` avec fallback sur `name`
+- Frontend Admin : Champ "Nom d'affichage" dans formulaire catégories
+- Frontend Opérationnel : Boutons affichent `display_name` (ou `name` si NULL)
+- Tooltips pédagogiques : Afficher `name` (dénomination complète) au survol
+- Comptabilité : Stats/exports utilisent `name` (dénomination complète officielle)
+
+### Story B48-P6 : Correction Affichage Poids Pages Admin
+- Frontend Admin : Ajouter 4 KPIs distincts dans détail ticket (total, entré boutique, recyclé direct, sortie boutique)
+- Frontend Admin : Ajouter colonne "Type" avec badges visuels dans tableau lignes
+- Frontend Admin : Remplacer KPIs liste sessions par 4 cartes distinctes
+- Frontend Admin : Ajouter colonne "Répartition" dans tableau sessions
+- Frontend Admin : Vérifier dashboard affiche poids reçu/sorti corrects
+- **Dépendance** : B48-P3 (Sorties Stock) doit être terminée
+
+### Story B48-P7 : Unification Endpoints Stats Live
+- Backend : Créer endpoint unifié `/v1/stats/live` (remplace 2 endpoints)
+- Backend : Unifier période sur journée complète (minuit-minuit) pour tous
+- Backend : Service unifié `ReceptionLiveStatsService` pour toutes les stats
+- Frontend : Modifier hooks `useCashLiveStats` et `useReceptionKPILiveStats` pour utiliser endpoint unifié
+- **Dépendance** : B48-P3 (Sorties Stock) doit être terminée
+
 **Exclus (hors scope v1.3.2) :**
 - Script de détection d'anomalies avec email (peut être fait séparément)
 - Module éco-organismes (attente décision métier)
@@ -70,10 +93,13 @@ Finaliser la version 1.3.2 avec les améliorations opérationnelles urgentes pou
 1. **Soft Delete fonctionnel** : Les catégories peuvent être archivées sans perte de données historiques
 2. **Logs opérationnels** : Tous les événements transactionnels sont loggés dans un fichier dédié
 3. **Sorties réception** : Les sorties de stock peuvent être déclarées depuis l'écran réception
-4. **Interface catégories améliorée** : Page admin unifiée et ergonomique (si P4 incluse dans v1.3.2)
-5. **Aucune régression** : Les fonctionnalités existantes restent intactes
-6. **Tests complets** : Toutes les stories ont des tests unitaires et d'intégration
-7. **Documentation** : Guide utilisateur pour les nouvelles fonctionnalités
+4. **Double dénomination** : Nom d'affichage court sur boutons, nom complet officiel pour comptabilité
+5. **Affichage poids admin** : Pages admin affichent répartition détaillée (entrée/sortie/recyclage)
+6. **Stats unifiées** : Un seul endpoint stats avec période cohérente (journée complète)
+7. **Interface catégories améliorée** : Page admin unifiée et ergonomique (si P4 incluse dans v1.3.2)
+8. **Aucune régression** : Les fonctionnalités existantes restent intactes
+9. **Tests complets** : Toutes les stories ont des tests unitaires et d'intégration
+10. **Documentation** : Guide utilisateur pour les nouvelles fonctionnalités
 
 ---
 
@@ -85,6 +111,9 @@ Finaliser la version 1.3.2 avec les améliorations opérationnelles urgentes pou
 - Ajout colonne `deleted_at` (Timestamp, Nullable)
 - Si `deleted_at IS NULL` → Catégorie active
 - Si `deleted_at IS NOT NULL` → Catégorie archivée
+- Ajout colonne `display_name` (String, Nullable)
+- `name` : Dénomination complète officielle (obligatoire)
+- `display_name` : Dénomination rapide pour affichage (optionnel, fallback sur `name` si NULL)
 
 **Table `ligne_depot` :**
 - Ajout colonne `is_exit` (Boolean, default=False)
@@ -125,7 +154,31 @@ Finaliser la version 1.3.2 avec les améliorations opérationnelles urgentes pou
 **Estimation** : 5-8h (à confirmer après recommandations UI/UX)  
 **Prérequis** : B48-P1 (Soft Delete) terminée + Recommandations UI/UX de l'agent BMAD
 
-**Note** : Les stories P1, P2, P3 peuvent être développées en parallèle. P4 doit attendre P1 et les recommandations UI/UX.
+---
+
+### Story B48-P5 : Double Dénomination des Catégories
+**Objectif** : Permettre un nom d'affichage court (ex: "Bricot") distinct du nom complet officiel (ex: "Articles de bricolage")
+
+**Estimation** : 3-4h  
+**Prérequis** : Aucun (peut être développée en parallèle)
+
+---
+
+### Story B48-P6 : Correction Affichage Poids Pages Admin
+**Objectif** : Afficher la répartition détaillée des poids (entrée boutique, recyclage direct, sortie boutique) dans les pages admin
+
+**Estimation** : 2-3h  
+**Prérequis** : B48-P3 (Sorties Stock) terminée
+
+---
+
+### Story B48-P7 : Unification Endpoints Stats Live
+**Objectif** : Unifier les deux endpoints stats en un seul endpoint avec période cohérente (journée complète)
+
+**Estimation** : 4-5h  
+**Prérequis** : B48-P3 (Sorties Stock) terminée
+
+**Note** : Les stories P1, P2, P3, P5 peuvent être développées en parallèle. P4 doit attendre P1 et les recommandations UI/UX. P6 et P7 doivent attendre P3.
 
 ---
 
@@ -170,6 +223,9 @@ Finaliser la version 1.3.2 avec les améliorations opérationnelles urgentes pou
 - [ ] Soft Delete fonctionnel (archivage + restauration)
 - [ ] Logs transactionnels opérationnels (fichier rotatif)
 - [ ] Sorties stock depuis réception fonctionnelles
+- [ ] Double dénomination catégories fonctionnelle (display_name + name)
+- [ ] Pages admin affichent répartition poids détaillée (P6)
+- [ ] Endpoint stats unifié fonctionnel avec période cohérente (P7)
 - [ ] Interface catégories refondue (si P4 incluse dans v1.3.2)
 - [ ] Tests unitaires et d'intégration passent
 - [ ] Aucune régression sur les fonctionnalités existantes
@@ -196,6 +252,24 @@ Finaliser la version 1.3.2 avec les améliorations opérationnelles urgentes pou
 - **Compteurs décorrélés** : `weight_in` et `weight_out` sont calculés à la volée depuis les tables
 - **Modification calculs** : Filtrer selon `is_exit` dans `_calculate_weight_in()` et `_calculate_weight_out()`
 - **Destination par défaut** : RECYCLAGE si `is_exit=true`
+
+### Double Dénomination Catégories
+- **Champ `name`** : Dénomination complète officielle (obligatoire, utilisé pour comptabilité/exports)
+- **Champ `display_name`** : Dénomination rapide pour affichage (optionnel, fallback sur `name` si NULL)
+- **Affichage opérationnel** : Boutons caisse/réception utilisent `display_name` (ou `name` si NULL)
+- **Tooltips pédagogiques** : Afficher `name` (dénomination complète) au survol
+- **Comptabilité** : Tous les exports/stats utilisent `name` pour conformité éco-organismes
+
+### Correction Affichage Poids Pages Admin (P6)
+- **Calculs frontend** : Agréger depuis données `ticket.lignes` (pas besoin d'API supplémentaire)
+- **4 métriques** : Total traité, entré boutique, recyclé direct, sortie boutique
+- **Badges visuels** : Distinction claire entre types de lignes (couleurs différentes)
+
+### Unification Endpoints Stats Live (P7)
+- **Endpoint unifié** : `/v1/stats/live` remplace `/v1/reception/stats/live` et `/v1/cash-sessions/stats/summary`
+- **Période standardisée** : Journée complète (minuit-minuit) pour tous
+- **Service unifié** : `ReceptionLiveStatsService` pour toutes les stats (caisse + réception)
+- **Rétrocompatibilité** : Anciens endpoints marqués comme dépréciés (période transition)
 
 ---
 

@@ -26,6 +26,9 @@ class CategoryManagementService:
         """
         Get categories filtered by visibility.
         
+        Story B48-P1: Exclut automatiquement les catégories archivées (deleted_at IS NULL)
+        pour les APIs opérationnelles (caisse/réception).
+        
         Args:
             is_active: Filter by active status (default: True)
             for_entry_tickets: If True, filter by is_visible. If False, return all categories.
@@ -34,6 +37,9 @@ class CategoryManagementService:
             List of visible categories ordered by display_order, then name
         """
         query = self.db.query(Category)
+        
+        # Story B48-P1: Exclure les catégories archivées pour les APIs opérationnelles
+        query = query.filter(Category.deleted_at.is_(None))
         
         if is_active is not None:
             query = query.filter(Category.is_active == is_active)

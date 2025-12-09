@@ -79,6 +79,7 @@ services:
       - ./api/src:/app/src
       - ./api/tests:/app/tests
       - ./backups:/backups
+      - ./logs:/app/logs  # B48-P2: Volume pour les logs transactionnels
     depends_on:
       postgres:
         condition: service_healthy

@@ -22,6 +22,7 @@ export interface TicketLine {
   weight: number;
   destination: 'MAGASIN' | 'RECYCLAGE' | 'DECHETERIE';
   notes?: string;
+  is_exit?: boolean;
 }
 
 export interface CreateTicketRequest {
@@ -33,6 +34,7 @@ export interface CreateTicketLineRequest {
   weight: number;
   destination: 'MAGASIN' | 'RECYCLAGE' | 'DECHETERIE';
   notes?: string;
+  is_exit?: boolean;
 }
 
 export interface UpdateTicketLineRequest {
@@ -40,6 +42,7 @@ export interface UpdateTicketLineRequest {
   weight?: number;
   destination?: 'MAGASIN' | 'RECYCLAGE' | 'DECHETERIE';
   notes?: string;
+  is_exit?: boolean;
 }
 
 class ReceptionService {
@@ -70,7 +73,8 @@ class ReceptionService {
       category_id: line.category_id,
       poids_kg: line.weight,
       destination: line.destination,
-      notes: line.notes
+      notes: line.notes,
+      is_exit: line.is_exit
     });
     // Normaliser la réponse pour correspondre à l'interface TicketLine
     return {
@@ -82,6 +86,7 @@ class ReceptionService {
       poids_kg: response.data.poids_kg,
       destination: response.data.destination,
       notes: response.data.notes,
+      is_exit: response.data.is_exit,
       created_at: response.data.created_at,
       updated_at: response.data.updated_at
     };
@@ -92,7 +97,8 @@ class ReceptionService {
       category_id: line.category_id,
       poids_kg: line.weight,
       destination: line.destination,
-      notes: line.notes
+      notes: line.notes,
+      is_exit: line.is_exit
     });
     // Normaliser la réponse pour correspondre à l'interface TicketLine
     return {
@@ -104,6 +110,7 @@ class ReceptionService {
       poids_kg: response.data.poids_kg,
       destination: response.data.destination,
       notes: response.data.notes,
+      is_exit: response.data.is_exit,
       created_at: response.data.created_at,
       updated_at: response.data.updated_at
     };

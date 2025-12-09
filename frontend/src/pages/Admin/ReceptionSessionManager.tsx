@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import styled from 'styled-components'
 import { Calendar, Users, Scale, Package, Search, ChevronUp, ChevronDown, ChevronsUpDown, Download, FileSpreadsheet, FileText, FileSpreadsheetIcon } from 'lucide-react'
-import { receptionTicketsService, ReceptionTicketFilters, ReceptionTicketKPIs, ReceptionTicketListItem, receptionTicketFiltersUrl } from '../../services/receptionTicketsService'
+import { receptionTicketsService, ReceptionTicketFilters, ReceptionTicketKPIs, ReceptionTicketListItem, receptionTicketFiltersUrl, LigneResponse } from '../../services/receptionTicketsService'
 import { getUsers, User } from '../../services/usersService'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { AdvancedFiltersAccordion, FiltersGridContainer, FilterInput, FilterMultiSelect } from '../../components/Admin/AdvancedFiltersAccordion'
@@ -281,16 +281,60 @@ function formatWeight(value: number): string {
   return numValue.toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
+/**
+ * B48-P6: Formate un poids, affiche "—" si 0
+ */
+function formatWeightOrDash(value: number): string {
+  const numValue = typeof value === 'number' ? value : parseFloat(String(value)) || 0
+  if (numValue === 0) return '—'
+  return formatWeight(numValue)
+}
+
+/**
+ * B48-P6: Calcule les 4 métriques de poids depuis les lignes
+ */
+const calculateMetrics = (lignes: LigneResponse[]) => {
+  const totalProcessed = lignes.reduce((sum, l) => {
+    const poids = typeof l.poids_kg === 'number' ? l.poids_kg : parseFloat(String(l.poids_kg)) || 0
+    return sum + poids
+  }, 0)
+
+  const enteredBoutique = lignes
+    .filter(l => !l.is_exit && l.destination === 'MAGASIN')
+    .reduce((sum, l) => {
+      const poids = typeof l.poids_kg === 'number' ? l.poids_kg : parseFloat(String(l.poids_kg)) || 0
+      return sum + poids
+    }, 0)
+
+  const recycledDirect = lignes
+    .filter(l => !l.is_exit && (l.destination === 'RECYCLAGE' || l.destination === 'DECHETERIE'))
+    .reduce((sum, l) => {
+      const poids = typeof l.poids_kg === 'number' ? l.poids_kg : parseFloat(String(l.poids_kg)) || 0
+      return sum + poids
+    }, 0)
+
+  const recycledFromBoutique = lignes
+    .filter(l => l.is_exit && (l.destination === 'RECYCLAGE' || l.destination === 'DECHETERIE'))
+    .reduce((sum, l) => {
+      const poids = typeof l.poids_kg === 'number' ? l.poids_kg : parseFloat(String(l.poids_kg)) || 0
+      return sum + poids
+    }, 0)
+
+  return { totalProcessed, enteredBoutique, recycledDirect, recycledFromBoutique }
+}
+
+
 const ReceptionSessionManager: React.FC = () => {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const [filters, setFilters] = useState<ReceptionTicketFilters>(() => {
     // B45-P2: Charger les filtres depuis l'URL au montage
     const urlFilters = receptionTicketFiltersUrl.decode(searchParams)
-    // Par défaut, inclure les tickets vides pour voir tous les tickets
-    return { page: 1, per_page: 20, include_empty: true, ...urlFilters }
+    // B48-P6: Par défaut, exclure les tickets vides (0 ligne et 0 poids)
+    return { page: 1, per_page: 20, include_empty: false, ...urlFilters }
   })
   const [kpis, setKpis] = useState<ReceptionTicketKPIs | null>(null)
+  const [weightMetrics, setWeightMetrics] = useState<{ poids_total: number; poids_entree: number; poids_direct: number; poids_sortie: number } | null>(null)
   const [allTickets, setAllTickets] = useState<ReceptionTicketListItem[]>([]) // Tous les tickets chargés
   const [rows, setRows] = useState<ReceptionTicketListItem[]>([]) // Tickets paginés à afficher
   const [total, setTotal] = useState(0)
@@ -404,9 +448,67 @@ const ReceptionSessionManager: React.FC = () => {
         })
       }
       
-      // Stocker tous les tickets triés
-      setAllTickets(allTickets)
-      setTotal(allTickets.length)
+      // B48-P6: Filtrer les tickets vides (0 ligne et 0 poids) même si include_empty=true
+      const filteredTickets = allTickets.filter(t => 
+        (t.total_lignes || 0) > 0 && (t.total_poids || 0) > 0
+      )
+      
+      // Stocker tous les tickets triés (sans les vides)
+      setAllTickets(filteredTickets)
+      setTotal(filteredTickets.length)
+      
+      // B48-P6: Calculer les métriques depuis TOUS les tickets filtrés (respecte les filtres de la page)
+      console.log(`🔍 Debug: ${filteredTickets.length} tickets filtrés`, filteredTickets.slice(0, 3).map(t => ({
+        id: t.id,
+        total_poids: t.total_poids,
+        poids_entree: t.poids_entree,
+        poids_direct: t.poids_direct,
+        poids_sortie: t.poids_sortie
+      })))
+      
+      // Vérifier que les tickets ont les nouvelles propriétés (backend doit être à jour)
+      if (filteredTickets.length > 0 && filteredTickets[0].poids_entree === undefined) {
+        console.warn('⚠️ Les tickets ne contiennent pas les propriétés poids_entree/direct/sortie. Le backend doit être redémarré pour que les nouvelles propriétés soient disponibles.')
+        // Fallback : calculer depuis les tickets chargés (mais on n'a pas les lignes, donc on ne peut pas calculer précisément)
+        // Pour l'instant, on affiche 0 pour les 3 flux
+        setWeightMetrics({ 
+          poids_total: filteredTickets.reduce((sum, t) => sum + (parseFloat(String(t.total_poids)) || 0), 0),
+          poids_entree: 0,
+          poids_direct: 0,
+          poids_sortie: 0
+        })
+        return
+      }
+      
+      // Calculer depuis TOUS les tickets (pas seulement le dernier)
+      const poids_total = filteredTickets.reduce((sum, t) => {
+        const val = typeof t.total_poids === 'number' ? t.total_poids : parseFloat(String(t.total_poids)) || 0
+        return sum + val
+      }, 0)
+      
+      const poids_entree = filteredTickets.reduce((sum, t) => {
+        const val = typeof t.poids_entree === 'number' ? t.poids_entree : parseFloat(String(t.poids_entree || 0)) || 0
+        return sum + val
+      }, 0)
+      
+      const poids_direct = filteredTickets.reduce((sum, t) => {
+        const val = typeof t.poids_direct === 'number' ? t.poids_direct : parseFloat(String(t.poids_direct || 0)) || 0
+        return sum + val
+      }, 0)
+      
+      const poids_sortie = filteredTickets.reduce((sum, t) => {
+        const val = typeof t.poids_sortie === 'number' ? t.poids_sortie : parseFloat(String(t.poids_sortie || 0)) || 0
+        return sum + val
+      }, 0)
+      
+      console.log(`📊 KPIs calculés depuis ${filteredTickets.length} tickets:`, { 
+        poids_total: poids_total.toFixed(2),
+        poids_entree: poids_entree.toFixed(2),
+        poids_direct: poids_direct.toFixed(2),
+        poids_sortie: poids_sortie.toFixed(2)
+      })
+      
+      setWeightMetrics({ poids_total, poids_entree, poids_direct, poids_sortie })
     } catch (e: any) {
       setError(e?.message || 'Erreur lors du chargement des tickets')
     } finally {
@@ -429,6 +531,7 @@ const ReceptionSessionManager: React.FC = () => {
     const paginatedTickets = allTickets.slice(startIndex, endIndex)
     setRows(paginatedTickets)
   }, [allTickets, filters.page, filters.per_page])
+
 
   useEffect(() => {
     ;(async () => {
@@ -715,33 +818,34 @@ const ReceptionSessionManager: React.FC = () => {
         </FiltersGridContainer>
       </AdvancedFiltersAccordion>
 
+      {/* B48-P6: 4 KPIs de poids (total + 3 flux) */}
       <KPICards>
         <Card>
           <CardIcon><Scale size={18} /></CardIcon>
           <CardContent>
-            <CardLabel>Poids Total Reçu</CardLabel>
-            <CardValue>{formatWeight(kpis?.total_poids || 0)} kg</CardValue>
+            <CardLabel>Poids total traité</CardLabel>
+            <CardValue>{formatWeight(weightMetrics?.poids_total || 0)} kg</CardValue>
           </CardContent>
         </Card>
         <Card>
-          <CardIcon><Package size={18} /></CardIcon>
+          <CardIcon style={{ background: '#d1fae5', color: '#059669' }}><Package size={18} /></CardIcon>
           <CardContent>
-            <CardLabel>Nombre de Tickets</CardLabel>
-            <CardValue>{kpis?.total_tickets ?? 0}</CardValue>
+            <CardLabel>Total entré en boutique</CardLabel>
+            <CardValue>{formatWeight(weightMetrics?.poids_entree || 0)} kg</CardValue>
           </CardContent>
         </Card>
         <Card>
-          <CardIcon><Package size={18} /></CardIcon>
+          <CardIcon style={{ background: '#fed7aa', color: '#d97706' }}><Package size={18} /></CardIcon>
           <CardContent>
-            <CardLabel>Nombre de Lignes</CardLabel>
-            <CardValue>{kpis?.total_lignes ?? 0}</CardValue>
+            <CardLabel>Total recyclé/déchetterie direct</CardLabel>
+            <CardValue>{formatWeight(weightMetrics?.poids_direct || 0)} kg</CardValue>
           </CardContent>
         </Card>
         <Card>
-          <CardIcon><Users size={18} /></CardIcon>
+          <CardIcon style={{ background: '#fee2e2', color: '#dc2626' }}><Package size={18} /></CardIcon>
           <CardContent>
-            <CardLabel>Bénévoles Actifs</CardLabel>
-            <CardValue>{kpis?.total_benevoles_actifs ?? 0}</CardValue>
+            <CardLabel>Total sorti de boutique</CardLabel>
+            <CardValue>{formatWeight(weightMetrics?.poids_sortie || 0)} kg</CardValue>
           </CardContent>
         </Card>
       </KPICards>
@@ -772,13 +876,16 @@ const ReceptionSessionManager: React.FC = () => {
               Poids total (kg)
               <SortIcon>{getSortIcon('total_poids')}</SortIcon>
             </Th>
+            <Th style={{ color: '#059669', fontWeight: 600 }}>Entrée</Th>
+            <Th style={{ color: '#d97706', fontWeight: 600 }}>Direct</Th>
+            <Th style={{ color: '#dc2626', fontWeight: 600 }}>Sortie</Th>
             <Th>Actions</Th>
           </tr>
         </thead>
         <tbody>
           {rows.length === 0 && !loading ? (
             <tr>
-              <Td colSpan={6} style={{ textAlign: 'center', padding: '40px', color: '#6b7280' }}>
+              <Td colSpan={9} style={{ textAlign: 'center', padding: '40px', color: '#6b7280' }}>
                 Aucun ticket trouvé
               </Td>
             </tr>
@@ -790,19 +897,22 @@ const ReceptionSessionManager: React.FC = () => {
                 <Td>{getUserName(row.benevole_username)}</Td>
                 <Td>{row.total_lignes || 0}</Td>
                 <Td>{formatWeight(row.total_poids || 0)}</Td>
+                <Td style={{ color: '#059669', fontWeight: 500 }}>{formatWeightOrDash(row.poids_entree || 0)}</Td>
+                <Td style={{ color: '#d97706', fontWeight: 500 }}>{formatWeightOrDash(row.poids_direct || 0)}</Td>
+                <Td style={{ color: '#dc2626', fontWeight: 500 }}>{formatWeightOrDash(row.poids_sortie || 0)}</Td>
                 <Td>
-                  <ActionsCell>
-                    <Button onClick={(e) => {
-                      e.stopPropagation()
-                      navigate(`/admin/reception-tickets/${row.id}`)
-                    }}>Voir Détail</Button>
-                    <Button $variant='ghost' onClick={async (e) => {
-                      e.stopPropagation()
-                      await handleExportCSV(row.id)
-                    }}>Télécharger CSV</Button>
-                  </ActionsCell>
-                </Td>
-              </tr>
+                    <ActionsCell>
+                      <Button onClick={(e) => {
+                        e.stopPropagation()
+                        navigate(`/admin/reception-tickets/${row.id}`)
+                      }}>Voir Détail</Button>
+                      <Button $variant='ghost' onClick={async (e) => {
+                        e.stopPropagation()
+                        await handleExportCSV(row.id)
+                      }}>Télécharger CSV</Button>
+                    </ActionsCell>
+                  </Td>
+                </tr>
             ))
           )}
         </tbody>

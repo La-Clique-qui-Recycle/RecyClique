@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { getReceptionLiveStats } from '../services/api';
+import { getUnifiedLiveStats } from '../services/api';
 import { useAuthStore } from '../stores/authStore';
 
 export interface ReceptionKPILiveStats {
   tickets_open: number;
   tickets_closed_24h: number;
+  tickets_count: number; // Nombre de tickets de caisse (ventes) - Story B48-P7
   items_received: number;
   turnover_eur: number;
   donations_eur: number;
@@ -66,8 +67,8 @@ export function useReceptionKPILiveStats({
   const mountedRef = useRef(true);
 
   /**
-   * Récupère les données live depuis l'API
-   * Retourne directement ReceptionLiveStatsResponse sans transformation
+   * Récupère les données live depuis l'API unifiée
+   * Utilise le nouvel endpoint /v1/stats/live (Story B48-P7)
    */
   const fetchLiveStats = useCallback(async () => {
     if (!mountedRef.current || !userEnabled || !isAdmin) return;
@@ -76,17 +77,19 @@ export function useReceptionKPILiveStats({
       setIsLoading(true);
       setError(null);
 
-      const response = await getReceptionLiveStats();
+      // Récupérer les stats unifiées depuis le nouvel endpoint
+      const unifiedStats = await getUnifiedLiveStats('daily');
       
-      // Mapper directement la réponse API vers notre interface
+      // Extraire les stats réception depuis la réponse unifiée
       const stats: ReceptionKPILiveStats = {
-        tickets_open: response.tickets_open || 0,
-        tickets_closed_24h: response.tickets_closed_24h || 0,
-        items_received: response.items_received || 0,
-        turnover_eur: response.turnover_eur || 0,
-        donations_eur: response.donations_eur || 0,
-        weight_in: response.weight_in || 0,
-        weight_out: response.weight_out || 0
+        tickets_open: unifiedStats.tickets_open || 0,
+        tickets_closed_24h: unifiedStats.tickets_closed_24h || 0,
+        tickets_count: unifiedStats.tickets_count || 0, // Nombre de tickets de caisse (ventes) - Story B48-P7
+        items_received: unifiedStats.items_received || 0,
+        turnover_eur: unifiedStats.ca || 0, // Utiliser ca de la réponse unifiée
+        donations_eur: unifiedStats.donations || 0, // Utiliser donations de la réponse unifiée
+        weight_in: unifiedStats.weight_in || 0,
+        weight_out: unifiedStats.weight_out || 0
       };
 
       setData(stats);

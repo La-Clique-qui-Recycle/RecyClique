@@ -9,7 +9,10 @@ from uuid import UUID
 from recyclic_api.models.user import User
 from recyclic_api.models.sale import Sale, PaymentMethod
 from recyclic_api.models.sale_item import SaleItem
+from recyclic_api.models.ligne_depot import LigneDepot
+from recyclic_api.models.ticket_depot import TicketDepot
 from recyclic_api.schemas.cash_session import CashSessionFilters
+from recyclic_api.core.logging import log_transaction_event
 
 
 class CashSessionService:
@@ -105,6 +108,13 @@ class CashSessionService:
             self.db.add(cash_session)
             self.db.commit()
             self.db.refresh(cash_session)
+
+            # B48-P2: Logger l'ouverture de session
+            log_transaction_event("SESSION_OPENED", {
+                "user_id": str(operator_uuid),
+                "session_id": str(cash_session.id),
+                "opened_at": cash_session.opened_at.isoformat() + "Z" if cash_session.opened_at else None
+            })
 
             return cash_session
         except Exception as e:
@@ -592,7 +602,27 @@ class CashSessionService:
             .filter(Sale.id.in_(self.db.query(sale_ids_subq.c.id)))
             .scalar()
         )
-        total_weight_sold = float(total_weight_result or 0.0)
+        poids_ventes = float(total_weight_result or 0.0)
+        
+        # Story B48-P3: Ajouter les sorties depuis réception (is_exit=true) pour weight_out
+        if date_from and date_to:
+            poids_exit_reception = (
+                self.db.query(func.coalesce(func.sum(LigneDepot.poids_kg), 0))
+                .join(TicketDepot, LigneDepot.ticket_id == TicketDepot.id)
+                .filter(
+                    and_(
+                        LigneDepot.is_exit == True,  # Uniquement les sorties
+                        TicketDepot.created_at >= date_from,
+                        TicketDepot.created_at <= date_to
+                    )
+                )
+                .scalar()
+            )
+            poids_exit_reception = float(poids_exit_reception or 0.0)
+        else:
+            poids_exit_reception = 0.0
+        
+        total_weight_sold = poids_ventes + poids_exit_reception
         
         # Durée moyenne des sessions fermées
         closed_sessions_with_duration = query.filter(

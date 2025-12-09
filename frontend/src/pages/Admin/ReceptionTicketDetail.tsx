@@ -2,8 +2,9 @@ import React, { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import styled from 'styled-components'
 import { ArrowLeft, Calendar, User, Package, Scale } from 'lucide-react'
+import { Badge } from '@mantine/core'
 import axiosClient from '../../api/axiosClient'
-import { receptionTicketsService, ReceptionTicketDetail as ReceptionTicketDetailType } from '../../services/receptionTicketsService'
+import { receptionTicketsService, ReceptionTicketDetail as ReceptionTicketDetailType, LigneResponse } from '../../services/receptionTicketsService'
 
 const Container = styled.div`
   padding: 24px;
@@ -217,6 +218,52 @@ const formatWeight = (value: number): string => {
   return numValue.toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
+/**
+ * B48-P6: Calcule les 4 métriques de poids depuis les lignes
+ */
+const calculateMetrics = (lignes: LigneResponse[]) => {
+  const totalProcessed = lignes.reduce((sum, l) => {
+    const poids = typeof l.poids_kg === 'number' ? l.poids_kg : parseFloat(String(l.poids_kg)) || 0
+    return sum + poids
+  }, 0)
+
+  const enteredBoutique = lignes
+    .filter(l => !l.is_exit && l.destination === 'MAGASIN')
+    .reduce((sum, l) => {
+      const poids = typeof l.poids_kg === 'number' ? l.poids_kg : parseFloat(String(l.poids_kg)) || 0
+      return sum + poids
+    }, 0)
+
+  const recycledDirect = lignes
+    .filter(l => !l.is_exit && (l.destination === 'RECYCLAGE' || l.destination === 'DECHETERIE'))
+    .reduce((sum, l) => {
+      const poids = typeof l.poids_kg === 'number' ? l.poids_kg : parseFloat(String(l.poids_kg)) || 0
+      return sum + poids
+    }, 0)
+
+  const recycledFromBoutique = lignes
+    .filter(l => l.is_exit && (l.destination === 'RECYCLAGE' || l.destination === 'DECHETERIE'))
+    .reduce((sum, l) => {
+      const poids = typeof l.poids_kg === 'number' ? l.poids_kg : parseFloat(String(l.poids_kg)) || 0
+      return sum + poids
+    }, 0)
+
+  return { totalProcessed, enteredBoutique, recycledDirect, recycledFromBoutique }
+}
+
+/**
+ * B48-P6: Retourne le badge de type pour une ligne
+ */
+const getTypeBadge = (ligne: LigneResponse) => {
+  if (ligne.is_exit) {
+    return <Badge color="red" size="sm">Sortie boutique</Badge>
+  }
+  if (ligne.destination === 'MAGASIN') {
+    return <Badge color="green" size="sm">Entrée boutique</Badge>
+  }
+  return <Badge color="orange" size="sm">Recyclage direct</Badge>
+}
+
 const ReceptionTicketDetail: React.FC = () => {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -312,10 +359,8 @@ const ReceptionTicketDetail: React.FC = () => {
     )
   }
 
-  const totalPoids = ticket.lignes.reduce((sum, l) => {
-    const poids = typeof l.poids_kg === 'number' ? l.poids_kg : parseFloat(String(l.poids_kg)) || 0
-    return sum + poids
-  }, 0)
+  // B48-P6: Calculer les 4 métriques de poids
+  const metrics = calculateMetrics(ticket.lignes)
 
   return (
     <Container>
@@ -379,13 +424,44 @@ const ReceptionTicketDetail: React.FC = () => {
             </InfoContent>
           </InfoItem>
 
+          {/* B48-P6: 4 KPIs de poids distincts */}
           <InfoItem>
             <InfoIcon>
               <Scale size={20} />
             </InfoIcon>
             <InfoContent>
-              <InfoLabel>Poids total</InfoLabel>
-              <InfoValue>{formatWeight(totalPoids)} kg</InfoValue>
+              <InfoLabel>Poids total traité</InfoLabel>
+              <InfoValue>{formatWeight(metrics.totalProcessed)} kg</InfoValue>
+            </InfoContent>
+          </InfoItem>
+
+          <InfoItem>
+            <InfoIcon style={{ background: '#d1fae5', color: '#059669' }}>
+              <Package size={20} />
+            </InfoIcon>
+            <InfoContent>
+              <InfoLabel>Poids entré en boutique</InfoLabel>
+              <InfoValue>{formatWeight(metrics.enteredBoutique)} kg</InfoValue>
+            </InfoContent>
+          </InfoItem>
+
+          <InfoItem>
+            <InfoIcon style={{ background: '#fed7aa', color: '#d97706' }}>
+              <Package size={20} />
+            </InfoIcon>
+            <InfoContent>
+              <InfoLabel>Poids recyclé directement</InfoLabel>
+              <InfoValue>{formatWeight(metrics.recycledDirect)} kg</InfoValue>
+            </InfoContent>
+          </InfoItem>
+
+          <InfoItem>
+            <InfoIcon style={{ background: '#fee2e2', color: '#dc2626' }}>
+              <Package size={20} />
+            </InfoIcon>
+            <InfoContent>
+              <InfoLabel>Poids recyclé depuis boutique</InfoLabel>
+              <InfoValue>{formatWeight(metrics.recycledFromBoutique)} kg</InfoValue>
             </InfoContent>
           </InfoItem>
 
@@ -415,6 +491,7 @@ const ReceptionTicketDetail: React.FC = () => {
               <tr>
                 <Th>Catégorie</Th>
                 <Th>Poids (kg)</Th>
+                <Th>Type</Th>
                 <Th>Destination</Th>
                 <Th>Notes</Th>
               </tr>
@@ -424,6 +501,7 @@ const ReceptionTicketDetail: React.FC = () => {
                 <tr key={ligne.id}>
                   <Td>{ligne.category_label || 'Non spécifiée'}</Td>
                   <Td>{formatWeight(ligne.poids_kg || 0)}</Td>
+                  <Td>{getTypeBadge(ligne)}</Td>
                   <Td>{ligne.destination || '-'}</Td>
                   <Td>{ligne.notes || '-'}</Td>
                 </tr>
