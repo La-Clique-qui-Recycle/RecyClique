@@ -14,6 +14,7 @@ class CategoryCreate(CategoryBase):
     price: Optional[Decimal] = None
     max_price: Optional[Decimal] = None
     display_order: Optional[int] = 0
+    display_order_entry: Optional[int] = 0  # Story B48-P4: Ordre pour ENTRY/DEPOT
     is_visible: Optional[bool] = True
     shortcut_key: Optional[str] = None
     # official_name hérité de CategoryBase (optionnel)
@@ -27,6 +28,7 @@ class CategoryUpdate(BaseModel):
     price: Optional[Decimal] = None
     max_price: Optional[Decimal] = None
     display_order: Optional[int] = None
+    display_order_entry: Optional[int] = None  # Story B48-P4: Ordre pour ENTRY/DEPOT
     is_visible: Optional[bool] = None
     shortcut_key: Optional[str] = None
 
@@ -38,6 +40,7 @@ class CategoryRead(CategoryBase):
     price: Optional[Decimal] = None
     max_price: Optional[Decimal] = None
     display_order: int
+    display_order_entry: int  # Story B48-P4: Ordre pour ENTRY/DEPOT
     is_visible: bool
     shortcut_key: Optional[str] = None
     created_at: datetime
@@ -86,6 +89,7 @@ class CategoryDisplay(BaseModel):
     price: Optional[Decimal] = None
     max_price: Optional[Decimal] = None
     display_order: int
+    display_order_entry: int  # Story B48-P4: Ordre pour ENTRY/DEPOT
     is_visible: bool
     shortcut_key: Optional[str] = None
 
@@ -113,6 +117,7 @@ class CategoryDisplay(BaseModel):
             price=category.price,
             max_price=category.max_price,
             display_order=category.display_order,
+            display_order_entry=category.display_order_entry,  # Story B48-P4
             is_visible=category.is_visible,
             shortcut_key=category.shortcut_key
         )
