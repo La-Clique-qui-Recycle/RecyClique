@@ -35,6 +35,11 @@ class DisplayOrderUpdate(BaseModel):
     display_order: int
 
 
+class DisplayOrderEntryUpdate(BaseModel):
+    """Story B48-P4: Schéma pour la mise à jour de l'ordre ENTRY/DEPOT"""
+    display_order_entry: int
+
+
 @router.post(
     "/",
     response_model=CategoryRead,
@@ -404,6 +409,23 @@ async def update_category_display_order(
     """Update category display order"""
     service = CategoryManagementService(db)
     return await service.update_display_order(category_id, order_data.display_order)
+
+
+@router.put(
+    "/{category_id}/display-order-entry",
+    response_model=CategoryRead,
+    summary="Update category display order for ENTRY/DEPOT",
+    description="Story B48-P4: Update category display order for ENTRY/DEPOT tickets. Requires ADMIN or SUPER_ADMIN role."
+)
+async def update_category_display_order_entry(
+    category_id: str,
+    order_data: DisplayOrderEntryUpdate,
+    current_user: User = Depends(require_role_strict([UserRole.ADMIN, UserRole.SUPER_ADMIN])),
+    db: Session = Depends(get_db)
+):
+    """Story B48-P4: Update category display order for ENTRY/DEPOT tickets"""
+    service = CategoryManagementService(db)
+    return await service.update_display_order_entry(category_id, order_data.display_order_entry)
 
 
 @router.get(

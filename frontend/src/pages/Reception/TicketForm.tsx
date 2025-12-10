@@ -1133,9 +1133,16 @@ const TicketForm: React.FC = () => {
       return cat.parent_id === currentParentId;
     })
     .sort((a, b) => {
-      // Trier par display_order puis par nom
-      if (a.display_order !== b.display_order) {
-        return a.display_order - b.display_order;
+      // Story B48-P4: Trier par display_order_entry pour les tickets de réception (ENTRY)
+      // Utiliser display_order_entry (qui est déjà trié par le backend), avec fallback sur display_order
+      const orderA = (a.display_order_entry !== undefined && a.display_order_entry !== null) 
+        ? a.display_order_entry 
+        : a.display_order;
+      const orderB = (b.display_order_entry !== undefined && b.display_order_entry !== null) 
+        ? b.display_order_entry 
+        : b.display_order;
+      if (orderA !== orderB) {
+        return orderA - orderB;
       }
       return a.name.localeCompare(b.name);
     })

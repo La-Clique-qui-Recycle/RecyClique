@@ -1,6 +1,6 @@
 # Story B48-P6: Correction Affichage Poids Pages Admin
 
-**Statut:** Draft  
+**Statut:** Done  
 **Épopée:** [EPIC-B48 – Améliorations Opérationnelles v1.3.2](../epics/epic-b48-ameliorations-operationnelles-v1.3.2.md)  
 **Module:** Frontend Admin  
 **Priorité:** MOYENNE (correction affichage)

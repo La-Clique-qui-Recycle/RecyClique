@@ -18,6 +18,7 @@ class Category(Base):
     price = Column(Numeric(10, 2), nullable=True)
     max_price = Column(Numeric(10, 2), nullable=True)
     display_order = Column(Integer, default=0, nullable=False, index=True)
+    display_order_entry = Column(Integer, default=0, nullable=False, index=True)  # Story B48-P4: Ordre pour ENTRY/DEPOT
     is_visible = Column(Boolean, default=True, nullable=False, index=True)
     shortcut_key = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

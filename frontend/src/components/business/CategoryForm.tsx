@@ -173,16 +173,21 @@ export const CategoryForm: React.FC<CategoryFormProps> = ({
           onChange={(value) => setParentId(value)}
           data={[
             { value: '', label: 'Aucune (catégorie racine)' },
-            ...availableCategories.map(cat => ({
-              value: cat.id,
-              label: cat.name
-            }))
+            // Story B48-P4: Filtrer uniquement les catégories racines et trier par display_order
+            ...availableCategories
+              .filter(cat => !cat.parent_id) // Uniquement les racines
+              .sort((a, b) => a.display_order - b.display_order) // Trier par display_order
+              .map(cat => ({
+                value: cat.id,
+                label: cat.name
+              }))
           ]}
           clearable
           searchable
           loading={loadingCategories}
           data-testid="parent-category-select"
           aria-label="Sélecteur de catégorie parente"
+          description="Seules les catégories racines peuvent être sélectionnées comme parent"
         />
 
         <NumberInput

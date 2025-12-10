@@ -9,6 +9,7 @@ export interface Category {
   price?: number | null;
   max_price?: number | null;
   display_order: number;
+  display_order_entry: number;  // Story B48-P4: Ordre d'affichage pour ENTRY/DEPOT
   is_visible: boolean;
   shortcut_key?: string | null;
   created_at: string;
@@ -237,6 +238,14 @@ class CategoryService {
    */
   async updateDisplayOrder(id: string, displayOrder: number): Promise<Category> {
     const response = await api.put(`/v1/categories/${id}/display-order`, { display_order: displayOrder });
+    return response.data;
+  }
+
+  /**
+   * Story B48-P4: Update category display order for ENTRY/DEPOT
+   */
+  async updateDisplayOrderEntry(id: string, displayOrderEntry: number): Promise<Category> {
+    const response = await api.put(`/v1/categories/${id}/display-order-entry`, { display_order_entry: displayOrderEntry });
     return response.data;
   }
 

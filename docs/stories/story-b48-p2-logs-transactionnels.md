@@ -1,6 +1,6 @@
 # Story B48-P2: Logs Transactionnels (Monitoring Bug Tickets Fantômes)
 
-**Statut:** Ready for Review  
+**Statut:** Done  
 **Épopée:** [EPIC-B48 – Améliorations Opérationnelles v1.3.2](../epics/epic-b48-ameliorations-operationnelles-v1.3.2.md)  
 **Module:** Backend API  
 **Priorité:** HAUTE (sécurité/débogage)
