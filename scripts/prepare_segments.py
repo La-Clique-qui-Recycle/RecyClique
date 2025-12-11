@@ -210,3 +210,5 @@ if __name__ == "__main__":
         compute_metrics(meeting_id, segments)
         print(f"\n✅ Préparation terminée!")
 
+
+

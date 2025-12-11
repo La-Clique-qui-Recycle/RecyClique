@@ -11,6 +11,7 @@ import CashSessionHeader from '../../components/business/CashSessionHeader';
 import CashKPIBanner from '../../components/business/CashKPIBanner';
 import { Numpad } from '../../components/ui/Numpad';
 import type { SaleItemData } from '../../components/business/SaleWizard';
+import { useCashWizardStepState } from '../../hooks/useCashWizardStepState';
 
 // ===== KIOSK MODE LAYOUT =====
 
@@ -129,7 +130,7 @@ const Sale: React.FC = () => {
 
   // Utiliser les stores injectés (réel ou virtuel selon le contexte)
   const cashSessionStore = useCashSessionStoreInjected();
-  const { isDeferredMode } = useCashStores();  // B44-P1
+  const { isDeferredMode, isVirtualMode } = useCashStores();  // B44-P1, B49-P3
   const {
     currentSession,
     currentSaleItems,
@@ -139,12 +140,14 @@ const Sale: React.FC = () => {
     updateSaleItem,
     setCurrentSaleNote,  // Story B40-P1: Notes sur les tickets de caisse
     submitSale,
-    loading
+    loading,
+    currentRegisterOptions  // B49-P3: Options de workflow du register
   } = cashSessionStore;
 
   const { currentUser } = useAuthStore();
   const { getCategoryById, fetchCategories } = useCategoryStoreInjected();
   const { clearSelection, selectedPreset, notes } = usePresetStoreInjected();
+  const { stepState } = useCashWizardStepState();  // Story B49-P2: Pour détecter l'étape Catégorie
   
   // B44-P1: Vérifier si la session est différée ET OUVERTE
   const isDeferredSession = useMemo(() => {
@@ -542,6 +545,13 @@ const Sale: React.FC = () => {
         handleNumpadClear();
         return;
       }
+      
+      // Story B49-P2: Raccourci Enter sur onglet Catégorie = Finaliser la vente
+      if (event.key === 'Enter' && stepState.currentStep === 'category' && currentSaleItems.length > 0) {
+        event.preventDefault();
+        handleFinalizeSale();
+        return;
+      }
 
       // Raccourci pour "+" (touche "=" en AZERTY) en mode weight pour ajouter une pesée
       // Laisser MultipleWeightEntry gérer le "+" directement, mais mapper "=" vers "+"
@@ -561,7 +571,7 @@ const Sale: React.FC = () => {
 
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [numpadMode, quantityValue, priceValue, weightValue, handleNumpadDigit, handleNumpadBackspace, handleNumpadClear, handleNumpadDecimal]);
+  }, [numpadMode, quantityValue, priceValue, weightValue, handleNumpadDigit, handleNumpadBackspace, handleNumpadClear, handleNumpadDecimal, stepState.currentStep, currentSaleItems.length, handleFinalizeSale]);
 
   return (
     <KioskContainer>
@@ -616,6 +626,7 @@ const Sale: React.FC = () => {
             onItemComplete={handleItemComplete}
             numpadCallbacks={numpadCallbacks}
             currentMode={numpadMode}
+            registerOptions={currentRegisterOptions}  // B49-P3: Passer les options héritées
           />
 
           {/* Success popup */}
@@ -661,6 +672,7 @@ const Sale: React.FC = () => {
         onConfirm={handleConfirmFinalization}
         saleNote={currentSaleNote}
         onSaleNoteChange={setCurrentSaleNote}
+        items={currentSaleItems}  // Story B49-P2: Passer les items pour calculer sous-total
       />
     </KioskContainer>
   );

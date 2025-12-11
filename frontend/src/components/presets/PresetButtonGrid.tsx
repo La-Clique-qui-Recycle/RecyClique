@@ -18,6 +18,8 @@ interface PresetButtonGridProps {
   // Nouvelles props pour état isolé par transaction
   selectedPreset?: PresetButtonWithCategory | null;
   onPresetSelect?: (preset: PresetButtonWithCategory | null) => void;
+  // Story B49-P6: Support filtrage presets
+  hiddenPresetIds?: string[];
 }
 
 // Default fallback buttons as specified in the story
@@ -35,7 +37,8 @@ const PresetButtonGrid: React.FC<PresetButtonGridProps> = ({
   compact = false,
   fallbackButtons = DEFAULT_FALLBACK_BUTTONS,
   selectedPreset: propSelectedPreset,
-  onPresetSelect: propOnPresetSelect
+  onPresetSelect: propOnPresetSelect,
+  hiddenPresetIds = []
 }) => {
   const {
     activePresets,
@@ -96,7 +99,10 @@ const PresetButtonGrid: React.FC<PresetButtonGridProps> = ({
   }
 
   // If no active presets, show configurable fallback buttons
-  const buttonsToShow = activePresets.length > 0 ? activePresets : fallbackButtons;
+  const allButtons = activePresets.length > 0 ? activePresets : fallbackButtons;
+  
+  // Story B49-P6: Filtrer les presets selon hiddenPresetIds
+  const buttonsToShow = allButtons.filter(preset => !hiddenPresetIds.includes(preset.id));
 
   return (
     <div>

@@ -167,3 +167,5 @@ if __name__ == "__main__":
     print(f"📝 Génération du compte-rendu pour: {meeting_id}")
     generate_meeting_report(meeting_id)
 
+
+

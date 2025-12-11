@@ -6,3 +6,5 @@ Une fois copié, lancez :
 ```bash
 python scripts/aai_transcribe.py --meeting-id "2025-01-27-test-single" --verbose --concurrency 1
 ```
+
+

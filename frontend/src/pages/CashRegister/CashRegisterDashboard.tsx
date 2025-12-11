@@ -1,23 +1,39 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { cashRegisterDashboardService, cashSessionService } from '../../services/cashSessionService';
-import { Card, Badge, Group, Button, SimpleGrid, Title, Container, LoadingOverlay, Text } from '@mantine/core';
+import { Card, Badge, Group, Button, SimpleGrid, Title, Container, LoadingOverlay, Text, Menu, ActionIcon } from '@mantine/core';
 import { useCashSessionStoreInjected, useCashStores } from '../../providers/CashStoreProvider';
 import { useAuthStore } from '../../stores/authStore';  // B44-P1: Pour vérifier les permissions
-import { PlayCircle, Calendar } from 'lucide-react';
+import { PlayCircle, Calendar, MoreVertical, Settings } from 'lucide-react';
 
 interface RegisterStatus {
   id: string;
   name: string;
   is_open: boolean;
+  enable_virtual?: boolean;
+  enable_deferred?: boolean;
+  location?: string | null;
 }
 
 const RegisterCard: React.FC<{ reg: RegisterStatus; onOpen: (id: string) => void; onResume: (id: string) => void }>
   = ({ reg, onOpen, onResume }) => {
+  // Story B49-P5: T5 - Afficher localisation pour toutes les caisses réelles (pas les cartes virtuelles/différées du dashboard)
+  // Note: Une caisse peut avoir enable_virtual/enable_deferred activés mais être quand même une caisse physique avec localisation
+  // On affiche la localisation pour toutes les caisses qui ne sont pas les cartes spéciales du dashboard
+  const hasLocation = reg.location && typeof reg.location === 'string' && reg.location.trim() !== '';
+  
   return (
     <Card shadow="sm" padding="lg" radius="md" withBorder>
       <Group position="apart" mb="xs">
-        <Title order={4}>{reg.name}</Title>
+        <div>
+          <Title order={4}>{reg.name}</Title>
+          {/* Story B49-P5: T5 - Affichage localisation sous titre caisse */}
+          {hasLocation && (
+            <Text size="md" c="dimmed" mt={4} style={{ fontWeight: 'normal', fontSize: '0.95rem', color: '#666' }}>
+              {reg.location}
+            </Text>
+          )}
+        </div>
         <Badge color={reg.is_open ? 'green' : 'gray'}>{reg.is_open ? 'Ouverte' : 'Fermée'}</Badge>
       </Group>
       <Group position="right">
@@ -41,6 +57,13 @@ const CashRegisterDashboard: React.FC = () => {
   
   // B44-P1: Vérifier si l'utilisateur peut accéder à la saisie différée
   const canAccessDeferred = currentUser?.role === 'admin' || currentUser?.role === 'super-admin';
+  
+  // Vérifier si l'utilisateur est SuperAdmin pour afficher le menu de gestion
+  const isSuperAdmin = currentUser?.role === 'super-admin';
+  
+  // B49-P3: Calculer si au moins une caisse a enable_virtual ou enable_deferred activé
+  const hasVirtualEnabled = registers.some(r => r.enable_virtual === true);
+  const hasDeferredEnabled = registers.some(r => r.enable_deferred === true);
 
   // B44-P1: En mode différé, rediriger automatiquement vers l'ouverture de session
   useEffect(() => {
@@ -71,9 +94,10 @@ const CashRegisterDashboard: React.FC = () => {
     load();
   }, [isVirtualMode]);
 
+  // B49-P7: Passer register_id via route params au lieu de state
   const handleOpen = (registerId: string) => {
     const basePath = isVirtualMode ? '/cash-register/virtual' : '/cash-register';
-    navigate(`${basePath}/session/open`, { state: { register_id: registerId } });
+    navigate(`${basePath}/session/open?register_id=${registerId}`);
   };
 
   const handleResume = async (registerId: string) => {
@@ -112,7 +136,7 @@ const CashRegisterDashboard: React.FC = () => {
       }
     }
     // Fallback: si pas de session détectée, aller à l'ouverture
-    navigate(`${basePath}/session/open`, { state: { register_id: registerId } });
+    navigate(`${basePath}/session/open?register_id=${registerId}`);
   };
 
   const handleVirtualCashRegister = () => {
@@ -167,10 +191,16 @@ const CashRegisterDashboard: React.FC = () => {
               </Group>
               <Badge color="blue" variant="filled" size="lg">MODE FORMATION</Badge>
             </Group>
-            <Text size="md" mb="xl" c="dimmed">
+            <Text size="md" mb="md" c="dimmed">
               Mode d'entraînement sans impact sur les données réelles. 
               Toutes les opérations sont simulées localement.
             </Text>
+            {/* B49-P3: Affichage caisse source pour traçabilité */}
+            {cashSessionStore.currentSession?.register_id && (
+              <Text size="sm" mb="xl" c="dimmed" style={{ fontStyle: 'italic' }}>
+                Hérite des options de workflow de la caisse source
+              </Text>
+            )}
             <Group position="right">
               <Button 
                 color="blue" 
@@ -200,12 +230,38 @@ const CashRegisterDashboard: React.FC = () => {
   return (
     <Container size="lg" py="xl">
       <LoadingOverlay visible={loading} />
-      <Title order={2} mb="lg">Sélection du Poste de Caisse</Title>
+      <Group position="apart" mb="lg" align="center">
+        <Title order={2}>Sélection du Poste de Caisse</Title>
+        {isSuperAdmin && (
+          <Menu shadow="md" width={200} position="bottom-end">
+            <Menu.Target>
+              <ActionIcon 
+                variant="subtle" 
+                color="gray" 
+                size="sm"
+                aria-label="Menu de gestion"
+                style={{ opacity: 0.6 }}
+              >
+                <MoreVertical size={18} />
+              </ActionIcon>
+            </Menu.Target>
+            <Menu.Dropdown>
+              <Menu.Item 
+                icon={<Settings size={16} />}
+                onClick={() => navigate('/admin/cash-registers')}
+              >
+                Gestion des postes de caisse
+              </Menu.Item>
+            </Menu.Dropdown>
+          </Menu>
+        )}
+      </Group>
       <SimpleGrid cols={3} spacing="lg" breakpoints={[{ maxWidth: 'sm', cols: 1 }]}>
         {registers.map(reg => (
           <RegisterCard key={reg.id} reg={reg} onOpen={handleOpen} onResume={handleResume} />
         ))}
-        {/* Carte Caisse Virtuelle pour la simulation */}
+        {/* B49-P3: Carte Caisse Virtuelle - affichée uniquement si au moins une caisse a enable_virtual=true */}
+        {hasVirtualEnabled && (
         <Card 
           shadow="sm" 
           padding="lg" 
@@ -224,8 +280,12 @@ const CashRegisterDashboard: React.FC = () => {
             </Group>
             <Badge color="blue" variant="light">Simulation</Badge>
           </Group>
-          <Text size="sm" c="dimmed" mb="md">
+          <Text size="sm" c="dimmed" mb="sm">
             Mode d'entraînement sans impact sur les données réelles
+          </Text>
+          {/* B49-P3: Affichage caisse source pour traçabilité */}
+          <Text size="xs" c="dimmed" mb="md" style={{ fontStyle: 'italic' }}>
+            Hérite des options de workflow de la caisse source sélectionnée
           </Text>
           <Group position="right">
             <Button 
@@ -238,9 +298,10 @@ const CashRegisterDashboard: React.FC = () => {
             </Button>
           </Group>
         </Card>
+        )}
         
-        {/* B44-P1: Carte Saisie Différée (ADMIN/SUPER_ADMIN uniquement) */}
-        {canAccessDeferred && (
+        {/* B49-P3: Carte Saisie Différée - affichée uniquement si au moins une caisse a enable_deferred=true ET utilisateur est ADMIN/SUPER_ADMIN */}
+        {hasDeferredEnabled && canAccessDeferred && (
           <Card 
             shadow="sm" 
             padding="lg" 
@@ -259,8 +320,12 @@ const CashRegisterDashboard: React.FC = () => {
               </Group>
               <Badge color="orange" variant="light" size="sm">ADMIN</Badge>
             </Group>
-            <Text size="sm" c="dimmed" mb="md">
+            <Text size="sm" c="dimmed" mb="sm">
               Saisir des ventes d'anciens cahiers avec leur date réelle de vente
+            </Text>
+            {/* B49-P3: Affichage caisse source pour traçabilité */}
+            <Text size="xs" c="dimmed" mb="md" style={{ fontStyle: 'italic' }}>
+              Hérite des options de workflow de la caisse source sélectionnée
             </Text>
             <Group position="right">
               <Button 

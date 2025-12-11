@@ -36,7 +36,7 @@ async def list_cash_registers_status(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role_strict([UserRole.USER, UserRole.ADMIN, UserRole.SUPER_ADMIN]))
 ):
-    """Retourne pour chaque poste de caisse: id, name, is_open (session en cours)."""
+    """Retourne pour chaque poste de caisse: id, name, is_open (session en cours), enable_virtual, enable_deferred."""
     reg_service = CashRegisterService(db)
     sess_service = CashSessionService(db)
 
@@ -49,6 +49,9 @@ async def list_cash_registers_status(
             "id": str(r.id),
             "name": r.name,
             "is_open": is_open,
+            "enable_virtual": r.enable_virtual if hasattr(r, 'enable_virtual') else False,
+            "enable_deferred": r.enable_deferred if hasattr(r, 'enable_deferred') else False,
+            "location": r.location,  # Story B49-P5: Toujours retourner location (peut être None)
         })
 
     return {"data": results, "total": len(results)}

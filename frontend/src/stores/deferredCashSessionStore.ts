@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { devtools, persist } from 'zustand/middleware';
 import { cashSessionService } from '../services/cashSessionService';
 import axiosClient from '../api/axiosClient';
+import { getCashRegister } from '../services/api';  // B49-P3: Pour charger les options de workflow depuis la caisse source
 
 // Réutiliser les interfaces du store normal
 export interface CashSession {
@@ -77,6 +78,9 @@ interface DeferredCashSessionState {
   // Scroll state for ticket display
   ticketScrollState: ScrollState;
 
+  // B49-P3: Options de workflow héritées de la caisse source
+  currentRegisterOptions: Record<string, any> | null;
+
   // Actions
   setCurrentSession: (session: CashSession | null) => void;
   setSessions: (sessions: CashSession[]) => void;
@@ -84,6 +88,7 @@ interface DeferredCashSessionState {
   setError: (error: string | null) => void;
   clearError: () => void;
   setOpenedAt: (date: string | null) => void;  // B44-P1: Définir la date de session
+  setCurrentRegisterOptions: (options: Record<string, any> | null) => void;  // B49-P3: Définir les options héritées
 
   // Sale actions
   addSaleItem: (item: Omit<SaleItem, 'id'>) => void;
@@ -120,6 +125,7 @@ export const useDeferredCashSessionStore = create<DeferredCashSessionState>()(
         loading: false,
         error: null,
         openedAt: null,  // B44-P1: Date de session différée
+        currentRegisterOptions: null,  // B49-P3: Options de workflow héritées de la caisse source
         ticketScrollState: {
           scrollTop: 0,
           scrollHeight: 0,
@@ -136,6 +142,7 @@ export const useDeferredCashSessionStore = create<DeferredCashSessionState>()(
         setError: (error) => set({ error }),
         clearError: () => set({ error: null }),
         setOpenedAt: (date) => set({ openedAt: date }),  // B44-P1
+        setCurrentRegisterOptions: (options) => set({ currentRegisterOptions: options }),  // B49-P3: Définir les options héritées
 
         // Sale actions (identique au store normal)
         addSaleItem: (item: Omit<SaleItem, 'id'>) => {
@@ -323,6 +330,20 @@ export const useDeferredCashSessionStore = create<DeferredCashSessionState>()(
               set({ openedAt: data.opened_at });
             }
 
+            // B49-P3: Charger les options de workflow depuis la caisse source si register_id est présent
+            let registerOptions: Record<string, any> | null = null;
+            if (data.register_id) {
+              try {
+                const register = await getCashRegister(data.register_id);
+                if (register?.workflow_options) {
+                  registerOptions = register.workflow_options;
+                  console.log('[DeferredCashStore] Options héritées de la caisse source:', registerOptions);
+                }
+              } catch (error) {
+                console.warn('[DeferredCashStore] Impossible de charger les options de la caisse source:', error);
+              }
+            }
+
             // B44-P1: En mode différé, ne pas vérifier les sessions existantes
             // On veut toujours créer une nouvelle session avec la date spécifiée
             // B44-P1: En mode différé, ne JAMAIS réutiliser une session existante
@@ -352,7 +373,8 @@ export const useDeferredCashSessionStore = create<DeferredCashSessionState>()(
             console.log('[openSession] Session created:', session);
             
             set({ 
-              currentSession: session, 
+              currentSession: session,
+              currentRegisterOptions: registerOptions,  // B49-P3: Stocker les options héritées
               loading: false 
             });
             

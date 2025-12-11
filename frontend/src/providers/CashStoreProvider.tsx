@@ -1,4 +1,4 @@
-import React, { createContext, useContext, ReactNode, useMemo } from 'react';
+import React, { createContext, useContext, ReactNode, useMemo, useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useCashSessionStore } from '../stores/cashSessionStore';
 import { useVirtualCashSessionStore } from '../stores/virtualCashSessionStore';
@@ -7,6 +7,8 @@ import { useCategoryStore } from '../stores/categoryStore';
 import { useVirtualCategoryStore } from '../stores/virtualCategoryStore';
 import { usePresetStore } from '../stores/presetStore';
 import { useVirtualPresetStore } from '../stores/virtualPresetStore';
+import { getCashRegister } from '../services/api';  // B49-P3: Pour charger les options de workflow
+import { WorkflowOptions } from '../types/cashRegister';  // B49-P3: Types pour les options
 
 /**
  * Interface pour les stores injectés
@@ -130,6 +132,47 @@ export const CashStoreProvider: React.FC<CashStoreProviderProps> = ({
       hasInitializedRef.current = false;
     }
   }, [isVirtualMode]); // Seulement dépendre de isVirtualMode
+
+  // B49-P3: Charger et propager les options de workflow depuis la caisse source
+  useEffect(() => {
+    const loadAndPropagateOptions = async () => {
+      // Mode virtuel : charger depuis virtualCashSessionStore
+      if (isVirtualMode && !isDeferredMode) {
+        const session = virtualCashSessionStore.currentSession;
+        if (session?.register_id) {
+          try {
+            const register = await getCashRegister(session.register_id);
+            if (register?.workflow_options) {
+              // Les options seront stockées dans le store virtuel (T7)
+              // Ici on les charge juste pour les rendre disponibles
+              console.log('[CashStoreProvider] Options chargées pour mode virtuel:', register.workflow_options);
+            }
+          } catch (error) {
+            console.error('[CashStoreProvider] Erreur lors du chargement des options pour mode virtuel:', error);
+          }
+        }
+      }
+      
+      // Mode différé : charger depuis deferredCashSessionStore
+      if (isDeferredMode) {
+        const session = deferredCashSessionStore.currentSession;
+        if (session?.register_id) {
+          try {
+            const register = await getCashRegister(session.register_id);
+            if (register?.workflow_options) {
+              // Les options seront stockées dans le store différé (T8)
+              // Ici on les charge juste pour les rendre disponibles
+              console.log('[CashStoreProvider] Options chargées pour mode différé:', register.workflow_options);
+            }
+          } catch (error) {
+            console.error('[CashStoreProvider] Erreur lors du chargement des options pour mode différé:', error);
+          }
+        }
+      }
+    };
+
+    loadAndPropagateOptions();
+  }, [isVirtualMode, isDeferredMode, virtualCashSessionStore.currentSession?.register_id, deferredCashSessionStore.currentSession?.register_id]);
 
   // Sélectionner les stores selon le mode
   const contextValue = useMemo<CashStoreContextValue>(() => ({

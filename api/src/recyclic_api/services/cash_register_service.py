@@ -46,6 +46,9 @@ class CashRegisterService:
             location=data.location,
             site_id=data.site_id,
             is_active=data.is_active,
+            workflow_options=data.workflow_options if hasattr(data, 'workflow_options') else {},
+            enable_virtual=data.enable_virtual if hasattr(data, 'enable_virtual') else False,
+            enable_deferred=data.enable_deferred if hasattr(data, 'enable_deferred') else False,
         )
         self._db.add(register)
         self._db.commit()
@@ -62,6 +65,12 @@ class CashRegisterService:
             register.site_id = data.site_id
         if data.is_active is not None:
             register.is_active = data.is_active
+        if data.workflow_options is not None:
+            register.workflow_options = data.workflow_options
+        if data.enable_virtual is not None:
+            register.enable_virtual = data.enable_virtual
+        if data.enable_deferred is not None:
+            register.enable_deferred = data.enable_deferred
 
         self._db.add(register)
         self._db.commit()

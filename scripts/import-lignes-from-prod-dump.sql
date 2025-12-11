@@ -12,3 +12,5 @@ COPY public.ligne_depot (id, ticket_id, poids_kg, notes, destination, category_i
 
 
 
+
+

@@ -219,3 +219,5 @@ Besoin de pouvoir sortir des objets du stock depuis l'écran de réception.
 3. Gestion cas particuliers vs politique générale
 4. Compatibilité avec promotions
 
+
+

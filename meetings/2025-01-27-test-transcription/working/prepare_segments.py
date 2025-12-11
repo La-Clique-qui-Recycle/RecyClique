@@ -188,3 +188,5 @@ print(f"  - Durée totale: {index_data['total_duration_seconds']/60:.1f} minutes
 print(f"  - Total tokens: {total_tokens:,}")
 print(f"  - Speakers: {', '.join(sorted(all_speakers))}")
 
+
+

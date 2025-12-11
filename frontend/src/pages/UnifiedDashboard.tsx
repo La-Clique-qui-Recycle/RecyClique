@@ -5,6 +5,7 @@ import { BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Toolti
 import { Package, DollarSign, Scale, TrendingUp, User } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
 import { getCashSessionStats, getReceptionSummary, getReceptionByCategory } from '../services/api';
+import { getCategories } from '../services/categoriesService';
 
 const DashboardContainer = styled.div`
   display: grid;
@@ -218,6 +219,7 @@ function UnifiedDashboard() {
   const [salesStats, setSalesStats] = useState<any>(null);
   const [receptionStats, setReceptionStats] = useState<any>(null);
   const [categoryStats, setCategoryStats] = useState<CategoryStat[]>([]);
+  const [mainCategories, setMainCategories] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -266,6 +268,24 @@ function UnifiedDashboard() {
     return { start: start.toISOString(), end: end.toISOString() };
   };
 
+  // Charger les catégories principales une seule fois au montage
+  useEffect(() => {
+    const loadMainCategories = async () => {
+      try {
+        const categories = await getCategories();
+        // Filtrer pour ne garder que les catégories principales (parent_id === null ou undefined)
+        const mainCats = categories
+          .filter(cat => !cat.parent_id)
+          .map(cat => cat.name);
+        setMainCategories(mainCats);
+      } catch (err) {
+        console.error('Erreur lors du chargement des catégories:', err);
+        // En cas d'erreur, on continue sans filtre (affichage de toutes les catégories)
+      }
+    };
+    loadMainCategories();
+  }, []);
+
   // Fonction pour charger les statistiques avec filtres
   const loadStats = useCallback(async () => {
     setLoading(true);
@@ -291,7 +311,14 @@ function UnifiedDashboard() {
 
       setSalesStats(results[0]);
       setReceptionStats(results[1]);
-      setCategoryStats(results[2] || []);
+      
+      // Filtrer les catégories pour ne garder que les principales
+      const allCategoryStats = results[2] || [];
+      const filteredStats = mainCategories.length > 0
+        ? allCategoryStats.filter(stat => mainCategories.includes(stat.category_name))
+        : allCategoryStats; // Si pas encore chargées, afficher toutes (temporaire)
+      
+      setCategoryStats(filteredStats);
     } catch (err: any) {
       console.error('Erreur lors du chargement des statistiques:', err);
 
@@ -305,7 +332,7 @@ function UnifiedDashboard() {
     } finally {
       setLoading(false);
     }
-  }, [dateRange, startDate, endDate, isAdmin]);
+  }, [dateRange, startDate, endDate, isAdmin, mainCategories]);
 
   // Charger les statistiques au montage et quand les filtres changent
   useEffect(() => {

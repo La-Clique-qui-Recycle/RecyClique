@@ -121,6 +121,17 @@ async def create_sale(
     if not cash_session:
         raise HTTPException(status_code=404, detail="Session de caisse non trouvée")
     
+    # Story B49-P2: Validation métier pour mode prix global
+    # Calculer le sous-total (somme des total_price des items avec prix >0)
+    subtotal = sum(item.total_price for item in sale_data.items if item.total_price > 0)
+    
+    # Validation : si un sous-total existe, total_amount doit être >= sous-total
+    if subtotal > 0 and sale_data.total_amount < subtotal:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Le total ({sale_data.total_amount}) ne peut pas être inférieur au sous-total ({subtotal})"
+        )
+    
     # Déterminer la date de création de la vente (B44-P1)
     # Si la session est différée (opened_at < now()), utiliser opened_at de la session
     sale_created_at = None

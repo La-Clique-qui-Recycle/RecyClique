@@ -41,6 +41,26 @@ router = APIRouter()
 
 logger = logging.getLogger(__name__)
 
+
+def enrich_session_response(session: CashSession, service: CashSessionService) -> CashSessionResponse:
+    """Story B49-P1: Enrichit une réponse de session avec les options du register.
+    
+    Args:
+        session: La session de caisse à enrichir
+        service: Le service de session pour récupérer les options
+        
+    Returns:
+        CashSessionResponse enrichi avec register_options
+    """
+    # Récupérer les options du register via la méthode publique qui valide avec Pydantic
+    register_options = service.get_register_options(session)
+    
+    # Construire la réponse avec tous les champs
+    response_data = CashSessionResponse.model_validate(session).model_dump()
+    response_data['register_options'] = register_options
+    
+    return CashSessionResponse(**response_data)
+
 @router.post(
     "/", 
     response_model=CashSessionResponse,
@@ -71,8 +91,16 @@ logger = logging.getLogger(__name__)
                         "status": "open",
                         "opened_at": "2025-01-27T10:30:00Z",
                         "closed_at": None,
-                        "total_sales": 0.0,
-                        "total_items": 0
+                    "total_sales": 0.0,
+                    "total_items": 0,
+                    "register_options": {
+                        "features": {
+                            "no_item_pricing": {
+                                "enabled": False,
+                                "label": "Mode prix global (total saisi manuellement, article sans prix)"
+                            }
+                        }
+                    }
                     }
                 }
             }
@@ -176,7 +204,8 @@ async def create_cash_session(
         try:
             # Rafraîchir l'objet depuis la DB pour s'assurer que tous les champs sont chargés
             db.refresh(cash_session)
-            response = CashSessionResponse.model_validate(cash_session)
+            # Story B49-P1: Enrichir avec les options du register
+            response = enrich_session_response(cash_session, service)
             return response
         except Exception as serialization_error:
             logger.error(f"Erreur lors de la sérialisation de la session {cash_session.id}: {serialization_error}", exc_info=True)
@@ -280,7 +309,15 @@ async def get_cash_session_status(
                                 "opened_at": "2025-01-27T10:30:00Z",
                                 "closed_at": None,
                                 "total_sales": 50.0,
-                                "total_items": 5
+                                "total_items": 5,
+                                "register_options": {
+                                    "features": {
+                                        "no_item_pricing": {
+                                            "enabled": False,
+                                            "label": "Mode prix global (total saisi manuellement, article sans prix)"
+                                        }
+                                    }
+                                }
                             }
                         ],
                         "total": 1,
@@ -349,8 +386,9 @@ async def get_cash_sessions(
     
     sessions, total = service.get_sessions_with_filters(filters)
     
+    # Story B49-P1: Enrichir chaque session avec les options du register
     return CashSessionListResponse(
-        data=[CashSessionResponse.model_validate(session) for session in sessions],
+        data=[enrich_session_response(session, service) for session in sessions],
         total=total,
         skip=skip,
         limit=limit
@@ -377,8 +415,8 @@ async def get_current_cash_session(
             return None
         
         logging.info(f"=== DEBUG: Retour de la session {session.id} ===")
-        # Retourner directement l'objet session - FastAPI gère la sérialisation
-        return session
+        # Story B49-P1: Enrichir avec les options du register
+        return enrich_session_response(session, service)
         
     except Exception as e:
         # Log de l'erreur pour debug
@@ -436,7 +474,15 @@ async def get_current_cash_session(
                                 "created_at": "2025-01-27T11:00:00Z",
                                 "operator_id": "550e8400-e29b-41d4-a716-446655440001"
                             }
-                        ]
+                        ],
+                        "register_options": {
+                            "features": {
+                                "no_item_pricing": {
+                                    "enabled": False,
+                                    "label": "Mode prix global (total saisi manuellement, article sans prix)"
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -495,6 +541,9 @@ async def get_cash_session_detail(
         for sale in session.sales:
             sales_data.append(SaleDetail.model_validate(sale))
         
+        # Story B49-P1: Charger les options du register
+        register_options = service.get_register_options(session)
+        
         # Construire la réponse détaillée - éviter model_validate pour éviter l'erreur 500
         response_data = {
             "id": str(session.id),
@@ -512,6 +561,7 @@ async def get_cash_session_detail(
             "actual_amount": session.actual_amount,
             "variance": session.variance,
             "variance_comment": session.variance_comment,
+            "register_options": register_options,  # Story B49-P1: Ajouter les options
             "sales": sales_data,
             "operator_name": session.operator.username if session.operator else None,
             "site_name": session.site.name if session.site else None
@@ -560,7 +610,8 @@ async def update_cash_session(
     # Mettre à jour la session
     updated_session = service.update_session(session_id, session_update)
     
-    return CashSessionResponse.model_validate(updated_session)
+    # Story B49-P1: Enrichir avec les options du register
+    return enrich_session_response(updated_session, service)
 
 
 @router.post(
@@ -594,7 +645,15 @@ async def update_cash_session(
                         "opened_at": "2025-01-27T10:30:00Z",
                         "closed_at": "2025-01-27T18:30:00Z",
                         "total_sales": 50.0,
-                        "total_items": 5
+                        "total_items": 5,
+                        "register_options": {
+                            "features": {
+                                "no_item_pricing": {
+                                    "enabled": False,
+                                    "label": "Mode prix global (total saisi manuellement, article sans prix)"
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -788,7 +847,8 @@ async def close_cash_session(
             except Exception as exc:  # noqa: BLE001 - keep closing flow resilient
                 logger.error("Failed to send cash session report email: %s", exc)
 
-        response_model = CashSessionResponse.model_validate(closed_session)
+        # Story B49-P1: Enrichir avec les options du register
+        response_model = enrich_session_response(closed_session, service)
         response_model = response_model.model_copy(update={
             'report_download_url': report_download_url,
             'report_email_sent': email_sent,
