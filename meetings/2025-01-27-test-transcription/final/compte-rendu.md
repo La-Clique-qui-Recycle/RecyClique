@@ -280,3 +280,5 @@ Besoin de savoir qui a fait quoi, quand. Système existant à améliorer.
 **Workflow :** meeting-transcription  
 **Statut validation :** ✅ OK avec recommandations mineures
 
+
+

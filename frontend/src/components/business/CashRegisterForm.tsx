@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import styled from 'styled-components';
 import { createCashRegister, updateCashRegister, getSites } from '../../services/api';
+import { WorkflowOptions } from '../../types/cashRegister';
 
 const FormContainer = styled.div`
   background: white;
@@ -116,6 +117,9 @@ interface CashRegister {
   location?: string;
   site_id?: string;
   is_active: boolean;
+  enable_virtual?: boolean;
+  enable_deferred?: boolean;
+  workflow_options?: WorkflowOptions;
 }
 
 interface Site {
@@ -134,7 +138,10 @@ export default function CashRegisterForm({ register, onSuccess, onCancel }: Cash
     name: '',
     location: '',
     site_id: '',
-    is_active: true
+    is_active: true,
+    enable_virtual: false,
+    enable_deferred: false,
+    workflow_options: { features: {} }
   });
   const [sites, setSites] = useState<Site[]>([]);
   const [loading, setLoading] = useState(false);
@@ -142,7 +149,10 @@ export default function CashRegisterForm({ register, onSuccess, onCancel }: Cash
 
   useEffect(() => {
     if (register) {
-      setFormData(register);
+      setFormData({
+        ...register,
+        workflow_options: register.workflow_options || { features: {} }
+      });
     }
   }, [register]);
 
@@ -201,6 +211,27 @@ useEffect(() => {
       ...prev,
       [name]: type === 'checkbox' ? (e.target as HTMLInputElement).checked : value
     }));
+  };
+
+  const handleWorkflowOptionChange = (featureName: string, enabled: boolean) => {
+    setFormData(prev => {
+      const workflowOptions = prev.workflow_options || { features: {} };
+      return {
+        ...prev,
+        workflow_options: {
+          ...workflowOptions,
+          features: {
+            ...workflowOptions.features,
+            [featureName]: {
+              enabled,
+              label: featureName === 'no_item_pricing' 
+                ? 'Mode prix global (total saisi manuellement, article sans prix)'
+                : undefined
+            }
+          }
+        }
+      };
+    });
   };
 
   return (
@@ -265,6 +296,52 @@ useEffect(() => {
               disabled={loading}
             />
             <Label htmlFor="is_active">Poste actif</Label>
+          </CheckboxContainer>
+        </FormGroup>
+
+        <FormGroup>
+          <CheckboxContainer>
+            <Checkbox
+              id="enable_virtual"
+              name="enable_virtual"
+              type="checkbox"
+              checked={formData.enable_virtual || false}
+              onChange={handleChange}
+              disabled={loading}
+            />
+            <Label htmlFor="enable_virtual">Activer caisse virtuelle</Label>
+          </CheckboxContainer>
+        </FormGroup>
+
+        <FormGroup>
+          <CheckboxContainer>
+            <Checkbox
+              id="enable_deferred"
+              name="enable_deferred"
+              type="checkbox"
+              checked={formData.enable_deferred || false}
+              onChange={handleChange}
+              disabled={loading}
+            />
+            <Label htmlFor="enable_deferred">Activer caisse différée</Label>
+          </CheckboxContainer>
+        </FormGroup>
+
+        <FormGroup>
+          <Label style={{ marginBottom: '12px', fontWeight: 600, fontSize: '15px' }}>
+            Options de workflow
+          </Label>
+          <CheckboxContainer>
+            <Checkbox
+              id="no_item_pricing"
+              type="checkbox"
+              checked={formData.workflow_options?.features?.no_item_pricing?.enabled || false}
+              onChange={(e) => handleWorkflowOptionChange('no_item_pricing', e.target.checked)}
+              disabled={loading}
+            />
+            <Label htmlFor="no_item_pricing" style={{ marginBottom: 0 }}>
+              Mode prix global (total saisi manuellement, article sans prix)
+            </Label>
           </CheckboxContainer>
         </FormGroup>
 

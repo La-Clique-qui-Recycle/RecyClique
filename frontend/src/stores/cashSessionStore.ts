@@ -97,12 +97,16 @@ interface CashSessionState {
   // Permet de détecter l'anomalie "ITEM_ADDED_WITHOUT_TICKET"
   ticketOpenedLogged: boolean;
 
+  // B49-P3: Options de workflow du register courant
+  currentRegisterOptions: Record<string, any> | null;
+
   // Actions
   setCurrentSession: (session: CashSession | null) => void;
   setSessions: (sessions: CashSession[]) => void;
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
   clearError: () => void;
+  setCurrentRegisterOptions: (options: Record<string, any> | null) => void;  // B49-P3: Définir les options du register
 
   // Sale actions
   addSaleItem: (item: Omit<SaleItem, 'id'>) => void;
@@ -110,7 +114,7 @@ interface CashSessionState {
   updateSaleItem: (itemId: string, newQuantity: number, newWeight: number, newPrice: number, presetId?: string, notes?: string) => void;
   setCurrentSaleNote: (note: string | null) => void;  // Story B40-P1: Notes sur les tickets de caisse
   clearCurrentSale: () => void;
-  submitSale: (items: SaleItem[], finalization?: { donation: number; paymentMethod: 'cash'|'card'|'check'; cashGiven?: number; change?: number; note?: string; }) => Promise<boolean>;
+  submitSale: (items: SaleItem[], finalization?: { donation: number; paymentMethod: 'cash'|'card'|'check'; cashGiven?: number; change?: number; note?: string; overrideTotalAmount?: number; }) => Promise<boolean>;
 
   // Scroll actions
   setScrollPosition: (scrollTop: number) => void;
@@ -140,6 +144,7 @@ export const useCashSessionStore = create<CashSessionState>()(
         loading: false,
         error: null,
         ticketOpenedLogged: false,  // B48-P2: Flag pour détecter anomalies (ITEM_ADDED_WITHOUT_TICKET)
+        currentRegisterOptions: null,  // B49-P3: Options de workflow du register courant
         ticketScrollState: {
           scrollTop: 0,
           scrollHeight: 0,
@@ -152,8 +157,11 @@ export const useCashSessionStore = create<CashSessionState>()(
         // Setters
         setCurrentSession: (session) => set({ 
           currentSession: session,
-          ticketOpenedLogged: false  // B48-P2: Réinitialiser le flag lors d'un changement de session
+          ticketOpenedLogged: false,  // B48-P2: Réinitialiser le flag lors d'un changement de session
+          // B49-P3: Charger les options depuis register_options de la session
+          currentRegisterOptions: (session as any)?.register_options || null
         }),
+        setCurrentRegisterOptions: (options) => set({ currentRegisterOptions: options }),
         setSessions: (sessions) => set({ sessions }),
         setLoading: (loading) => set({ loading }),
         setError: (error) => set({ error }),
@@ -348,7 +356,7 @@ export const useCashSessionStore = create<CashSessionState>()(
           });
         },
 
-        submitSale: async (items: SaleItem[], finalization?: { donation: number; paymentMethod: 'cash'|'card'|'check'; cashGiven?: number; change?: number; note?: string; }): Promise<boolean> => {
+        submitSale: async (items: SaleItem[], finalization?: { donation: number; paymentMethod: 'cash'|'card'|'check'; cashGiven?: number; change?: number; note?: string; overrideTotalAmount?: number; }): Promise<boolean> => {
           const { currentSession } = get();
 
           if (!currentSession) {
@@ -368,6 +376,12 @@ export const useCashSessionStore = create<CashSessionState>()(
               return uuidRegex.test(str);
             };
 
+            // Story B49-P2: Utiliser overrideTotalAmount si fourni, sinon calcul automatique
+            const calculatedTotal = items.reduce((sum, item) => sum + item.total, 0);
+            const finalTotalAmount = finalization?.overrideTotalAmount !== undefined 
+              ? finalization.overrideTotalAmount 
+              : calculatedTotal;
+            
             const saleData: SaleCreate = {
               cash_session_id: currentSession.id,
               items: items.map(item => {
@@ -392,7 +406,7 @@ export const useCashSessionStore = create<CashSessionState>()(
                   notes: notes  // Notes utilisateur + type de preset si non-UUID
                 };
               }),
-              total_amount: items.reduce((sum, item) => sum + item.total, 0)
+              total_amount: finalTotalAmount  // Story B49-P2: Utiliser overrideTotalAmount si fourni
             };
 
             // Étendre le payload pour inclure finalisation (don, paiement)
@@ -451,8 +465,9 @@ export const useCashSessionStore = create<CashSessionState>()(
               if (status.is_active && status.session_id) {
                 const existingByRegister = await cashSessionService.getSession(status.session_id);
                 if (existingByRegister) {
-                  set({ currentSession: existingByRegister, loading: false });
+                  get().setCurrentSession(existingByRegister);
                   localStorage.setItem('currentCashSession', JSON.stringify(existingByRegister));
+                  set({ loading: false });
                   return existingByRegister;
                 }
               }
@@ -461,19 +476,18 @@ export const useCashSessionStore = create<CashSessionState>()(
             // Pré-check 2: session ouverte pour l'opérateur courant (fallback)
             const existing = await cashSessionService.getCurrentSession();
             if (existing) {
-              set({ currentSession: existing, loading: false });
+              get().setCurrentSession(existing);
               localStorage.setItem('currentCashSession', JSON.stringify(existing));
+              set({ loading: false });
               return existing;
             }
 
             const session = await cashSessionService.createSession(data);
-            set({ 
-              currentSession: session, 
-              loading: false 
-            });
+            get().setCurrentSession(session);
             
             // Sauvegarder en local pour la persistance
             localStorage.setItem('currentCashSession', JSON.stringify(session));
+            set({ loading: false });
             
             return session;
           } catch (error) {
@@ -486,8 +500,9 @@ export const useCashSessionStore = create<CashSessionState>()(
                 if (status.is_active && status.session_id) {
                   const existing = await cashSessionService.getSession(status.session_id);
                   if (existing) {
-                    set({ currentSession: existing, loading: false });
+                    get().setCurrentSession(existing);
                     localStorage.setItem('currentCashSession', JSON.stringify(existing));
+                    set({ loading: false });
                     return existing;
                   }
                 }
@@ -593,7 +608,8 @@ export const useCashSessionStore = create<CashSessionState>()(
               // Vérifier que la session est toujours ouverte côté serveur
               const serverSession = await cashSessionService.getSession(session.id);
               if (serverSession && serverSession.status === 'open') {
-                set({ currentSession: serverSession, loading: false });
+                get().setCurrentSession(serverSession);
+                set({ loading: false });
                 return;
               } else {
                 // Session fermée côté serveur, nettoyer le localStorage
@@ -603,12 +619,14 @@ export const useCashSessionStore = create<CashSessionState>()(
             // Pas de session locale: interroger l'API pour la session courante de l'opérateur
             const current = await cashSessionService.getCurrentSession();
             if (current && current.status === 'open') {
-              set({ currentSession: current, loading: false });
+              get().setCurrentSession(current);
               localStorage.setItem('currentCashSession', JSON.stringify(current));
+              set({ loading: false });
               return;
             }
 
-            set({ currentSession: null, loading: false });
+            get().setCurrentSession(null);
+            set({ loading: false });
           } catch (error) {
             const errorMessage = error instanceof Error ? error.message : 'Erreur lors de la récupération de la session';
             set({ error: errorMessage, loading: false });
@@ -628,8 +646,9 @@ export const useCashSessionStore = create<CashSessionState>()(
           try {
             const session = await cashSessionService.getSession(sessionId);
             if (session && session.status === 'open') {
-              set({ currentSession: session, loading: false });
+              get().setCurrentSession(session);
               localStorage.setItem('currentCashSession', JSON.stringify(session));
+              set({ loading: false });
               return true;
             }
             set({ loading: false, error: "Aucune session ouverte trouvée pour cet identifiant" });
@@ -645,7 +664,8 @@ export const useCashSessionStore = create<CashSessionState>()(
         name: 'cash-session-store',
         partialize: (state) => ({
           currentSession: state.currentSession,
-          currentSaleItems: state.currentSaleItems
+          currentSaleItems: state.currentSaleItems,
+          currentRegisterOptions: state.currentRegisterOptions  // B49-P7: Persister les options de workflow
         })
       }
     ),

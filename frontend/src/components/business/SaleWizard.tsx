@@ -10,6 +10,7 @@ import PriceCalculator from '../presets/PriceCalculator';
 import { useCategoryStore } from '../../stores/categoryStore';
 import { usePresetStore } from '../../stores/presetStore';
 import { PresetButtonWithCategory } from '../../services/presetService';
+import { useCashSessionStore } from '../../stores/cashSessionStore';
 import { keyboardShortcutHandler } from '../../utils/keyboardShortcuts';
 import { cashKeyboardShortcutHandler } from '../../utils/cashKeyboardShortcuts';
 import {
@@ -306,14 +307,16 @@ export interface NumpadCallbacks {
 }
 
 export interface SaleWizardProps {
+  registerOptions?: Record<string, any>;  // B49-P3: Options de workflow du register
   onItemComplete: (item: SaleItemData) => void;
   numpadCallbacks: NumpadCallbacks;
   currentMode: 'quantity' | 'price' | 'weight' | 'idle';
 }
 
-export const SaleWizard: React.FC<SaleWizardProps> = ({ onItemComplete, numpadCallbacks, currentMode }) => {
+export const SaleWizard: React.FC<SaleWizardProps> = ({ onItemComplete, numpadCallbacks, currentMode, registerOptions }) => {
   const { getCategoryById, activeCategories } = useCategoryStore();
   const { selectedPreset, notes, clearSelection } = usePresetStore();
+  const { currentRegisterOptions: storeOptions, currentSaleItems } = useCashSessionStore();
   const {
     stepState,
     transitionToStep,
@@ -324,6 +327,16 @@ export const SaleWizard: React.FC<SaleWizardProps> = ({ onItemComplete, numpadCa
     handleQuantityInputCompleted,
     handlePriceInputCompleted
   } = useCashWizardStepState();
+
+  // B49-P3: Utiliser les options passées en props (priorité) ou depuis le store
+  const effectiveOptions = registerOptions || storeOptions;
+  // Story B49-P2: Détecter si le mode prix global est activé
+  const isNoItemPricingEnabled = effectiveOptions?.features?.no_item_pricing?.enabled === true;
+  
+  // Story B49-P6: Détection type premier article (recyclage/déchèterie)
+  const isRecyclingTicket = useMemo(() => {
+    return currentSaleItems[0]?.presetId === 'recyclage' || currentSaleItems[0]?.presetId === 'decheterie';
+  }, [currentSaleItems]);
 
   // Feature flag for cash keyboard shortcuts
   const enableCashHotkeys = useFeatureFlag('enableCashHotkeys');
@@ -541,6 +554,19 @@ export const SaleWizard: React.FC<SaleWizardProps> = ({ onItemComplete, numpadCa
       return true;
     }
 
+    // Story B49-P2: En mode prix global, 0€ est valide
+    if (isNoItemPricingEnabled) {
+      if (!price) {
+        return true; // 0€ par défaut est valide
+      }
+      const num = parseFloat(price);
+      if (isNaN(num) || num < 0 || num > 9999.99) {
+        return false;
+      }
+      return true;
+    }
+
+    // Workflow standard : prix requis et >= 0.01€
     if (!price) {
       return false;
     }
@@ -550,7 +576,7 @@ export const SaleWizard: React.FC<SaleWizardProps> = ({ onItemComplete, numpadCa
       return false;
     }
     return true;
-  }, [price, currentTransactionPreset]);
+  }, [price, currentTransactionPreset, isNoItemPricingEnabled]);
 
   // Removed handleNumberClick, handleDecimalClick, handleClear - now handled by parent numpad
 
@@ -583,9 +609,13 @@ export const SaleWizard: React.FC<SaleWizardProps> = ({ onItemComplete, numpadCa
   };
 
   // Ordre de tabulation linéaire selon séquence Reception
-  const tabOrder: CashWizardStep[] = ['category', 'subcategory', 'weight', 'quantity', 'price'];
+  // Story B49-P2: Exclure 'quantity' de l'ordre si mode prix global activé
+  const tabOrder: CashWizardStep[] = isNoItemPricingEnabled 
+    ? ['category', 'subcategory', 'weight', 'price']
+    : ['category', 'subcategory', 'weight', 'quantity', 'price'];
 
   // Détermine quels domaines sont actifs (déjà renseignés) pour la navigation TAB
+  // Story B49-P2: Exclure 'quantity' si mode prix global activé
   const getActiveDomains = useCallback((): CashWizardStep[] => {
     const active: CashWizardStep[] = ['category']; // Catégorie toujours active
     
@@ -607,18 +637,26 @@ export const SaleWizard: React.FC<SaleWizardProps> = ({ onItemComplete, numpadCa
       }
     }
     
-    // Quantité active seulement si poids déjà renseigné
-    if (numpadCallbacks.weightValue && parseFloat(numpadCallbacks.weightValue) > 0) {
+    // Story B49-P2: Quantité active seulement si poids déjà renseigné ET mode prix global désactivé
+    if (!isNoItemPricingEnabled && numpadCallbacks.weightValue && parseFloat(numpadCallbacks.weightValue) > 0) {
       active.push('quantity');
     }
     
-    // Prix actif seulement si quantité déjà complétée (pas juste la valeur par défaut '1')
-    if (stepState.quantityState === 'completed') {
-      active.push('price');
+    // Prix actif si :
+    // - Mode prix global activé ET poids renseigné (on saute quantité)
+    // - OU mode standard ET quantité déjà complétée
+    if (isNoItemPricingEnabled) {
+      if (numpadCallbacks.weightValue && parseFloat(numpadCallbacks.weightValue) > 0) {
+        active.push('price');
+      }
+    } else {
+      if (stepState.quantityState === 'completed') {
+        active.push('price');
+      }
     }
     
     return active;
-  }, [selectedCategory, selectedSubcategory, activeCategories, numpadCallbacks.weightValue, stepState.quantityState]);
+  }, [selectedCategory, selectedSubcategory, activeCategories, numpadCallbacks.weightValue, stepState.quantityState, isNoItemPricingEnabled]);
 
   // Navigation tab uniquement entre domaines actifs
   const navigateToNextStep = useCallback((): void => {
@@ -881,18 +919,37 @@ export const SaleWizard: React.FC<SaleWizardProps> = ({ onItemComplete, numpadCa
     // Store the total weight in state
     setWeight(totalWeight.toString());
     handleWeightInputCompleted();
-    // Initialize numpad for quantity input
-    numpadCallbacks.setQuantityValue('1');
-    numpadCallbacks.setQuantityError('');
-    numpadCallbacks.setMode('quantity');
+    
+    // Story B49-P2: Si mode prix global activé, passer directement à prix (sauter quantité)
+    if (isNoItemPricingEnabled) {
+      // Quantité = 1 par défaut en mode prix global
+      numpadCallbacks.setQuantityValue('1');
+      numpadCallbacks.setQuantityError('');
+      // Passer directement à l'étape prix
+      transitionToStep('price');
+      numpadCallbacks.setMode('price');
+      
+      // Auto-focus sur la section prix après validation du poids
+      setTimeout(() => {
+        const priceInput = document.querySelector('[data-testid="price-input"]');
+        if (priceInput instanceof HTMLElement) {
+          priceInput.focus();
+        }
+      }, 100);
+    } else {
+      // Workflow standard : passer à quantité
+      numpadCallbacks.setQuantityValue('1');
+      numpadCallbacks.setQuantityError('');
+      numpadCallbacks.setMode('quantity');
 
-    // Auto-focus sur le champ quantité après validation du poids
-    setTimeout(() => {
-      const quantityInput = document.querySelector('[data-testid="quantity-input"]');
-      if (quantityInput instanceof HTMLElement) {
-        quantityInput.focus();
-      }
-    }, 100);
+      // Auto-focus sur le champ quantité après validation du poids
+      setTimeout(() => {
+        const quantityInput = document.querySelector('[data-testid="quantity-input"]');
+        if (quantityInput instanceof HTMLElement) {
+          quantityInput.focus();
+        }
+      }, 100);
+    }
   };
 
   const handlePriceConfirm = () => {
@@ -915,10 +972,13 @@ export const SaleWizard: React.FC<SaleWizardProps> = ({ onItemComplete, numpadCa
     } else if (price) {
       // Si pas de preset mais prix saisi manuellement, utiliser ce prix
       finalPrice = parseFloat(price);
-    } else if (category?.price && !category?.max_price) {
-      // Si pas de prix saisi et pas de max_price (prix fixe), utiliser le prix minimum
+    } else if (!isNoItemPricingEnabled && category?.price && !category?.max_price) {
+      // Story B49-P2: En mode prix global, ne pas utiliser le prix automatique de la catégorie
+      // Seuls les prix saisis manuellement doivent compter
+      // En mode standard, si pas de prix saisi et pas de max_price (prix fixe), utiliser le prix minimum
       finalPrice = Number(category.price);
     }
+    // En mode prix global, si pas de prix saisi, finalPrice reste à 0
 
     const totalPrice = finalPrice * numQuantity;
 
@@ -1100,6 +1160,23 @@ export const SaleWizard: React.FC<SaleWizardProps> = ({ onItemComplete, numpadCa
         );
 
       case 'price':
+        // Story B49-P6: Filtrage presets selon nombre d'items et type de ticket
+        const isFirstItem = currentSaleItems.length === 0;
+        const hiddenPresetIds: string[] = [];
+        
+        if (!isFirstItem) {
+          // À partir du 2ème article, filtrer les presets selon le type de ticket
+          if (!isRecyclingTicket) {
+            // Si premier article = vente normale (pas de Recyclage/Déchèterie), masquer Recyclage/Déchèterie
+            // Garder uniquement Don et Don-18
+            hiddenPresetIds.push('recyclage', 'decheterie');
+          } else {
+            // Si premier article = recyclage/déchèterie, masquer Don/Don-18
+            // Garder uniquement Recyclage et Déchèterie
+            hiddenPresetIds.push('don-0', 'don-18');
+          }
+        }
+        
         return (
           <StepContent data-step="price" id="step-price" role="tabpanel" aria-labelledby="tab-price">
             <StepTitle>Prix unitaire</StepTitle>
@@ -1119,6 +1196,7 @@ export const SaleWizard: React.FC<SaleWizardProps> = ({ onItemComplete, numpadCa
                       numpadCallbacks.setPricePrefilled(false);
                     }
                   }}
+                  hiddenPresetIds={hiddenPresetIds}
                 />
 
                 {currentTransactionPreset && (() => {
@@ -1142,11 +1220,20 @@ export const SaleWizard: React.FC<SaleWizardProps> = ({ onItemComplete, numpadCa
                 })()}
 
                 {/* B39-P4: Toujours afficher le champ prix manuel, même avec tarif catalogue */}
+                {/* Story B49-P2: Comportement dynamique en mode prix global */}
                 <div>
                   <Text size="sm" fw={500} mb="xs" c="dimmed">
                     Prix manuel
                   </Text>
-                  <DisplayValue $isValid={!priceError} data-testid="price-input">
+                  <DisplayValue 
+                    $isValid={!priceError} 
+                    data-testid="price-input"
+                    style={{
+                      // Story B49-P2: Grisé si 0€ et mode prix global (lecture seule)
+                      opacity: isNoItemPricingEnabled && (!price || price === '0') ? 0.5 : 1,
+                      cursor: isNoItemPricingEnabled && (!price || price === '0') ? 'default' : 'text'
+                    }}
+                  >
                     {price || '0'} €
                   </DisplayValue>
                 </div>
@@ -1193,7 +1280,8 @@ export const SaleWizard: React.FC<SaleWizardProps> = ({ onItemComplete, numpadCa
                   onClick={handlePriceConfirm}
                   data-testid="add-item-button"
                 >
-                  Valider le prix
+                  {/* Story B49-P2: Bouton "Valider" en mode prix global, "Valider le prix" en mode standard */}
+                  {isNoItemPricingEnabled ? 'Valider' : 'Valider le prix'}
                 </ValidateButton>
               </PriceColumn>
             </PriceStepLayout>
@@ -1281,30 +1369,45 @@ export const SaleWizard: React.FC<SaleWizardProps> = ({ onItemComplete, numpadCa
           >
             Poids
           </ModeButton>
-          <ModeButton
-            $active={stepState.quantityState === 'active'}
-            $completed={stepState.quantityState === 'completed'}
-            $inactive={stepState.quantityState === 'inactive'}
-            data-active={stepState.quantityState === 'active'}
-            data-completed={stepState.quantityState === 'completed'}
-            disabled={!numpadCallbacks.weightValue || parseFloat(numpadCallbacks.weightValue) <= 0}
-            onClick={() => numpadCallbacks.weightValue && parseFloat(numpadCallbacks.weightValue) > 0 && transitionToStep('quantity')}
-            role="tab"
-            id="tab-quantity"
-            aria-selected={stepState.quantityState === 'active'}
-            aria-controls="step-quantity"
-            aria-label={`Étape 3: Saisie de la quantité${stepState.quantityState === 'completed' ? ' - Terminée' : stepState.quantityState === 'active' ? ' - En cours' : stepState.quantityState === 'inactive' ? ' - Non accessible' : ''}`}
-          >
-            Quantité
-          </ModeButton>
+          {/* Story B49-P2: Masquer l'onglet Quantité si mode prix global activé */}
+          {!isNoItemPricingEnabled && (
+            <ModeButton
+              $active={stepState.quantityState === 'active'}
+              $completed={stepState.quantityState === 'completed'}
+              $inactive={stepState.quantityState === 'inactive'}
+              data-active={stepState.quantityState === 'active'}
+              data-completed={stepState.quantityState === 'completed'}
+              disabled={!numpadCallbacks.weightValue || parseFloat(numpadCallbacks.weightValue) <= 0}
+              onClick={() => numpadCallbacks.weightValue && parseFloat(numpadCallbacks.weightValue) > 0 && transitionToStep('quantity')}
+              role="tab"
+              id="tab-quantity"
+              aria-selected={stepState.quantityState === 'active'}
+              aria-controls="step-quantity"
+              aria-label={`Étape 3: Saisie de la quantité${stepState.quantityState === 'completed' ? ' - Terminée' : stepState.quantityState === 'active' ? ' - En cours' : stepState.quantityState === 'inactive' ? ' - Non accessible' : ''}`}
+            >
+              Quantité
+            </ModeButton>
+          )}
           <ModeButton
             $active={stepState.priceState === 'active'}
             $completed={stepState.priceState === 'completed'}
             $inactive={stepState.priceState === 'inactive'}
             data-active={stepState.priceState === 'active'}
             data-completed={stepState.priceState === 'completed'}
-            disabled={stepState.quantityState !== 'completed'}
-            onClick={() => stepState.quantityState === 'completed' && transitionToStep('price')}
+            disabled={isNoItemPricingEnabled 
+              ? !numpadCallbacks.weightValue || parseFloat(numpadCallbacks.weightValue) <= 0
+              : stepState.quantityState !== 'completed'}
+            onClick={() => {
+              if (isNoItemPricingEnabled) {
+                if (numpadCallbacks.weightValue && parseFloat(numpadCallbacks.weightValue) > 0) {
+                  transitionToStep('price');
+                }
+              } else {
+                if (stepState.quantityState === 'completed') {
+                  transitionToStep('price');
+                }
+              }
+            }}
             role="tab"
             id="tab-price"
             aria-selected={stepState.priceState === 'active'}

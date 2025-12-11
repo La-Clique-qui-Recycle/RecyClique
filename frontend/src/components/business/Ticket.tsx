@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import styled from 'styled-components';
 import { Edit, Trash2, StickyNote } from 'lucide-react';
-import { SaleItem } from '../../stores/cashSessionStore';
+import { SaleItem, useCashSessionStore } from '../../stores/cashSessionStore';
 import { useCategoryStore } from '../../stores/categoryStore';
 import { usePresetStore } from '../../stores/presetStore';
 import PresetButtonGrid from '../presets/PresetButtonGrid';
@@ -9,6 +9,7 @@ import { Textarea } from '@mantine/core';
 import TicketScroller from '../tickets/TicketScroller';
 import TicketHighlighter from '../tickets/TicketHighlighter';
 import { ScrollPositionManager } from '../../utils/scrollManager';
+import { useCashWizardStepState } from '../../hooks/useCashWizardStepState';
 
 const TicketContainer = styled.div`
   background: white;
@@ -153,7 +154,7 @@ const TotalRow = styled.div`
   color: #2c5530;
 `;
 
-const FinalizeButton = styled.button`
+const FinalizeButton = styled.button<{ $showBadge?: boolean }>`
   width: 100%;
   padding: 1rem;
   background: #2c5530;
@@ -165,6 +166,7 @@ const FinalizeButton = styled.button`
   cursor: pointer;
   margin-top: 1rem;
   transition: background 0.2s;
+  position: relative;
 
   &:hover {
     background: #234426;
@@ -174,6 +176,20 @@ const FinalizeButton = styled.button`
     background: #ccc;
     cursor: not-allowed;
   }
+`;
+
+const Badge = styled.span`
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  background: white;
+  color: #2c5530;
+  font-size: 0.75rem;
+  font-weight: bold;
+  padding: 2px 8px;
+  border-radius: 12px;
+  border: 2px solid #2c5530;
+  white-space: nowrap;
 `;
 
 const EditModal = styled.div<{ $isOpen: boolean }>`
@@ -265,6 +281,14 @@ const Ticket: React.FC<TicketProps> = ({
 }) => {
   const { getCategoryById, fetchCategories } = useCategoryStore();
   const { selectedPreset, notes, setNotes, presets } = usePresetStore();
+  const { currentRegisterOptions } = useCashSessionStore();
+  const { stepState } = useCashWizardStepState();  // Story B49-P2: Pour détecter l'onglet Catégorie actif
+  
+  // Story B49-P2: Détecter si le mode prix global est activé
+  const isNoItemPricingEnabled = currentRegisterOptions?.features?.no_item_pricing?.enabled === true;
+  
+  // Story B49-P2: Badge inversé affiché uniquement quand onglet Catégorie actif
+  const showBadge = stepState.currentStep === 'category';
   const [editingItem, setEditingItem] = useState<SaleItem | null>(null);
   const [editQuantity, setEditQuantity] = useState<string>('');
   const [editWeight, setEditWeight] = useState<string>('');
@@ -280,6 +304,17 @@ const Ticket: React.FC<TicketProps> = ({
 
   const totalAmount = items.reduce((sum, item) => sum + (item.total || 0), 0);
   const totalItems = items.length; // Nombre d'articles (lignes), pas de quantités
+  
+  // Story B49-P2: Calculer le sous-total (somme des items avec prix >0)
+  const subtotal = items.reduce((sum, item) => {
+    if (item.price && item.price > 0) {
+      return sum + (item.total || 0);
+    }
+    return sum;
+  }, 0);
+  
+  // Story B49-P2: Afficher sous-total uniquement si au moins un item a un prix >0
+  const shouldShowSubtotal = subtotal > 0;
 
   // Auto-scroll to bottom when new items are added
   useEffect(() => {
@@ -364,28 +399,54 @@ const Ticket: React.FC<TicketProps> = ({
                                          getCategoryById(item.category)?.name ||
                                          item.category;
 
+                      // Story B49-P2: Masquer les montants si item à 0€ en mode prix global
+                      const shouldHidePrice = isNoItemPricingEnabled && (item.price === 0 || item.price === undefined);
+                      
                       return (
                         <TicketItem key={item.id}>
                           <ItemInfo>
                             <ItemCategory>{displayName}</ItemCategory>
                             <ItemDetails>
-                              {`Qté: ${item.quantity || 1} • ${(item.weight || 0).toFixed(2)} kg • ${(item.price || 0).toFixed(2)} €/unité`}
-                              {item.presetId && (
-                                <div style={{ marginTop: '2px', fontSize: '0.8rem', color: '#2c5530', fontWeight: 'bold' }}>
-                                  Type: {(() => {
-                                    const preset = presets.find(p => p.id === item.presetId);
-                                    return preset ? preset.name : item.presetId;
-                                  })()}
-                                </div>
-                              )}
-                              {item.notes && (
-                                <div style={{ marginTop: '2px', fontSize: '0.8rem', color: '#666', fontStyle: 'italic' }}>
-                                  Notes: {item.notes}
-                                </div>
+                              {/* Story B49-P2: Afficher uniquement catégorie, poids, destination (si preset), notes (si preset) pour items à 0€ */}
+                              {shouldHidePrice ? (
+                                <>
+                                  {`${(item.weight || 0).toFixed(2)} kg`}
+                                  {item.presetId && (
+                                    <div style={{ marginTop: '2px', fontSize: '0.8rem', color: '#2c5530', fontWeight: 'bold' }}>
+                                      {(() => {
+                                        const preset = presets.find(p => p.id === item.presetId);
+                                        return preset ? preset.name : item.presetId;
+                                      })()}
+                                    </div>
+                                  )}
+                                  {item.notes && (
+                                    <div style={{ marginTop: '2px', fontSize: '0.8rem', color: '#666', fontStyle: 'italic' }}>
+                                      {item.notes}
+                                    </div>
+                                  )}
+                                </>
+                              ) : (
+                                <>
+                                  {`Qté: ${item.quantity || 1} • ${(item.weight || 0).toFixed(2)} kg • ${(item.price || 0).toFixed(2)} €/unité`}
+                                  {item.presetId && (
+                                    <div style={{ marginTop: '2px', fontSize: '0.8rem', color: '#2c5530', fontWeight: 'bold' }}>
+                                      Type: {(() => {
+                                        const preset = presets.find(p => p.id === item.presetId);
+                                        return preset ? preset.name : item.presetId;
+                                      })()}
+                                    </div>
+                                  )}
+                                  {item.notes && (
+                                    <div style={{ marginTop: '2px', fontSize: '0.8rem', color: '#666', fontStyle: 'italic' }}>
+                                      Notes: {item.notes}
+                                    </div>
+                                  )}
+                                </>
                               )}
                             </ItemDetails>
                           </ItemInfo>
-                          <ItemTotal>{`${(item.total || 0).toFixed(2)} €`}</ItemTotal>
+                          {/* Story B49-P2: Masquer ItemTotal si item à 0€ en mode prix global */}
+                          {!shouldHidePrice && <ItemTotal>{`${(item.total || 0).toFixed(2)} €`}</ItemTotal>}
                           <ItemActions>
                             <ActionButton
                               className="edit"
@@ -430,6 +491,13 @@ const Ticket: React.FC<TicketProps> = ({
             )}
 
             <TotalSection>
+              {/* Story B49-P2: Afficher sous-total uniquement si au moins un item a un prix >0 */}
+              {shouldShowSubtotal && (
+                <TotalRow style={{ marginBottom: '0.5rem', fontSize: '1rem', fontWeight: 'normal', color: '#666' }}>
+                  <span>Sous-total</span>
+                  <span>{`${subtotal.toFixed(2)} €`}</span>
+                </TotalRow>
+              )}
               <TotalRow>
                 <span>{totalItems} articles</span>
                 <span data-testid="sale-total">{`${totalAmount.toFixed(2)} €`}</span>
@@ -439,8 +507,11 @@ const Ticket: React.FC<TicketProps> = ({
             <FinalizeButton
               onClick={onFinalizeSale}
               disabled={loading || items.length === 0}
+              $showBadge={showBadge}
             >
               {loading ? 'Finalisation...' : 'Finaliser la vente'}
+              {/* Story B49-P2: Badge inversé (fond blanc, texte vert "Entrée") */}
+              {showBadge && <Badge>Entrée</Badge>}
             </FinalizeButton>
           </FixedFooter>
         </ScrollableTicketArea>

@@ -1,12 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
-import { Container, Paper, Title, TextInput, Select, Button, Group, Alert, LoadingOverlay } from '@mantine/core';
-import { DatePickerInput } from '@mantine/dates';  // B44-P1
-import { IconCash, IconUser, IconCurrencyEuro, IconAlertCircle, IconBuilding, IconCashRegister, IconCalendar } from '@tabler/icons-react';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { Container, Paper, Title, TextInput, Button, Group, Alert, LoadingOverlay } from '@mantine/core';
+import { IconCash, IconCurrencyEuro, IconAlertCircle, IconCalendar } from '@tabler/icons-react';
 import { useCashSessionStoreInjected, useCashStores } from '../../providers/CashStoreProvider';
 import { cashSessionService } from '../../services/cashSessionService';
 import { useAuthStore } from '../../stores/authStore';
-import { CashRegistersApi, SitesApi } from '../../generated/api';
+import { getCashRegister } from '../../services/api';
 
 interface OpenCashSessionProps {
   onSessionOpened?: (sessionId: string) => void;
@@ -15,6 +14,7 @@ interface OpenCashSessionProps {
 const OpenCashSession: React.FC<OpenCashSessionProps> = ({ onSessionOpened }) => {
   const navigate = useNavigate();
   const location = useLocation();
+  const [searchParams] = useSearchParams();
   const { currentUser } = useAuthStore();
   const { cashSessionStore, isVirtualMode, isDeferredMode } = useCashStores();  // B44-P1
   const { 
@@ -28,19 +28,21 @@ const OpenCashSession: React.FC<OpenCashSessionProps> = ({ onSessionOpened }) =>
   
   const basePath = isDeferredMode ? '/cash-register/deferred' : (isVirtualMode ? '/cash-register/virtual' : '/cash-register');
 
+  // B49-P7: Récupérer register_id depuis route params ou state
+  const registerIdFromParams = searchParams.get('register_id');
+  const registerIdFromState = (location.state as any)?.register_id;
+  const registerId = registerIdFromParams || registerIdFromState;
+
   const [formData, setFormData] = useState({
     operator_id: currentUser?.id || 'test-user-id',
-    site_id: currentUser?.site_id || '',
-    register_id: '',
+    site_id: '',
+    register_id: registerId || '',
     initial_amount: ''  // B44-P3: String vide pour afficher placeholder "0.00" en gris
   });
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
-  const [sites, setSites] = useState<Array<{value: string, label: string}>>([]);
-  const [cashRegisters, setCashRegisters] = useState<Array<{value: string, label: string}>>([]);
-  const [loadingSites, setLoadingSites] = useState(false);
-  const [loadingRegisters, setLoadingRegisters] = useState(false);
   const [registerStatus, setRegisterStatus] = useState<{ is_active: boolean; session_id: string | null }>({ is_active: false, session_id: null });
-  const [sessionDate, setSessionDate] = useState<Date | null>(null);  // B44-P1: Date de session pour saisie différée
+  const [sessionDate, setSessionDate] = useState<string>('');  // B49-P7: String pour input type="date" (format YYYY-MM-DD)
+  const [loadingRegister, setLoadingRegister] = useState(false);
   // Si on vient avec une intention de reprise, tenter immédiatement
   useEffect(() => {
     const tryImmediateResume = async () => {
@@ -97,20 +99,54 @@ const OpenCashSession: React.FC<OpenCashSessionProps> = ({ onSessionOpened }) =>
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isDeferredMode]); // fetchCurrentSession est mis à jour via ref pour éviter les boucles infinies
 
-  // Charger les sites au montage
+  // B49-P7: Charger register_id et site_id depuis route params au montage
   useEffect(() => {
-    loadSites();
-  }, []);
+    const loadRegisterData = async () => {
+      // Si pas de register_id, rediriger vers dashboard
+      if (!registerId) {
+        const dashboardPath = isDeferredMode ? '/cash-register/deferred' : (isVirtualMode ? '/cash-register/virtual' : '/caisse');
+        navigate(dashboardPath, { replace: true });
+        return;
+      }
 
-  // Charger les caisses quand le site change
-  useEffect(() => {
-    if (formData.site_id) {
-      loadCashRegisters(formData.site_id);
-    } else {
-      setCashRegisters([]);
-      setFormData(prev => ({ ...prev, register_id: '' }));
+      // Charger les détails du register pour obtenir site_id
+      setLoadingRegister(true);
+      try {
+        const register = await getCashRegister(registerId);
+        if (register && register.site_id) {
+          setFormData(prev => ({
+            ...prev,
+            register_id: registerId,
+            site_id: register.site_id
+          }));
+        } else {
+          console.error('Register non trouvé ou sans site_id');
+          const dashboardPath = isDeferredMode ? '/cash-register/deferred' : (isVirtualMode ? '/cash-register/virtual' : '/caisse');
+          navigate(dashboardPath, { replace: true });
+        }
+      } catch (error) {
+        console.error('Erreur lors du chargement du register:', error);
+        const dashboardPath = isDeferredMode ? '/cash-register/deferred' : (isVirtualMode ? '/cash-register/virtual' : '/caisse');
+        navigate(dashboardPath, { replace: true });
+      } finally {
+        setLoadingRegister(false);
+      }
+    };
+
+    // Ne charger que si on n'est pas en mode virtuel (mode virtuel n'a pas besoin de register_id)
+    if (!isVirtualMode && !isDeferredMode) {
+      loadRegisterData();
+    } else if (isVirtualMode || isDeferredMode) {
+      // En mode virtuel/différé, on peut avoir register_id optionnel pour hériter des options
+      // Mais on ne charge pas forcément le register
+      if (registerId) {
+        setFormData(prev => ({
+          ...prev,
+          register_id: registerId
+        }));
+      }
     }
-  }, [formData.site_id]);
+  }, [registerId, navigate, isVirtualMode, isDeferredMode]);
 
   // UX-B10: Vérifier le statut de la caisse quand le register_id change (mode réel uniquement)
   useEffect(() => {
@@ -164,59 +200,6 @@ const OpenCashSession: React.FC<OpenCashSessionProps> = ({ onSessionOpened }) =>
     checkRegisterStatus();
   }, [formData.register_id, isVirtualMode, isDeferredMode, cashSessionStore]);
 
-  const loadSites = async () => {
-    setLoadingSites(true);
-    try {
-      const response = await SitesApi.sitesapiv1sitesget();
-      // Mapping robuste des réponses
-      const sitesData = Array.isArray(response) ? response :
-        (Array.isArray(response?.data) ? response.data :
-        (Array.isArray(response?.sites) ? response.sites : []));
-      
-      const sitesOptions = sitesData.map(site => ({
-        value: site.id,
-        label: `${site.name} (${site.location || 'Sans localisation'})`
-      }));
-      setSites(sitesOptions);
-      
-      // Pré-sélectionner le premier site
-      if (sitesOptions.length > 0) {
-        setFormData(prev => ({ ...prev, site_id: sitesOptions[0].value }));
-      }
-    } catch (error) {
-      console.error('Erreur lors du chargement des sites:', error);
-      setSites([]);
-    } finally {
-      setLoadingSites(false);
-    }
-  };
-
-  const loadCashRegisters = async (siteId: string) => {
-    setLoadingRegisters(true);
-    try {
-      const response = await CashRegistersApi.cashregistersapiv1cashregistersget({ site_id: siteId });
-      // Mapping robuste des réponses
-      const registersData = Array.isArray(response) ? response :
-        (Array.isArray(response?.data) ? response.data :
-        (Array.isArray(response?.registers) ? response.registers : []));
-      
-      const registersOptions = registersData.map(register => ({
-        value: register.id,
-        label: `${register.name} (${register.location || 'Sans localisation'})`
-      }));
-      setCashRegisters(registersOptions);
-      
-      // Pré-sélectionner la première caisse
-      if (registersOptions.length > 0) {
-        setFormData(prev => ({ ...prev, register_id: registersOptions[0].value }));
-      }
-    } catch (error) {
-      console.error('Erreur lors du chargement des caisses:', error);
-      setCashRegisters([]);
-    } finally {
-      setLoadingRegisters(false);
-    }
-  };
 
   const handleInputChange = (field: string, value: string | number) => {
     setFormData(prev => ({
@@ -292,14 +275,15 @@ const OpenCashSession: React.FC<OpenCashSessionProps> = ({ onSessionOpened }) =>
       errors.operator_id = 'ID opérateur invalide';
     }
 
+    // B49-P7: site_id et register_id sont préremplis depuis route params, validation minimale
     if (!formData.site_id) {
-      errors.site_id = 'Veuillez sélectionner un site';
+      errors.site_id = 'Site non trouvé';
     } else if (!/^[0-9a-fA-F-]{36}$/.test(formData.site_id)) {
       errors.site_id = 'ID site invalide';
     }
 
     if (!formData.register_id) {
-      errors.register_id = 'Veuillez sélectionner une caisse';
+      errors.register_id = 'Caisse non trouvée';
     } else if (!/^[0-9a-fA-F-]{36}$/.test(formData.register_id)) {
       errors.register_id = 'ID caisse invalide';
     }
@@ -320,7 +304,7 @@ const OpenCashSession: React.FC<OpenCashSessionProps> = ({ onSessionOpened }) =>
       }
     }
 
-    // B44-P1: Validation de la date de session pour saisie différée
+    // B49-P7: Validation de la date de session pour saisie différée (format YYYY-MM-DD)
     if (isDeferredMode) {
       if (!sessionDate) {
         errors.sessionDate = 'Veuillez sélectionner une date de session';
@@ -329,7 +313,9 @@ const OpenCashSession: React.FC<OpenCashSessionProps> = ({ onSessionOpened }) =>
         now.setHours(0, 0, 0, 0);  // Comparer seulement les dates, pas les heures
         const selectedDate = new Date(sessionDate);
         selectedDate.setHours(0, 0, 0, 0);
-        if (selectedDate > now) {
+        if (isNaN(selectedDate.getTime())) {
+          errors.sessionDate = 'Date invalide';
+        } else if (selectedDate > now) {
           errors.sessionDate = 'La date de session ne peut pas être dans le futur';
         }
       }
@@ -418,29 +404,13 @@ const OpenCashSession: React.FC<OpenCashSessionProps> = ({ onSessionOpened }) =>
         initial_amount: initialAmountNum
       };
       
+      // B49-P7: sessionDate est maintenant une string au format YYYY-MM-DD (input type="date")
       if (isDeferredMode && sessionDate) {
-        // Convertir la date en ISO 8601 avec timezone UTC
-        // DatePickerInput peut retourner Date, string, ou dayjs selon la version
+        // Convertir la date string (YYYY-MM-DD) en ISO 8601 avec timezone UTC
         // IMPORTANT: On doit créer une date à minuit UTC pour éviter les problèmes de timezone
-        let dateObj: Date;
-        
-        if (sessionDate instanceof Date) {
-          dateObj = sessionDate;
-        } else if (typeof sessionDate === 'string') {
-          // Si c'est déjà une string, vérifier le format et convertir si nécessaire
-          dateObj = new Date(sessionDate);
-          if (isNaN(dateObj.getTime())) {
-            throw new Error('Date invalide');
-          }
-        } else if (sessionDate && typeof sessionDate === 'object' && 'toDate' in sessionDate) {
-          // dayjs object
-          dateObj = (sessionDate as any).toDate();
-        } else if (sessionDate && typeof sessionDate === 'object' && 'getTime' in sessionDate) {
-          // Autre objet avec getTime (compatible Date)
-          dateObj = new Date((sessionDate as any).getTime());
-        } else {
-          console.error('Format de date inattendu:', sessionDate, typeof sessionDate);
-          throw new Error('Format de date non supporté');
+        const dateObj = new Date(sessionDate);
+        if (isNaN(dateObj.getTime())) {
+          throw new Error('Date invalide');
         }
         
         // Créer une date à minuit UTC pour la date sélectionnée (évite les problèmes de timezone)
@@ -454,7 +424,7 @@ const OpenCashSession: React.FC<OpenCashSessionProps> = ({ onSessionOpened }) =>
         const dateStr = utcDate.toISOString();
         
         sessionData.opened_at = dateStr;
-        console.log('[handleSubmit] Using deferred date:', dateStr, 'from selected date:', dateObj, 'UTC date:', utcDate);
+        console.log('[handleSubmit] Using deferred date:', dateStr, 'from selected date:', sessionDate, 'UTC date:', utcDate);
       }
 
       console.log('[handleSubmit] Opening session with data:', sessionData);
@@ -530,64 +500,30 @@ const OpenCashSession: React.FC<OpenCashSessionProps> = ({ onSessionOpened }) =>
         )}
 
         <form onSubmit={handleSubmit} noValidate>
-          <Select
-            label="Opérateur"
-            placeholder="Sélectionnez l'opérateur"
-            value={formData.operator_id}
-            onChange={(value) => handleInputChange('operator_id', value || '')}
-            data={[
-              { value: currentUser?.id || 'test-user-id', label: currentUser?.username || 'Utilisateur actuel' }
-            ]}
-            required
-            error={validationErrors.operator_id}
-            icon={<IconUser size={16} />}
-            mb="md"
-          />
-
-          <Select
-            label="Site"
-            placeholder="Sélectionnez un site"
-            value={formData.site_id}
-            onChange={(value) => handleInputChange('site_id', value || '')}
-            data={sites}
-            required
-            error={validationErrors.site_id}
-            icon={<IconBuilding size={16} />}
-            mb="md"
-            loading={loadingSites}
-            disabled={loadingSites}
-            description="Choisissez le site où vous travaillez"
-          />
-
-          <Select
-            label="Caisse"
-            placeholder="Sélectionnez une caisse"
-            value={formData.register_id}
-            onChange={(value) => handleInputChange('register_id', value || '')}
-            data={cashRegisters}
-            required
-            error={validationErrors.register_id}
-            icon={<IconCashRegister size={16} />}
-            mb="md"
-            loading={loadingRegisters}
-            disabled={loadingRegisters || !formData.site_id}
-            description={!formData.site_id ? "Sélectionnez d'abord un site" : "Choisissez la caisse à utiliser"}
-          />
-
-          {/* B44-P1: DatePicker pour saisie différée */}
+          {/* B49-P7: Dropdowns Site et Caisse supprimés, récupérés depuis route params */}
+          {/* B49-P7: DatePickerInput remplacé par input type="date" pour saisie différée */}
           {isDeferredMode && (
-            <DatePickerInput
+            <TextInput
+              type="date"
               label="Date du cahier"
               placeholder="Sélectionnez la date de vente"
               value={sessionDate}
-              onChange={setSessionDate}
-              maxDate={new Date()}  // Pas de date future
+              onChange={(e) => setSessionDate(e.target.value)}
+              max={new Date().toISOString().split('T')[0]}  // Pas de date future (format YYYY-MM-DD)
               required
               error={validationErrors.sessionDate}
               icon={<IconCalendar size={16} />}
               mb="md"
               description="Date réelle de vente (date du cahier papier)"
-              data-testid="deferred-session-date-picker"
+              data-testid="deferred-session-date-input"
+              styles={{
+                input: {
+                  padding: '10px 12px',
+                  border: '1px solid #e5e7eb',
+                  borderRadius: '8px',
+                  fontSize: '0.95rem'
+                }
+              }}
             />
           )}
 

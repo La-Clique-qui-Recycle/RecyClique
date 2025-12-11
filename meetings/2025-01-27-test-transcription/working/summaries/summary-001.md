@@ -63,3 +63,5 @@
 | 00:03:30 | A | Proposition chatbot IA pour catégorisation |
 | 00:04:20 | A | Question trace/mémoire chatbots (locale vs globale) |
 
+
+

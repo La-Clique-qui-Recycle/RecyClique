@@ -2,9 +2,11 @@ from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_, desc, func, cast, String
 from typing import List, Optional, Tuple, Dict, Any
 from datetime import datetime, timedelta, timezone
+import json
 
 from recyclic_api.models.cash_session import CashSession, CashSessionStatus
 from recyclic_api.models.cash_register import CashRegister
+from recyclic_api.schemas.cash_register import WorkflowOptions
 from uuid import UUID
 from recyclic_api.models.user import User
 from recyclic_api.models.sale import Sale, PaymentMethod
@@ -140,11 +142,63 @@ class CashSessionService:
             .options(
                 selectinload(CashSession.operator),
                 selectinload(CashSession.site),
-                selectinload(CashSession.sales)
+                selectinload(CashSession.sales),
+                selectinload(CashSession.register)  # Story B49-P1: Charger le register pour les options
             )
             .filter(CashSession.id == sid)
             .first()
         )
+    
+    def _get_register_options(self, register: Optional[CashRegister]) -> Dict[str, Any]:
+        """Story B49-P1: Helper pour récupérer et valider les options de workflow d'un registre.
+        
+        Args:
+            register: Le registre de caisse (peut être None)
+            
+        Returns:
+            Dictionnaire validé des options de workflow (valeurs par défaut si None)
+        """
+        if not register or not register.workflow_options:
+            return WorkflowOptions().model_dump()  # Retourne les valeurs par défaut
+
+        try:
+            # Assurez-vous que workflow_options est un dict, pas une chaîne JSON
+            if isinstance(register.workflow_options, str):
+                options_dict = json.loads(register.workflow_options)
+            else:
+                options_dict = register.workflow_options
+            
+            # Valider avec le schéma Pydantic pour s'assurer de la structure
+            validated_options = WorkflowOptions.model_validate(options_dict)
+            return validated_options.model_dump()
+        except (json.JSONDecodeError, ValueError) as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Invalid workflow_options for register {register.id}: {e}. Returning default options.")
+            return WorkflowOptions().model_dump()
+    
+    def get_register_options(self, session: CashSession) -> Optional[Dict[str, Any]]:
+        """Story B49-P1: Récupère les options de workflow du register associé à la session.
+        
+        Args:
+            session: La session de caisse
+            
+        Returns:
+            Dictionnaire validé des options de workflow, ou None si aucun register associé
+        """
+        if not session.register_id:
+            return None
+        
+        # Charger le register si pas déjà chargé
+        if not hasattr(session, 'register') or session.register is None:
+            register = self.db.query(CashRegister).filter(CashRegister.id == session.register_id).first()
+            if not register:
+                return None
+        else:
+            register = session.register
+        
+        # Utiliser la méthode helper qui valide avec Pydantic
+        return self._get_register_options(register)
     
     def get_open_session_by_operator(self, operator_id: str) -> Optional[CashSession]:
         """Récupère la session ouverte d'un opérateur."""

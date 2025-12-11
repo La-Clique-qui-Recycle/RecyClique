@@ -1,8 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import styled from 'styled-components';
-import { Button, Modal } from '@mantine/core';
-import { DatePickerInput } from '@mantine/dates';
+import { Button, Modal, TextInput } from '@mantine/core';
 import { IconCalendar } from '@tabler/icons-react';
 import { Receipt, Plus, X, Eye, Calendar, User, Package, Weight, List, Clock } from 'lucide-react';
 import { useReception } from '../contexts/ReceptionContext';
@@ -355,7 +354,7 @@ const Reception: React.FC = () => {
   
   // État pour le modal de saisie différée
   const [deferredModalOpen, setDeferredModalOpen] = useState(false);
-  const [deferredDate, setDeferredDate] = useState<Date | null>(null);
+  const [deferredDate, setDeferredDate] = useState<string>('');  // B49-P7: String pour input type="date" (format YYYY-MM-DD)
   const [deferredDateError, setDeferredDateError] = useState<string | null>(null);
   
   // Vérifier si l'utilisateur peut accéder à la saisie différée
@@ -439,13 +438,13 @@ const Reception: React.FC = () => {
       }
     }
     setDeferredModalOpen(true);
-    setDeferredDate(null);
+    setDeferredDate('');
     setDeferredDateError(null);
   };
 
   const handleCloseDeferredModal = () => {
     setDeferredModalOpen(false);
-    setDeferredDate(null);
+    setDeferredDate('');
     setDeferredDateError(null);
   };
 
@@ -461,29 +460,34 @@ const Reception: React.FC = () => {
     }
     
     try {
-      // S'assurer que deferredDate est un objet Date
-      let dateToUse: Date;
-      if (deferredDate instanceof Date) {
-        dateToUse = deferredDate;
-      } else if (typeof deferredDate === 'string') {
-        dateToUse = new Date(deferredDate);
-      } else {
-        setDeferredDateError('Format de date invalide');
-        return;
-      }
+      // B49-P7: deferredDate est maintenant une string au format YYYY-MM-DD (input type="date")
+      // Convertir en Date pour validation puis en ISO 8601 avec timezone UTC
+      const dateObj = new Date(deferredDate);
       
       // Vérifier que la date est valide
-      if (isNaN(dateToUse.getTime())) {
+      if (isNaN(dateObj.getTime())) {
         setDeferredDateError('Date invalide');
         return;
       }
       
-      // Convertir la date en ISO 8601 avec timezone UTC
-      const dateStr = dateToUse.toISOString();
+      // Vérifier que la date n'est pas dans le futur
+      const now = new Date();
+      if (dateObj > now) {
+        setDeferredDateError('La date ne peut pas être dans le futur');
+        return;
+      }
+      
+      // Créer une date à minuit UTC pour la date sélectionnée (évite les problèmes de timezone)
+      const year = dateObj.getFullYear();
+      const month = dateObj.getMonth();
+      const day = dateObj.getDate();
+      const utcDate = new Date(Date.UTC(year, month, day, 0, 0, 0, 0));
+      const dateStr = utcDate.toISOString();
+      
       const newPoste = await openPoste(dateStr);
       
       setDeferredModalOpen(false);
-      setDeferredDate(null);
+      setDeferredDate('');
       setDeferredDateError(null);
       
       // Créer automatiquement un ticket et rediriger vers la page de saisie
@@ -611,56 +615,48 @@ const Reception: React.FC = () => {
         size="md"
       >
         <div style={{ marginBottom: '20px' }}>
-          <DatePickerInput
+          {/* B49-P7: DatePickerInput remplacé par input type="date" */}
+          <TextInput
+            type="date"
             label="Date du cahier"
             placeholder="Sélectionnez la date de réception"
             value={deferredDate}
-            onChange={(date) => {
-              // Le DatePickerInput peut retourner Date | null | dayjs.Dayjs
-              // Convertir en Date si nécessaire
-              let dateObj: Date | null = null;
-              if (date) {
-                if (date instanceof Date) {
-                  dateObj = date;
-                } else if (typeof date === 'string') {
-                  dateObj = new Date(date);
-                } else if (date && typeof date === 'object' && 'toDate' in date) {
-                  // dayjs object
-                  dateObj = (date as any).toDate();
-                } else if (date && typeof date === 'object' && 'getTime' in date) {
-                  // Autre objet avec getTime (compatible Date)
-                  dateObj = new Date((date as any).getTime());
+            onChange={(e) => {
+              const value = e.target.value;
+              setDeferredDate(value);
+              
+              // Validation
+              if (value) {
+                const dateObj = new Date(value);
+                if (isNaN(dateObj.getTime())) {
+                  setDeferredDateError('Date invalide');
                 } else {
-                  console.error('Format de date inattendu:', date, typeof date);
-                  setDeferredDateError('Format de date invalide');
-                  return;
-                }
-                
-                // Vérifier que la date est valide
-                if (dateObj && !isNaN(dateObj.getTime())) {
                   const now = new Date();
                   if (dateObj > now) {
                     setDeferredDateError('La date ne peut pas être dans le futur');
                   } else {
                     setDeferredDateError(null);
                   }
-                  setDeferredDate(dateObj);
-                } else {
-                  setDeferredDateError('Date invalide');
-                  setDeferredDate(null);
                 }
               } else {
-                setDeferredDate(null);
                 setDeferredDateError(null);
               }
             }}
-            maxDate={new Date()}
+            max={new Date().toISOString().split('T')[0]}  // Pas de date future (format YYYY-MM-DD)
             required
             error={deferredDateError}
             icon={<IconCalendar size={16} />}
             mb="md"
             description="Date réelle de réception (date du cahier papier)"
-            data-testid="deferred-reception-date-picker"
+            data-testid="deferred-reception-date-input"
+            styles={{
+              input: {
+                padding: '10px 12px',
+                border: '1px solid #e5e7eb',
+                borderRadius: '8px',
+                fontSize: '0.95rem'
+              }
+            }}
           />
           
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>

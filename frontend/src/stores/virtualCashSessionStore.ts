@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { devtools } from 'zustand/middleware';
+import { getCashRegister } from '../services/api';  // B49-P3: Pour charger les options de workflow depuis la caisse source
 
 // Import types from the regular cash session store
 export interface CashSession {
@@ -85,12 +86,16 @@ interface VirtualCashSessionState {
   virtualSessions: CashSession[];
   virtualSales: any[];
 
+  // B49-P3: Options de workflow héritées de la caisse source
+  currentRegisterOptions: Record<string, any> | null;
+
   // Actions
   setCurrentSession: (session: CashSession | null) => void;
   setSessions: (sessions: CashSession[]) => void;
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
   clearError: () => void;
+  setCurrentRegisterOptions: (options: Record<string, any> | null) => void;  // B49-P3: Définir les options héritées
 
   // Sale actions
   addSaleItem: (item: Omit<SaleItem, 'id'>) => void;
@@ -162,6 +167,7 @@ export const useVirtualCashSessionStore = create<VirtualCashSessionState>()(
       currentSaleNote: null,
       loading: false,
       error: null,
+      currentRegisterOptions: null,  // B49-P3: Options de workflow héritées de la caisse source
       ticketScrollState: {
         scrollTop: 0,
         scrollHeight: 0,
@@ -188,6 +194,7 @@ export const useVirtualCashSessionStore = create<VirtualCashSessionState>()(
       setLoading: (loading) => set({ loading }),
       setError: (error) => set({ error }),
       clearError: () => set({ error: null }),
+      setCurrentRegisterOptions: (options) => set({ currentRegisterOptions: options }),  // B49-P3: Définir les options héritées
 
       // Sale actions
       addSaleItem: (item: Omit<SaleItem, 'id'>) => {
@@ -411,6 +418,20 @@ export const useVirtualCashSessionStore = create<VirtualCashSessionState>()(
         set({ loading: true, error: null });
 
         try {
+          // B49-P3: Charger les options de workflow depuis la caisse source si register_id est présent
+          let registerOptions: Record<string, any> | null = null;
+          if (data.register_id) {
+            try {
+              const register = await getCashRegister(data.register_id);
+              if (register?.workflow_options) {
+                registerOptions = register.workflow_options;
+                console.log('[VirtualCashStore] Options héritées de la caisse source:', registerOptions);
+              }
+            } catch (error) {
+              console.warn('[VirtualCashStore] Impossible de charger les options de la caisse source:', error);
+            }
+          }
+
           // Simulate API delay
           await new Promise(resolve => setTimeout(resolve, 500));
 
@@ -434,6 +455,7 @@ export const useVirtualCashSessionStore = create<VirtualCashSessionState>()(
             currentSession: session,
             sessions: updatedSessions,
             virtualSessions: updatedSessions,
+            currentRegisterOptions: registerOptions,  // B49-P3: Stocker les options héritées
             loading: false
           });
 
@@ -681,6 +703,7 @@ export const useVirtualCashSessionStore = create<VirtualCashSessionState>()(
 );
 
 export default useVirtualCashSessionStore;
+
 
 
 

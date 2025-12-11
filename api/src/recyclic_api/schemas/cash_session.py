@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, field_validator, ConfigDict
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 from enum import Enum
 
@@ -102,6 +102,9 @@ class CashSessionResponse(CashSessionBase):
     
     report_download_url: Optional[str] = Field(None, description="URL de telechargement du rapport genere")
     report_email_sent: Optional[bool] = Field(None, description="Indique si l'envoi du rapport par email a reussi")
+    
+    # Story B49-P1: Options de workflow du registre associé
+    register_options: Optional[Dict[str, Any]] = Field(None, description="Options de workflow du poste de caisse associé")
 
     @field_validator('id', mode='before')
     @classmethod

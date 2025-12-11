@@ -10,6 +10,7 @@ export interface CashSession {
   closed_at?: string;
   total_sales?: number;
   total_items?: number;
+  register_options?: Record<string, any>;  // Story B49-P1: Options de workflow du register
 }
 
 export interface CashSessionCreate {
@@ -257,7 +258,7 @@ export const cashSessionService = {
 };
 
 export const cashRegisterDashboardService = {
-  async getRegistersStatus(): Promise<{ id: string; name: string; is_open: boolean }[]> {
+  async getRegistersStatus(): Promise<{ id: string; name: string; is_open: boolean; enable_virtual?: boolean; enable_deferred?: boolean; location?: string | null }[]> {
     try {
       const response = await ApiClient.client.get('/v1/cash-registers/status');
       const data = response.data;

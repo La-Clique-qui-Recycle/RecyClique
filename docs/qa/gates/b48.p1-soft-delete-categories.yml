@@ -45,3 +45,5 @@ recommendations:
     - action: "Ajouter commentaire dans StatsService expliquant pourquoi on ne filtre pas deleted_at"
       refs: ["api/src/recyclic_api/services/stats_service.py"]
 
+
+

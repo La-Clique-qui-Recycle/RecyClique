@@ -64,3 +64,5 @@ recommendations:
     - action: "Valider conformité éco-organismes avec official_name dans tous les exports"
       refs: ["docs/stories/story-b48-p5-double-denomination-categories.md:416-419"]
 
+
+
