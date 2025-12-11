@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { devtools, persist } from 'zustand/middleware';
 import { cashSessionService } from '../services/cashSessionService';
 import axiosClient from '../api/axiosClient';
-import { getCashRegister } from '../services/api';  // B49-P3: Pour charger les options de workflow depuis la caisse source
+import { getCashRegister, getSites } from '../services/api';  // B49-P3: Pour charger les options de workflow depuis la caisse source
 
 // Réutiliser les interfaces du store normal
 export interface CashSession {
@@ -325,6 +325,17 @@ export const useDeferredCashSessionStore = create<DeferredCashSessionState>()(
           set({ loading: true, error: null });
           
           try {
+            // Validation: s'assurer que initial_amount est un number valide
+            const initialAmount = typeof data.initial_amount === 'number' 
+              ? data.initial_amount 
+              : parseFloat(String(data.initial_amount || '0').replace(',', '.'));
+            
+            if (isNaN(initialAmount) || initialAmount < 0) {
+              const errorMsg = 'Montant initial invalide';
+              set({ error: errorMsg, loading: false });
+              return null;
+            }
+
             // Stocker la date de session si fournie
             if (data.opened_at) {
               set({ openedAt: data.opened_at });
@@ -351,12 +362,53 @@ export const useDeferredCashSessionStore = create<DeferredCashSessionState>()(
             // Ne pas vérifier getCurrentSession() car cela pourrait retourner une session normale
 
             // Créer la session avec opened_at si fourni
+            // Si site_id n'est pas fourni (undefined, null, ou chaîne vide), essayer de le récupérer depuis register_id
+            let siteId = data.site_id && data.site_id.trim() !== '' ? data.site_id : undefined;
+            if (!siteId && data.register_id) {
+              try {
+                const register = await getCashRegister(data.register_id);
+                if (register?.site_id) {
+                  siteId = register.site_id;
+                }
+              } catch (error) {
+                console.warn('[DeferredCashStore] Impossible de charger le register pour obtenir site_id:', error);
+              }
+            }
+            
+            // Si toujours pas de site_id, utiliser le premier site disponible (fallback)
+            if (!siteId) {
+              try {
+                console.log('[DeferredCashStore] Tentative de récupération du site par défaut...');
+                const sites = await getSites();
+                console.log('[DeferredCashStore] Sites récupérés:', sites);
+                if (sites && sites.length > 0) {
+                  siteId = sites[0].id;
+                  console.log('[DeferredCashStore] Utilisation du site par défaut:', siteId);
+                } else {
+                  console.warn('[DeferredCashStore] Aucun site disponible dans la liste');
+                }
+              } catch (error) {
+                console.error('[DeferredCashStore] Erreur lors du chargement des sites:', error);
+              }
+            }
+            
+            if (!siteId) {
+              const errorMsg = 'Impossible de déterminer le site pour la session différée. Veuillez contacter un administrateur.';
+              console.error('[DeferredCashStore]', errorMsg);
+              set({ error: errorMsg, loading: false });
+              return null;
+            }
+
             const sessionData: any = {
               operator_id: data.operator_id,
-              site_id: data.site_id,
-              register_id: data.register_id,
-              initial_amount: data.initial_amount,
+              site_id: siteId,  // siteId est toujours défini à ce point (vérifié plus haut)
+              initial_amount: initialAmount,
             };
+            
+            // Ajouter register_id seulement s'il n'est pas vide
+            if (data.register_id && data.register_id.trim() !== '') {
+              sessionData.register_id = data.register_id;
+            }
             
             if (data.opened_at) {
               sessionData.opened_at = data.opened_at;

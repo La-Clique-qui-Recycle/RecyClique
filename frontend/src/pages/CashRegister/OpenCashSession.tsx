@@ -133,19 +133,16 @@ const OpenCashSession: React.FC<OpenCashSessionProps> = ({ onSessionOpened }) =>
       }
     };
 
-    // Ne charger que si on n'est pas en mode virtuel (mode virtuel n'a pas besoin de register_id)
-    if (!isVirtualMode && !isDeferredMode) {
+    // Charger le register pour obtenir site_id (nécessaire pour l'API même en mode virtuel/différé)
+    if (registerId) {
+      // Charger le register pour obtenir site_id, même en mode virtuel/différé
       loadRegisterData();
-    } else if (isVirtualMode || isDeferredMode) {
-      // En mode virtuel/différé, on peut avoir register_id optionnel pour hériter des options
-      // Mais on ne charge pas forcément le register
-      if (registerId) {
-        setFormData(prev => ({
-          ...prev,
-          register_id: registerId
-        }));
-      }
+    } else if (!isVirtualMode && !isDeferredMode) {
+      // En mode réel sans register_id, rediriger vers dashboard
+      const dashboardPath = '/caisse';
+      navigate(dashboardPath, { replace: true });
     }
+    // En mode virtuel/différé sans register_id, on peut continuer (site_id sera optionnel)
   }, [registerId, navigate, isVirtualMode, isDeferredMode]);
 
   // UX-B10: Vérifier le statut de la caisse quand le register_id change (mode réel uniquement)
@@ -276,16 +273,28 @@ const OpenCashSession: React.FC<OpenCashSessionProps> = ({ onSessionOpened }) =>
     }
 
     // B49-P7: site_id et register_id sont préremplis depuis route params, validation minimale
-    if (!formData.site_id) {
-      errors.site_id = 'Site non trouvé';
-    } else if (!/^[0-9a-fA-F-]{36}$/.test(formData.site_id)) {
-      errors.site_id = 'ID site invalide';
-    }
+    // En mode virtuel/différé, site_id et register_id sont optionnels (mais recommandés pour hériter des options)
+    if (!isVirtualMode && !isDeferredMode) {
+      // Mode réel : site_id et register_id sont obligatoires
+      if (!formData.site_id) {
+        errors.site_id = 'Site non trouvé';
+      } else if (!/^[0-9a-fA-F-]{36}$/.test(formData.site_id)) {
+        errors.site_id = 'ID site invalide';
+      }
 
-    if (!formData.register_id) {
-      errors.register_id = 'Caisse non trouvée';
-    } else if (!/^[0-9a-fA-F-]{36}$/.test(formData.register_id)) {
-      errors.register_id = 'ID caisse invalide';
+      if (!formData.register_id) {
+        errors.register_id = 'Caisse non trouvée';
+      } else if (!/^[0-9a-fA-F-]{36}$/.test(formData.register_id)) {
+        errors.register_id = 'ID caisse invalide';
+      }
+    } else {
+      // Mode virtuel/différé : site_id et register_id sont optionnels mais validés si présents
+      if (formData.site_id && !/^[0-9a-fA-F-]{36}$/.test(formData.site_id)) {
+        errors.site_id = 'ID site invalide';
+      }
+      if (formData.register_id && !/^[0-9a-fA-F-]{36}$/.test(formData.register_id)) {
+        errors.register_id = 'ID caisse invalide';
+      }
     }
 
     // B44-P3: Validation du montant initial (string avec virgule pour format français)
@@ -344,6 +353,24 @@ const OpenCashSession: React.FC<OpenCashSessionProps> = ({ onSessionOpened }) =>
     }
 
     try {
+      // B44-P3: Convertir initial_amount de string (format français avec virgule) à number (point) AVANT toute autre opération
+      // Cette conversion doit être faite en premier pour garantir que les stores virtuel/différé reçoivent toujours un number valide
+      const initialAmountStr = formData.initial_amount.toString().trim();
+      if (initialAmountStr === '' || initialAmountStr === ',') {
+        setValidationErrors({ initial_amount: 'Veuillez saisir un montant initial' });
+        return;
+      }
+      // Convertir virgule en point pour parseFloat
+      const initialAmountNum = parseFloat(initialAmountStr.replace(',', '.'));
+      if (isNaN(initialAmountNum)) {
+        setValidationErrors({ initial_amount: 'Montant invalide' });
+        return;
+      }
+      if (initialAmountNum < 0) {
+        setValidationErrors({ initial_amount: 'Le montant initial ne peut pas être négatif' });
+        return;
+      }
+
       // UX-B10: si une session est active pour cette caisse, reprendre
       // B44-P1: En mode différé, ne PAS reprendre une session normale existante
       if (!isVirtualMode && !isDeferredMode && registerStatus.is_active && registerStatus.session_id) {
@@ -384,25 +411,28 @@ const OpenCashSession: React.FC<OpenCashSessionProps> = ({ onSessionOpened }) =>
       }
 
       // B44-P1: Inclure opened_at si mode différé et date fournie
-      // B44-P3: Convertir initial_amount de string (format français avec virgule) à number (point) pour l'API
-      const initialAmountStr = formData.initial_amount.toString().trim();
-      if (initialAmountStr === '' || initialAmountStr === ',') {
-        setValidationErrors({ initial_amount: 'Veuillez saisir un montant initial' });
-        return;
-      }
-      // Convertir virgule en point pour parseFloat
-      const initialAmountNum = parseFloat(initialAmountStr.replace(',', '.'));
-      if (isNaN(initialAmountNum)) {
-        setValidationErrors({ initial_amount: 'Montant invalide' });
-        return;
-      }
-      
+      // En mode virtuel/différé, site_id peut être vide - le store gérera le fallback
+      // Ne pas envoyer site_id ou register_id s'ils sont vides (chaînes vides causent des erreurs UUID)
       const sessionData: any = {
         operator_id: formData.operator_id,
-        site_id: formData.site_id,
-        register_id: formData.register_id,
         initial_amount: initialAmountNum
       };
+      
+      // Ajouter site_id seulement s'il n'est pas vide
+      // En mode différé, le store gérera le fallback si site_id n'est pas fourni
+      if (formData.site_id && formData.site_id.trim() !== '') {
+        sessionData.site_id = formData.site_id;
+      } else if (!isVirtualMode && !isDeferredMode) {
+        // En mode réel uniquement, site_id est obligatoire
+        setValidationErrors({ site_id: 'Site non trouvé' });
+        return;
+      }
+      // En mode virtuel/différé, on laisse le store gérer le fallback pour site_id
+      
+      // Ajouter register_id seulement s'il n'est pas vide
+      if (formData.register_id && formData.register_id.trim() !== '') {
+        sessionData.register_id = formData.register_id;
+      }
       
       // B49-P7: sessionDate est maintenant une string au format YYYY-MM-DD (input type="date")
       if (isDeferredMode && sessionDate) {
@@ -444,6 +474,12 @@ const OpenCashSession: React.FC<OpenCashSessionProps> = ({ onSessionOpened }) =>
         const storeError = cashSessionStore.error;
         if (storeError) {
           console.error('[handleSubmit] Store error:', storeError);
+          // Forcer l'affichage de l'erreur si elle existe
+          setValidationErrors({ general: storeError });
+        } else {
+          // Si pas d'erreur explicite mais session null, c'est un problème
+          console.error('[handleSubmit] Session null sans erreur explicite');
+          setValidationErrors({ general: 'Impossible d\'ouvrir la session. Veuillez réessayer.' });
         }
       }
     } catch (error) {
@@ -475,17 +511,20 @@ const OpenCashSession: React.FC<OpenCashSessionProps> = ({ onSessionOpened }) =>
           <Title order={2}>Ouverture de Session de Caisse</Title>
         </Group>
 
-        {error && (
+        {(error || validationErrors.general) && (
           <Alert
             icon={<IconAlertCircle size={16} />}
-            title={error.includes('déjà ouverte') ? 'Session existante' : 'Erreur'}
-            color={error.includes('déjà ouverte') ? 'blue' : 'red'}
+            title={(error || validationErrors.general)?.includes('déjà ouverte') ? 'Session existante' : 'Erreur'}
+            color={(error || validationErrors.general)?.includes('déjà ouverte') ? 'blue' : 'red'}
             mb="md"
-            onClose={clearError}
+            onClose={() => { 
+              clearError(); 
+              setValidationErrors(prev => { const { general, ...rest } = prev; return rest; });
+            }}
             withCloseButton
           >
-            {error}
-            {error.includes('déjà ouverte') && (
+            {error || validationErrors.general}
+            {(error || validationErrors.general)?.includes('déjà ouverte') && (
               <Group mt="sm">
                 <Button
                   size="sm"
