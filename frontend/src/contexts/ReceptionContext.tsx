@@ -30,7 +30,9 @@ interface ReceptionContextType {
   currentTicket: Ticket | null;
   isLoading: boolean;
   error: string | null;
-  openPoste: () => Promise<void>;
+  isDeferredMode: boolean;
+  posteDate: string | null;
+  openPoste: (openedAt?: string) => Promise<void>;
   closePoste: () => Promise<void>;
   createTicket: () => Promise<string>;
   closeTicket: (ticketId: string) => Promise<void>;
@@ -50,13 +52,28 @@ export const ReceptionProvider: React.FC<ReceptionProviderProps> = ({ children }
   const [currentTicket, setCurrentTicket] = useState<Ticket | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isDeferredMode, setIsDeferredMode] = useState(false);
+  const [posteDate, setPosteDate] = useState<string | null>(null);
 
-  const openPoste = useCallback(async () => {
+  const openPoste = useCallback(async (openedAt?: string): Promise<Poste> => {
     try {
       setIsLoading(true);
       setError(null);
-      const newPoste = await receptionService.openPoste();
+      const newPoste = await receptionService.openPoste(openedAt);
       setPoste(newPoste);
+      
+      // Déterminer si le poste est en mode différé
+      if (openedAt) {
+        const openedDate = new Date(openedAt);
+        const now = new Date();
+        setIsDeferredMode(openedDate < now);
+        setPosteDate(openedAt);
+      } else {
+        setIsDeferredMode(false);
+        setPosteDate(null);
+      }
+      
+      return newPoste;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erreur lors de l\'ouverture du poste');
       throw err;
@@ -74,6 +91,8 @@ export const ReceptionProvider: React.FC<ReceptionProviderProps> = ({ children }
       await receptionService.closePoste(poste.id);
       setPoste(null);
       setCurrentTicket(null);
+      setIsDeferredMode(false);
+      setPosteDate(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erreur lors de la fermeture du poste');
       throw err;
@@ -182,6 +201,8 @@ export const ReceptionProvider: React.FC<ReceptionProviderProps> = ({ children }
         currentTicket,
         isLoading,
         error,
+        isDeferredMode,
+        posteDate,
         openPoste,
         closePoste,
         createTicket,

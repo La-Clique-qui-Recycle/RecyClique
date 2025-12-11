@@ -4,7 +4,7 @@ import { Category, categoryService } from '../../services/categoryService';
 
 interface CategoryFormProps {
   category: Category | null;
-  onSubmit: (data: { name: string; parent_id?: string | null; price?: number | null; max_price?: number | null }) => Promise<void>;
+  onSubmit: (data: { name: string; official_name?: string | null; parent_id?: string | null; price?: number | null; max_price?: number | null }) => Promise<void>;
   onCancel: () => void;
   onDelete?: () => Promise<void>;
 }
@@ -16,6 +16,7 @@ export const CategoryForm: React.FC<CategoryFormProps> = ({
   onDelete,
 }) => {
   const [name, setName] = useState('');
+  const [displayName, setDisplayName] = useState<string>('');
   const [parentId, setParentId] = useState<string | null>(null);
   const [price, setPrice] = useState<number | string>('');
   const [maxPrice, setMaxPrice] = useState<number | string>('');
@@ -24,6 +25,7 @@ export const CategoryForm: React.FC<CategoryFormProps> = ({
   const [availableCategories, setAvailableCategories] = useState<Category[]>([]);
   const [loadingCategories, setLoadingCategories] = useState(false);
   const [hasChildren, setHasChildren] = useState(false);
+  const [hasUsage, setHasUsage] = useState<boolean | null>(null);
 
   // NEW RULE: Prices are allowed only on leaf categories.
   // UX: Always enable inputs so users can CLEAR prices even if the category currently has children.
@@ -54,6 +56,7 @@ export const CategoryForm: React.FC<CategoryFormProps> = ({
   useEffect(() => {
     if (category) {
       setName(category.name);
+      setDisplayName(category.official_name || '');
       setParentId(category.parent_id || null);
       setPrice(category.price ?? '');
       setMaxPrice(category.max_price ?? '');
@@ -69,12 +72,26 @@ export const CategoryForm: React.FC<CategoryFormProps> = ({
         }
       };
       checkChildren();
+
+      // Check if category has usage to determine if we can hard delete
+      const checkUsage = async () => {
+        try {
+          const usage = await categoryService.checkCategoryUsage(category.id);
+          setHasUsage(usage.has_usage);
+        } catch (err) {
+          console.error('Erreur lors de la vérification de l\'usage de la catégorie:', err);
+          setHasUsage(true); // Assume it's used to be safe
+        }
+      };
+      checkUsage();
     } else {
       setName('');
+      setDisplayName('');
       setParentId(null);
       setPrice('');
       setMaxPrice('');
       setHasChildren(false);
+      setHasUsage(null);
     }
   }, [category]);
 
@@ -89,8 +106,9 @@ export const CategoryForm: React.FC<CategoryFormProps> = ({
 
     setLoading(true);
     try {
-      const data: { name: string; parent_id?: string | null; price?: number | null; max_price?: number | null } = {
-        name: name.trim(),
+      const data: { name: string; official_name?: string | null; parent_id?: string | null; price?: number | null; max_price?: number | null } = {
+        name: name.trim(),  // Story B48-P5: Nom court/rapide (obligatoire)
+        official_name: displayName.trim() || null,  // Story B48-P5: Nom complet officiel (optionnel)
         parent_id: parentId,
       };
 
@@ -129,13 +147,23 @@ export const CategoryForm: React.FC<CategoryFormProps> = ({
           </Alert>
         )}
         <TextInput
-          label="Nom de la catégorie"
-          placeholder="Ex: Électronique, Meubles, Vêtements..."
+          label="Nom court/rapide"
+          placeholder="Ex: Bricot"
           value={name}
           onChange={(e) => setName(e.target.value)}
           error={error}
           required
           data-autofocus
+          description="Nom court utilisé pour l'affichage dans les boutons de la caisse et de la réception"
+        />
+        
+        <TextInput
+          label="Nom complet officiel (optionnel)"
+          placeholder="Ex: Articles de bricolage et jardinage thermique"
+          value={displayName}
+          onChange={(e) => setDisplayName(e.target.value)}
+          description="Dénomination complète officielle utilisée pour la comptabilité et les exports. Affichée dans les tooltips."
+          data-testid="official-name-input"
         />
 
         <Select
@@ -145,16 +173,21 @@ export const CategoryForm: React.FC<CategoryFormProps> = ({
           onChange={(value) => setParentId(value)}
           data={[
             { value: '', label: 'Aucune (catégorie racine)' },
-            ...availableCategories.map(cat => ({
-              value: cat.id,
-              label: cat.name
-            }))
+            // Story B48-P4: Filtrer uniquement les catégories racines et trier par display_order
+            ...availableCategories
+              .filter(cat => !cat.parent_id) // Uniquement les racines
+              .sort((a, b) => a.display_order - b.display_order) // Trier par display_order
+              .map(cat => ({
+                value: cat.id,
+                label: cat.name
+              }))
           ]}
           clearable
           searchable
           loading={loadingCategories}
           data-testid="parent-category-select"
           aria-label="Sélecteur de catégorie parente"
+          description="Seules les catégories racines peuvent être sélectionnées comme parent"
         />
 
         <NumberInput
@@ -191,7 +224,12 @@ export const CategoryForm: React.FC<CategoryFormProps> = ({
               color="red"
               variant="light"
               onClick={async () => {
-                const ok = confirm('Supprimer définitivement cette catégorie ? Cette action la retirera de la vue.');
+                // If category has no usage, offer hard delete instead of archive
+                const canHardDelete = hasUsage === false;
+                const message = canHardDelete
+                  ? 'Supprimer définitivement cette catégorie ? Cette action est irréversible.'
+                  : 'Archiver cette catégorie ? Elle sera masquée des sélecteurs mais restera disponible dans l\'historique. Vous pourrez la restaurer plus tard.';
+                const ok = confirm(message);
                 if (!ok) return;
                 setLoading(true);
                 try {
@@ -201,7 +239,7 @@ export const CategoryForm: React.FC<CategoryFormProps> = ({
                 }
               }}
             >
-              Supprimer
+              {hasUsage === false ? 'Supprimer' : 'Archiver'}
             </Button>
           )}
           <Button variant="subtle" onClick={onCancel} disabled={loading}>

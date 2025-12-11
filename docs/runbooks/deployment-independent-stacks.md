@@ -45,6 +45,7 @@ Recyclic/
 3. **Fichiers d'environnement** configurés (`.env.production` et `.env.staging`)
 4. **Accès SSH** avec les permissions appropriées
 5. **Backup** de la base de données actuelle (CRITIQUE)
+6. **Dossier `./backups` créé avec permissions appropriées** (voir section Volumes ci-dessous)
 
 ### Vérifications Préalables
 
@@ -58,6 +59,12 @@ docker ps | grep traefik
 
 # Vérifier le réseau Traefik
 docker network ls | grep traefik-public
+
+# Vérifier/Créer le dossier backups (OBLIGATOIRE)
+cd /opt/recyclic  # Ou le chemin de votre projet
+mkdir -p ./backups
+chmod 755 ./backups
+ls -ld ./backups  # Doit afficher drwxr-xr-x
 ```
 
 ---
@@ -194,7 +201,10 @@ git pull origin main
 # 2. Construire et démarrer la stack de production
 docker compose -p recyclic-prod -f docker-compose.prod.yml --env-file .env.production up -d --build
 
-# 3. Surveiller les logs pendant le démarrage
+# 3. Activer le service de backup automatique (Story B46-P4)
+docker compose -f docker-compose.backup.yml -p recyclic-prod --env-file .env.production --profile backup up -d postgres-backup
+
+# 4. Surveiller les logs pendant le démarrage
 docker compose -p recyclic-prod -f docker-compose.prod.yml --env-file .env.production logs -f
 
 # Attendre que tous les services soient "healthy"
@@ -203,7 +213,10 @@ docker compose -p recyclic-prod -f docker-compose.prod.yml --env-file .env.produ
 # - redis healthy
 # - api healthy
 # - bot healthy
+# - postgres-backup (service de backup automatique)
 ```
+<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>
+read_file
 
 ### Phase 4 : Vérification de Production
 
@@ -506,6 +519,53 @@ docker volume rm recyclic-staging_staging_postgres_data
 | `prod_postgres_data` | `recyclic-prod_prod_postgres_data` |
 | `staging_postgres_data` | `recyclic-staging_staging_postgres_data` |
 | `postgres_data` (dev) | `recyclic_postgres_data` |
+
+### Volume de Backups (`./backups:/backups`)
+
+**⚠️ IMPORTANT (Story B46-P2) :** Le service `api` monte le volume `./backups:/backups` pour stocker les sauvegardes automatiques créées avant les imports de base de données via l'interface d'administration.
+
+**Configuration requise sur le serveur VPS :**
+
+```bash
+# 1. Créer le dossier backups à la racine du projet
+cd /opt/recyclic  # Ou le chemin de votre projet
+mkdir -p ./backups
+
+# 2. Définir les permissions appropriées (lecture/écriture pour l'utilisateur Docker)
+chmod 755 ./backups
+
+# 3. Vérifier que le dossier existe et est accessible
+ls -ld ./backups
+# Doit afficher : drwxr-xr-x ... ./backups
+```
+
+**Configuration dans docker-compose :**
+
+Le volume est configuré dans les 3 fichiers docker-compose :
+- `docker-compose.yml` (dev) : `volumes: - ./backups:/backups`
+- `docker-compose.staging.yml` (staging) : `volumes: - ./backups:/backups`
+- `docker-compose.prod.yml` (production) : `volumes: - ./backups:/backups`
+
+**Utilisation :**
+
+Lorsqu'un Super-Admin importe une base de données via l'interface d'administration (`Administration > Settings > Import de sauvegarde`), le système crée automatiquement un backup de sécurité dans `/backups` (dans le conteneur) qui correspond à `./backups` sur le serveur hôte. Les fichiers sont nommés `pre_restore_YYYYMMDD_HHMMSS.dump` (format binaire PostgreSQL).
+
+**Vérification après déploiement :**
+
+```bash
+# Vérifier que le volume est bien monté dans le conteneur
+docker compose -p recyclic-prod -f docker-compose.prod.yml exec api ls -la /backups
+
+# Vérifier depuis l'hôte
+ls -lh ./backups/
+
+# Vérifier les permissions
+stat ./backups
+```
+
+**En cas de problème :**
+
+Si le dossier `./backups` n'existe pas ou n'a pas les bonnes permissions, l'import de base de données échouera avec une erreur lors de la création du backup de sécurité. Assurez-vous que le dossier existe et est accessible en écriture avant tout déploiement.
 
 ---
 

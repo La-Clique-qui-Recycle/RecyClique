@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse, unquote
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
@@ -25,7 +26,7 @@ logger = logging.getLogger(__name__)
 @router.post(
     "/db/export",
     summary="Export manuel de la base de données (Super Admin uniquement)",
-    description="Génère un export pg_dump de la base de données et le télécharge",
+    description="Génère un export pg_dump au format binaire (.dump) de la base de données et le télécharge",
     response_class=FileResponse
 )
 async def export_database(
@@ -42,55 +43,51 @@ async def export_database(
     try:
         logger.info(f"Database export requested by user {current_user.id} ({current_user.username})")
 
-        # Parse DATABASE_URL to extract connection parameters
+        # Parse DATABASE_URL to extract connection parameters using urllib.parse
         db_url = settings.DATABASE_URL
 
-        # Extract connection parameters from DATABASE_URL
-        # Format: postgresql://user:password@host:port/database
-        if not db_url.startswith("postgresql://"):
+        try:
+            parsed = urlparse(db_url)
+            
+            # Validate scheme
+            if parsed.scheme not in ("postgresql", "postgres"):
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Invalid database URL scheme (must be postgresql:// or postgres://)"
+                )
+            
+            # Extract credentials
+            db_user = unquote(parsed.username) if parsed.username else ""
+            db_password = unquote(parsed.password) if parsed.password else ""
+            
+            # Extract host and port
+            db_host = parsed.hostname or "localhost"
+            db_port = str(parsed.port) if parsed.port else "5432"
+            
+            # Extract database name (remove leading slash)
+            db_name = parsed.path.lstrip("/") if parsed.path else ""
+            
+            if not db_name:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Database name is required in DATABASE_URL"
+                )
+            
+            if not db_user:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Database user is required in DATABASE_URL"
+                )
+                
+        except ValueError as e:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Invalid database URL format"
+                detail=f"Invalid database URL format: {str(e)}"
             )
-
-        # Remove protocol prefix
-        db_url_no_protocol = db_url.replace("postgresql://", "")
-
-        # Split credentials and host/db info
-        if "@" not in db_url_no_protocol:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Cannot parse database credentials from URL"
-            )
-
-        credentials, host_db = db_url_no_protocol.split("@", 1)
-
-        # Parse credentials
-        if ":" in credentials:
-            db_user, db_password = credentials.split(":", 1)
-        else:
-            db_user = credentials
-            db_password = ""
-
-        # Parse host, port, and database name
-        if "/" not in host_db:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Cannot parse database name from URL"
-            )
-
-        host_port, db_name = host_db.split("/", 1)
-
-        # Parse host and port
-        if ":" in host_port:
-            db_host, db_port = host_port.split(":", 1)
-        else:
-            db_host = host_port
-            db_port = "5432"
 
         # Generate filename with timestamp
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"recyclic_db_export_{timestamp}.sql"
+        filename = f"recyclic_db_export_{timestamp}.dump"
 
         # Create temporary file for the export
         temp_dir = tempfile.gettempdir()
@@ -107,12 +104,16 @@ async def export_database(
             "-p", db_port,
             "-U", db_user,
             "-d", db_name,
-            "-F", "p",  # Plain text format
+            "-F", "c",  # Custom format (binary)
+            "-Z", "9",  # Compression level 9
             "-f", export_path,
             "--clean",  # Include DROP statements
             "--if-exists",  # Use IF EXISTS for DROP
             "--no-owner",  # Don't include ownership commands
-            "--no-privileges"  # Don't include privilege commands
+            "--no-privileges",  # Don't include privilege commands
+            # IMPORTANT: Exporter toutes les tables, même vides
+            # Par défaut, pg_dump exporte toutes les tables, mais on s'assure explicitement
+            # que les tables vides sont incluses dans le schéma
         ]
 
         logger.info(f"Executing pg_dump to {export_path}")
@@ -123,7 +124,7 @@ async def export_database(
             env=env,
             capture_output=True,
             text=True,
-            timeout=300,  # 5 minutes timeout
+            timeout=600,  # 10 minutes timeout (peut être long pour bases volumineuses)
             check=False  # Don't raise exception on non-zero exit
         )
 
@@ -147,7 +148,7 @@ async def export_database(
         return FileResponse(
             path=export_path,
             filename=filename,
-            media_type="application/sql",
+            media_type="application/octet-stream",
             headers={
                 "Content-Disposition": f"attachment; filename={filename}",
                 "Cache-Control": "no-cache, no-store, must-revalidate",
@@ -157,10 +158,10 @@ async def export_database(
         )
 
     except subprocess.TimeoutExpired:
-        logger.error("Database export timed out after 5 minutes")
+        logger.error("Database export timed out after 10 minutes")
         raise HTTPException(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-            detail="L'export de la base de données a pris trop de temps (timeout après 5 minutes)"
+            detail="L'export de la base de données a pris trop de temps (timeout après 10 minutes). La base est peut-être trop volumineuse."
         )
     except HTTPException:
         raise

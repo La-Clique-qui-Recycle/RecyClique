@@ -19,6 +19,7 @@ interface CategoryState {
   getCategoryById: (id: string) => Category | undefined;
   toggleCategoryVisibility: (categoryId: string, isVisible: boolean) => Promise<void>;
   updateDisplayOrder: (categoryId: string, displayOrder: number) => Promise<void>;
+  updateDisplayOrderEntry: (categoryId: string, displayOrderEntry: number) => Promise<void>; // Story B48-P4
   clearError: () => void;
 }
 
@@ -198,6 +199,40 @@ export const useCategoryStore = create<CategoryState>()(
             activeCategories: state.activeCategories,
             visibleCategories: state.visibleCategories,
             error: error.response?.data?.detail || 'Erreur lors de la mise à jour de l\'ordre d\'affichage',
+          });
+          throw error;
+        }
+      },
+
+      // Story B48-P4: Update display order for ENTRY/DEPOT
+      updateDisplayOrderEntry: async (categoryId: string, displayOrderEntry: number) => {
+        // Mise à jour optimiste : mettre à jour immédiatement dans le store
+        const state = get();
+        const updatedCategories = state.categories.map((cat) =>
+          cat.id === categoryId ? { ...cat, display_order_entry: displayOrderEntry } : cat
+        );
+        const updatedActiveCategories = updatedCategories.filter((cat) => cat.is_active);
+        const updatedVisibleCategories = updatedActiveCategories.filter((cat) => cat.is_visible);
+
+        // Mettre à jour le store immédiatement (sans loading pour éviter le re-render complet)
+        set({
+          categories: updatedCategories,
+          activeCategories: updatedActiveCategories,
+          visibleCategories: updatedVisibleCategories,
+        });
+
+        // Ensuite, synchroniser avec l'API en arrière-plan (sans bloquer l'UI)
+        try {
+          await categoryService.updateDisplayOrderEntry(categoryId, displayOrderEntry);
+          // Si succès, on peut optionnellement recharger pour avoir les données à jour
+          // Mais on ne force pas le rechargement pour éviter le scroll reset
+        } catch (error: any) {
+          // En cas d'erreur, restaurer l'état précédent
+          set({
+            categories: state.categories,
+            activeCategories: state.activeCategories,
+            visibleCategories: state.visibleCategories,
+            error: error.response?.data?.detail || 'Erreur lors de la mise à jour de l\'ordre d\'affichage ENTRY',
           });
           throw error;
         }

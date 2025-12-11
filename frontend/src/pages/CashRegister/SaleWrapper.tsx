@@ -16,3 +16,12 @@ export const SaleWrapper: React.FC = () => {
 
 export default SaleWrapper;
 
+
+
+
+
+
+
+
+
+

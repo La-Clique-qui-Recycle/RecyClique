@@ -20,7 +20,7 @@ class TicketDepot(Base):
     id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     poste_id = Column(PGUUID(as_uuid=True), ForeignKey("poste_reception.id"), nullable=False)
     benevole_user_id = Column(PGUUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=func.now())
     closed_at = Column(DateTime(timezone=True), nullable=True)
     # Option A: VARCHAR + CHECK côté DB (via migration) + validation applicative
     status = Column(String(16), nullable=False, default=TicketDepotStatus.OPENED.value)

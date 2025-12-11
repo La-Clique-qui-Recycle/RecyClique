@@ -101,3 +101,12 @@ describe('Ticket Component - Note Display', () => {
     expect(screen.getByText(`Note contextuelle: ${longNote}`)).toBeInTheDocument();
   });
 });
+
+
+
+
+
+
+
+
+

@@ -2,14 +2,19 @@ from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_, desc, func, cast, String
 from typing import List, Optional, Tuple, Dict, Any
 from datetime import datetime, timedelta, timezone
+import json
 
 from recyclic_api.models.cash_session import CashSession, CashSessionStatus
 from recyclic_api.models.cash_register import CashRegister
+from recyclic_api.schemas.cash_register import WorkflowOptions
 from uuid import UUID
 from recyclic_api.models.user import User
-from recyclic_api.models.sale import Sale
+from recyclic_api.models.sale import Sale, PaymentMethod
 from recyclic_api.models.sale_item import SaleItem
+from recyclic_api.models.ligne_depot import LigneDepot
+from recyclic_api.models.ticket_depot import TicketDepot
 from recyclic_api.schemas.cash_session import CashSessionFilters
+from recyclic_api.core.logging import log_transaction_event
 
 
 class CashSessionService:
@@ -18,9 +23,30 @@ class CashSessionService:
     def __init__(self, db: Session):
         self.db = db
     
-    def create_session(self, operator_id: str, site_id: str, initial_amount: float, register_id: Optional[str] = None) -> CashSession:
-        """Crée une nouvelle session de caisse."""
+    def create_session(self, operator_id: str, site_id: str, initial_amount: float, register_id: Optional[str] = None, opened_at: Optional[datetime] = None) -> CashSession:
+        """Crée une nouvelle session de caisse.
+        
+        Args:
+            operator_id: ID de l'opérateur
+            site_id: ID du site
+            initial_amount: Montant initial du fond de caisse
+            register_id: ID du poste de caisse (optionnel)
+            opened_at: Date d'ouverture personnalisée (optionnel, pour saisie différée)
+        
+        Raises:
+            ValueError: Si opened_at est dans le futur ou si une session est déjà ouverte
+        """
         try:
+            # Validation de opened_at si fourni
+            if opened_at is not None:
+                now = datetime.now(timezone.utc)
+                # S'assurer que opened_at est timezone-aware
+                if opened_at.tzinfo is None:
+                    opened_at = opened_at.replace(tzinfo=timezone.utc)
+                # Vérifier que la date n'est pas dans le futur
+                if opened_at > now:
+                    raise ValueError("La date d'ouverture ne peut pas être dans le futur")
+            
             # Vérifier que l'opérateur existe
             # Ensure UUID types for DB comparisons
             operator_uuid = UUID(str(operator_id)) if not isinstance(operator_id, UUID) else operator_id
@@ -53,27 +79,44 @@ class CashSessionService:
                     self.db.refresh(default_register)
                 register_uuid = default_register.id  # type: ignore[assignment]
 
-            # Unicité: pas de session ouverte pour ce registre
-            existing_register_open = self.db.query(CashSession).filter(
-                CashSession.register_id == register_uuid,
-                CashSession.status == CashSessionStatus.OPEN
-            ).first()
-            if existing_register_open:
-                raise ValueError("Une session est déjà ouverte pour ce poste de caisse")
+            # B44-P1: Unicité: pas de session ouverte pour ce registre
+            # Exception: les sessions différées peuvent être créées même si le registre a une session normale ouverte
+            if opened_at is None:
+                # Pour les sessions normales, vérifier qu'il n'y a pas déjà une session ouverte pour ce registre
+                existing_register_open = self.db.query(CashSession).filter(
+                    CashSession.register_id == register_uuid,
+                    CashSession.status == CashSessionStatus.OPEN
+                ).first()
+                if existing_register_open:
+                    raise ValueError("Une session est déjà ouverte pour ce poste de caisse")
+            # Pour les sessions différées, on permet la création même si le registre a une session normale ouverte
 
-            # Créer la session
-            cash_session = CashSession(
-                operator_id=operator_uuid,
-                site_id=site_uuid,
-                register_id=register_uuid,
-                initial_amount=initial_amount,
-                current_amount=initial_amount,
-                status=CashSessionStatus.OPEN
-            )
+            # Créer la session avec opened_at personnalisé si fourni
+            session_kwargs = {
+                "operator_id": operator_uuid,
+                "site_id": site_uuid,
+                "register_id": register_uuid,
+                "initial_amount": initial_amount,
+                "current_amount": initial_amount,
+                "status": CashSessionStatus.OPEN
+            }
+            
+            # Si opened_at est fourni, l'utiliser (sinon le modèle utilisera func.now() par défaut)
+            if opened_at is not None:
+                session_kwargs["opened_at"] = opened_at
+            
+            cash_session = CashSession(**session_kwargs)
 
             self.db.add(cash_session)
             self.db.commit()
             self.db.refresh(cash_session)
+
+            # B48-P2: Logger l'ouverture de session
+            log_transaction_event("SESSION_OPENED", {
+                "user_id": str(operator_uuid),
+                "session_id": str(cash_session.id),
+                "opened_at": cash_session.opened_at.isoformat() + "Z" if cash_session.opened_at else None
+            })
 
             return cash_session
         except Exception as e:
@@ -99,11 +142,63 @@ class CashSessionService:
             .options(
                 selectinload(CashSession.operator),
                 selectinload(CashSession.site),
-                selectinload(CashSession.sales)
+                selectinload(CashSession.sales),
+                selectinload(CashSession.register)  # Story B49-P1: Charger le register pour les options
             )
             .filter(CashSession.id == sid)
             .first()
         )
+    
+    def _get_register_options(self, register: Optional[CashRegister]) -> Dict[str, Any]:
+        """Story B49-P1: Helper pour récupérer et valider les options de workflow d'un registre.
+        
+        Args:
+            register: Le registre de caisse (peut être None)
+            
+        Returns:
+            Dictionnaire validé des options de workflow (valeurs par défaut si None)
+        """
+        if not register or not register.workflow_options:
+            return WorkflowOptions().model_dump()  # Retourne les valeurs par défaut
+
+        try:
+            # Assurez-vous que workflow_options est un dict, pas une chaîne JSON
+            if isinstance(register.workflow_options, str):
+                options_dict = json.loads(register.workflow_options)
+            else:
+                options_dict = register.workflow_options
+            
+            # Valider avec le schéma Pydantic pour s'assurer de la structure
+            validated_options = WorkflowOptions.model_validate(options_dict)
+            return validated_options.model_dump()
+        except (json.JSONDecodeError, ValueError) as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Invalid workflow_options for register {register.id}: {e}. Returning default options.")
+            return WorkflowOptions().model_dump()
+    
+    def get_register_options(self, session: CashSession) -> Optional[Dict[str, Any]]:
+        """Story B49-P1: Récupère les options de workflow du register associé à la session.
+        
+        Args:
+            session: La session de caisse
+            
+        Returns:
+            Dictionnaire validé des options de workflow, ou None si aucun register associé
+        """
+        if not session.register_id:
+            return None
+        
+        # Charger le register si pas déjà chargé
+        if not hasattr(session, 'register') or session.register is None:
+            register = self.db.query(CashRegister).filter(CashRegister.id == session.register_id).first()
+            if not register:
+                return None
+        else:
+            register = session.register
+        
+        # Utiliser la méthode helper qui valide avec Pydantic
+        return self._get_register_options(register)
     
     def get_open_session_by_operator(self, operator_id: str) -> Optional[CashSession]:
         """Récupère la session ouverte d'un opérateur."""
@@ -165,6 +260,138 @@ class CashSessionService:
                     cast(CashSession.id, String).ilike(search_value)
                 )
             )
+
+        # B44-P3: Exclure les sessions vides par défaut (sauf si include_empty=True)
+        include_empty = getattr(filters, 'include_empty', False)
+        if not include_empty:
+            # Exclure les sessions où total_sales = 0 ET total_items = 0
+            # (sessions vides sans transaction)
+            query = query.filter(
+                or_(
+                    CashSession.total_sales > 0,
+                    CashSession.total_items > 0,
+                    CashSession.total_sales.is_(None),  # Inclure les sessions non calculées
+                    CashSession.total_items.is_(None)   # Inclure les sessions non calculées
+                )
+            )
+
+        # B45-P2: Filtres avancés - Montant (CA total)
+        if getattr(filters, 'amount_min', None) is not None:
+            # Exclure les sessions avec total_sales=None car on ne peut pas les comparer
+            query = query.filter(
+                and_(
+                    CashSession.total_sales.isnot(None),
+                    CashSession.total_sales >= filters.amount_min
+                )
+            )
+        if getattr(filters, 'amount_max', None) is not None:
+            # Exclure les sessions avec total_sales=None car on ne peut pas les comparer
+            query = query.filter(
+                and_(
+                    CashSession.total_sales.isnot(None),
+                    CashSession.total_sales <= filters.amount_max
+                )
+            )
+
+        # B45-P2: Filtres avancés - Variance
+        if getattr(filters, 'variance_threshold', None) is not None:
+            # Filtrer par seuil de variance (valeur absolue)
+            # Exclure les sessions avec variance=None car on ne peut pas les comparer
+            query = query.filter(
+                and_(
+                    CashSession.variance.isnot(None),
+                    func.abs(CashSession.variance) >= filters.variance_threshold
+                )
+            )
+        if getattr(filters, 'variance_has_variance', None) is not None:
+            if filters.variance_has_variance:
+                # Avec variance (non-null et != 0)
+                query = query.filter(
+                    and_(
+                        CashSession.variance.isnot(None),
+                        CashSession.variance != 0.0
+                    )
+                )
+            else:
+                # Sans variance (null ou = 0)
+                query = query.filter(
+                    or_(
+                        CashSession.variance.is_(None),
+                        CashSession.variance == 0.0
+                    )
+                )
+
+        # B45-P2: Filtres avancés - Durée de session
+        if getattr(filters, 'duration_min_hours', None) is not None or getattr(filters, 'duration_max_hours', None) is not None:
+            # Calculer la durée en heures (closed_at - opened_at)
+            # Seulement pour les sessions fermées (closed_at non null)
+            duration_seconds = func.extract('epoch', CashSession.closed_at - CashSession.opened_at)
+            duration_hours = duration_seconds / 3600.0
+            
+            if filters.duration_min_hours is not None:
+                query = query.filter(
+                    and_(
+                        CashSession.closed_at.isnot(None),  # Seulement sessions fermées
+                        duration_hours >= filters.duration_min_hours
+                    )
+                )
+            if filters.duration_max_hours is not None:
+                query = query.filter(
+                    and_(
+                        CashSession.closed_at.isnot(None),  # Seulement sessions fermées
+                        duration_hours <= filters.duration_max_hours
+                    )
+                )
+
+        # B45-P2: Filtres avancés - Méthodes de paiement (multi-sélection)
+        if getattr(filters, 'payment_methods', None) and len(filters.payment_methods) > 0:
+            # Filtrer les sessions qui ont au moins une vente avec une des méthodes de paiement spécifiées
+            # Utiliser EXISTS pour éviter les doublons
+            payment_method_enums = [PaymentMethod(method) for method in filters.payment_methods if method in [pm.value for pm in PaymentMethod]]
+            if payment_method_enums:
+                subquery = (
+                    self.db.query(Sale.id)
+                    .filter(
+                        and_(
+                            Sale.cash_session_id == CashSession.id,
+                            Sale.payment_method.in_(payment_method_enums)
+                        )
+                    )
+                    .exists()
+                )
+                query = query.filter(subquery)
+
+        # B45-P2: Filtres avancés - Présence de don
+        if getattr(filters, 'has_donation', None) is not None:
+            if filters.has_donation:
+                # Avec don (au moins une vente avec donation > 0)
+                subquery = (
+                    self.db.query(Sale.id)
+                    .filter(
+                        and_(
+                            Sale.cash_session_id == CashSession.id,
+                            Sale.donation.isnot(None),
+                            Sale.donation > 0.0
+                        )
+                    )
+                    .exists()
+                )
+                query = query.filter(subquery)
+            else:
+                # Sans don (aucune vente avec donation > 0)
+                # Utiliser NOT EXISTS pour les sessions sans don
+                subquery = (
+                    self.db.query(Sale.id)
+                    .filter(
+                        and_(
+                            Sale.cash_session_id == CashSession.id,
+                            Sale.donation.isnot(None),
+                            Sale.donation > 0.0
+                        )
+                    )
+                    .exists()
+                )
+                query = query.filter(~subquery)
 
         # Compter le total avant la pagination
         total = query.count()
@@ -252,8 +479,57 @@ class CashSessionService:
         
         return session
 
+    def is_session_empty(self, session: CashSession) -> bool:
+        """B44-P3: Vérifie si une session est vide (aucune transaction).
+        
+        Une session est considérée comme vide si :
+        - total_sales est 0 (ou None/null)
+        - ET total_items est 0 (ou None/null)
+        
+        Args:
+            session: La session à vérifier
+            
+        Returns:
+            True si la session est vide, False sinon
+        """
+        total_sales = session.total_sales or 0.0
+        total_items = session.total_items or 0
+        
+        return total_sales == 0.0 and total_items == 0
+
+    def delete_session(self, session_id: str) -> bool:
+        """B44-P3: Supprime une session de caisse et toutes ses ventes associées (cascade).
+        
+        Args:
+            session_id: ID de la session à supprimer
+            
+        Returns:
+            True si la session a été supprimée, False si elle n'existe pas
+        """
+        session = self.get_session_by_id(session_id)
+        if not session:
+            return False
+        
+        # La suppression en cascade des ventes est gérée par la relation SQLAlchemy
+        # (cascade="all, delete-orphan" dans le modèle)
+        self.db.delete(session)
+        self.db.commit()
+        
+        return True
+
     def close_session_with_amounts(self, session_id: str, actual_amount: float, variance_comment: str = None) -> Optional[CashSession]:
-        """Ferme une session de caisse avec contrôle des montants."""
+        """B44-P3: Ferme une session de caisse avec contrôle des montants.
+        
+        Si la session est vide (aucune transaction), elle est supprimée au lieu d'être fermée.
+        
+        Args:
+            session_id: ID de la session à fermer
+            actual_amount: Montant physique compté
+            variance_comment: Commentaire sur l'écart (optionnel)
+            
+        Returns:
+            La session fermée, ou None si la session était vide et a été supprimée
+        """
         session = self.get_session_by_id(session_id)
         if not session:
             return None
@@ -261,6 +537,13 @@ class CashSessionService:
         if session.status == CashSessionStatus.CLOSED:
             return session
         
+        # B44-P3: Vérifier si la session est vide avant de la fermer
+        if self.is_session_empty(session):
+            # Session vide : supprimer au lieu de fermer
+            self.delete_session(session_id)
+            return None
+        
+        # Session avec transactions : fermer normalement
         # Utiliser la nouvelle méthode du modèle
         session.close_with_amounts(actual_amount, variance_comment)
         
@@ -283,7 +566,12 @@ class CashSessionService:
     def get_session_stats(self, date_from: Optional[datetime] = None,
                          date_to: Optional[datetime] = None,
                          site_id: Optional[str] = None) -> Dict[str, Any]:
-        """Récupère les statistiques des sessions et agrégations KPI."""
+        """Récupère les statistiques des sessions et agrégations KPI.
+        
+        Exclut automatiquement les sessions différées (sessions avec opened_at dans le passé
+        par rapport à date_from). Cela garantit que les stats live n'incluent que les sessions
+        réellement ouvertes dans la période demandée.
+        """
         query = self.db.query(CashSession)
         
         if site_id:
@@ -291,10 +579,13 @@ class CashSessionService:
             query = query.filter(CashSession.site_id == sid)
         
         # Appliquer les filtres de date
+        # CRITICAL: Exclure les sessions différées en s'assurant que opened_at >= date_from
+        # Les sessions différées ont opened_at dans le passé, donc elles seront automatiquement exclues
         if date_from:
             # Rendre la date consciente du fuseau horaire (UTC)
             if date_from.tzinfo is None:
                 date_from = date_from.replace(tzinfo=timezone.utc)
+            # Filtrer pour exclure les sessions différées (opened_at < date_from)
             query = query.filter(CashSession.opened_at >= date_from)
         if date_to:
             # Rendre la date consciente du fuseau horaire (UTC)
@@ -365,7 +656,27 @@ class CashSessionService:
             .filter(Sale.id.in_(self.db.query(sale_ids_subq.c.id)))
             .scalar()
         )
-        total_weight_sold = float(total_weight_result or 0.0)
+        poids_ventes = float(total_weight_result or 0.0)
+        
+        # Story B48-P3: Ajouter les sorties depuis réception (is_exit=true) pour weight_out
+        if date_from and date_to:
+            poids_exit_reception = (
+                self.db.query(func.coalesce(func.sum(LigneDepot.poids_kg), 0))
+                .join(TicketDepot, LigneDepot.ticket_id == TicketDepot.id)
+                .filter(
+                    and_(
+                        LigneDepot.is_exit == True,  # Uniquement les sorties
+                        TicketDepot.created_at >= date_from,
+                        TicketDepot.created_at <= date_to
+                    )
+                )
+                .scalar()
+            )
+            poids_exit_reception = float(poids_exit_reception or 0.0)
+        else:
+            poids_exit_reception = 0.0
+        
+        total_weight_sold = poids_ventes + poids_exit_reception
         
         # Durée moyenne des sessions fermées
         closed_sessions_with_duration = query.filter(

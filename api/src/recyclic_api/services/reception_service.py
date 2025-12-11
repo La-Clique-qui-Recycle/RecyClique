@@ -3,10 +3,10 @@ from __future__ import annotations
 from typing import Optional, List, Tuple
 from uuid import UUID
 from decimal import Decimal
-from datetime import date
+from datetime import date, datetime, timezone
 
 from sqlalchemy.orm import Session, selectinload
-from sqlalchemy import func, desc, and_
+from sqlalchemy import func, desc, and_, String
 from fastapi import HTTPException, status
 
 from recyclic_api.models import (
@@ -38,8 +38,39 @@ class ReceptionService:
         self.category_repo = CategoryRepository(db)
 
     # Postes
-    def open_poste(self, opened_by_user_id: UUID) -> PosteReception:
-        poste = PosteReception(opened_by_user_id=opened_by_user_id, status=PosteReceptionStatus.OPENED.value)
+    def open_poste(self, opened_by_user_id: UUID, opened_at: Optional[datetime] = None) -> PosteReception:
+        """
+        Ouvrir un poste de réception.
+        
+        Args:
+            opened_by_user_id: ID de l'utilisateur qui ouvre le poste
+            opened_at: Date d'ouverture optionnelle (pour saisie différée, uniquement ADMIN/SUPER_ADMIN)
+        
+        Returns:
+            PosteReception: Le poste créé
+        """
+        # Validation de la date si fournie
+        if opened_at is not None:
+            now = datetime.now(timezone.utc)
+            # Normaliser opened_at en UTC si nécessaire
+            if opened_at.tzinfo is None:
+                opened_at = opened_at.replace(tzinfo=timezone.utc)
+            elif opened_at.tzinfo != timezone.utc:
+                opened_at = opened_at.astimezone(timezone.utc)
+            
+            # Vérifier que la date n'est pas dans le futur
+            if opened_at > now:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="La date d'ouverture ne peut pas être dans le futur"
+                )
+        
+        # Créer le poste avec la date fournie ou None (utilisera la valeur par défaut)
+        poste = PosteReception(
+            opened_by_user_id=opened_by_user_id,
+            status=PosteReceptionStatus.OPENED.value,
+            opened_at=opened_at if opened_at is not None else None
+        )
         self.db.add(poste)
         self.db.commit()
         self.db.refresh(poste)
@@ -74,10 +105,27 @@ class ReceptionService:
         if not self.user_repo.get(benevole_user_id):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Utilisateur introuvable")
 
+        # Déterminer la date de création du ticket
+        # Si le poste est différé (opened_at < now()), utiliser opened_at du poste
+        ticket_created_at = None
+        if poste.opened_at:
+            now = datetime.now(timezone.utc)
+            # Normaliser opened_at en UTC si nécessaire
+            poste_opened_at = poste.opened_at
+            if poste_opened_at.tzinfo is None:
+                poste_opened_at = poste_opened_at.replace(tzinfo=timezone.utc)
+            elif poste_opened_at.tzinfo != timezone.utc:
+                poste_opened_at = poste_opened_at.astimezone(timezone.utc)
+            
+            # Si le poste est différé (date dans le passé), utiliser cette date
+            if poste_opened_at < now:
+                ticket_created_at = poste_opened_at
+
         ticket = TicketDepot(
             poste_id=poste.id,
             benevole_user_id=benevole_user_id,
             status=TicketDepotStatus.OPENED.value,
+            created_at=ticket_created_at if ticket_created_at is not None else None
         )
         return self.ticket_repo.add(ticket)
 
@@ -96,7 +144,7 @@ class ReceptionService:
 
 
     # Lignes de dépôt
-    def create_ligne(self, *, ticket_id: UUID, category_id: UUID, poids_kg: float, destination: Optional[str], notes: Optional[str]) -> LigneDepot:
+    def create_ligne(self, *, ticket_id: UUID, category_id: UUID, poids_kg: float, destination: Optional[str], notes: Optional[str], is_exit: Optional[bool] = False) -> LigneDepot:
         """Créer une ligne de dépôt avec règles métier: poids>0 et ticket ouvert."""
         ticket: Optional[TicketDepot] = self.ticket_repo.get(ticket_id)
         if not ticket:
@@ -116,12 +164,22 @@ class ReceptionService:
         if destination is not None:
             dest_value = DBLigneDestination(destination)
 
+        # Story B48-P3: Validation is_exit + destination
+        # Si is_exit=true, destination doit être RECYCLAGE ou DECHETERIE (pas MAGASIN)
+        if is_exit is True:
+            if dest_value is None or dest_value not in [DBLigneDestination.RECYCLAGE, DBLigneDestination.DECHETERIE]:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Une sortie de stock (is_exit=true) ne peut avoir comme destination que RECYCLAGE ou DECHETERIE"
+                )
+
         ligne = LigneDepot(
             ticket_id=ticket.id,
             category_id=category_id,
             poids_kg=poids_kg,
             destination=dest_value,
             notes=notes,
+            is_exit=is_exit if is_exit is not None else False,
         )
         return self.ligne_repo.add(ligne)
 
@@ -133,6 +191,7 @@ class ReceptionService:
         poids_kg: Optional[float] = None,
         destination: Optional[str] = None,
         notes: Optional[str] = None,
+        is_exit: Optional[bool] = None,
     ) -> LigneDepot:
         ligne: Optional[LigneDepot] = self.ligne_repo.get(ligne_id)
         if not ligne:
@@ -160,6 +219,20 @@ class ReceptionService:
         if notes is not None:
             ligne.notes = notes
 
+        # Story B48-P3: Mise à jour is_exit avec validation
+        if is_exit is not None:
+            # Si on passe is_exit à True, vérifier que la destination est valide
+            final_is_exit = is_exit
+            final_destination = ligne.destination if destination is None else DBLigneDestination(destination)
+            
+            if final_is_exit is True:
+                if final_destination not in [DBLigneDestination.RECYCLAGE, DBLigneDestination.DECHETERIE]:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail="Une sortie de stock (is_exit=true) ne peut avoir comme destination que RECYCLAGE ou DECHETERIE"
+                    )
+            ligne.is_exit = final_is_exit
+
         return self.ligne_repo.update(ligne)
 
     def delete_ligne(self, *, ligne_id: UUID) -> None:
@@ -173,7 +246,24 @@ class ReceptionService:
         self.ligne_repo.delete(ligne)
 
     # Méthodes pour l'historique des tickets
-    def get_tickets_list(self, page: int = 1, per_page: int = 10, status: Optional[str] = None) -> Tuple[List[TicketDepot], int]:
+    def get_tickets_list(
+        self, 
+        page: int = 1, 
+        per_page: int = 10, 
+        status: Optional[str] = None,
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None,
+        benevole_id: Optional[UUID] = None,
+        search: Optional[str] = None,
+        include_empty: bool = False,
+        # B45-P2: Filtres avancés
+        poids_min: Optional[float] = None,
+        poids_max: Optional[float] = None,
+        categories: Optional[List[UUID]] = None,
+        destinations: Optional[List[str]] = None,
+        lignes_min: Optional[int] = None,
+        lignes_max: Optional[int] = None,
+    ) -> Tuple[List[TicketDepot], int]:
         """Récupérer la liste paginée des tickets avec leurs informations de base."""
         offset = (page - 1) * per_page
         
@@ -183,9 +273,111 @@ class ReceptionService:
             selectinload(TicketDepot.lignes)
         ).order_by(desc(TicketDepot.created_at))
         
-        # Appliquer le filtre par statut si fourni
+        # Appliquer les filtres
         if status:
             query = query.filter(TicketDepot.status == status)
+        
+        if date_from:
+            query = query.filter(TicketDepot.created_at >= date_from)
+        
+        if date_to:
+            # Ajouter 23h59:59.999 pour inclure toute la journée
+            date_to_end = date_to.replace(hour=23, minute=59, second=59, microsecond=999999)
+            query = query.filter(TicketDepot.created_at <= date_to_end)
+        
+        if benevole_id:
+            query = query.filter(TicketDepot.benevole_user_id == benevole_id)
+        
+        if search:
+            # Recherche dans l'ID du ticket (UUID) ou le nom d'utilisateur du bénévole
+            search_lower = search.lower()
+            # Joindre avec User pour rechercher dans username
+            from recyclic_api.models import User
+            # Rechercher dans l'ID du ticket (convertir UUID en string) ou le username du bénévole
+            query = query.join(User, TicketDepot.benevole_user_id == User.id).filter(
+                (func.lower(User.username).contains(search_lower)) |
+                (func.lower(func.cast(TicketDepot.id, String)).contains(search_lower))
+            )
+        
+        # B44-P4: Exclure les tickets vides (sans lignes) par défaut, comme pour les sessions de caisse
+        if not include_empty:
+            # Exclure les tickets qui n'ont aucune ligne de dépôt
+            # On utilise une sous-requête pour compter les lignes par ticket
+            from recyclic_api.models import LigneDepot
+            tickets_with_lignes = (
+                self.db.query(LigneDepot.ticket_id)
+                .group_by(LigneDepot.ticket_id)
+                .subquery()
+            )
+            query = query.join(tickets_with_lignes, TicketDepot.id == tickets_with_lignes.c.ticket_id)
+        
+        # B45-P2: Filtres avancés - Poids total (min/max)
+        if poids_min is not None or poids_max is not None:
+            # Calculer le poids total par ticket (somme des poids_kg des lignes)
+            poids_total_subq = (
+                self.db.query(
+                    LigneDepot.ticket_id,
+                    func.sum(LigneDepot.poids_kg).label("total_poids")
+                )
+                .group_by(LigneDepot.ticket_id)
+                .subquery()
+            )
+            query = query.join(poids_total_subq, TicketDepot.id == poids_total_subq.c.ticket_id)
+            
+            if poids_min is not None:
+                query = query.filter(poids_total_subq.c.total_poids >= Decimal(str(poids_min)))
+            if poids_max is not None:
+                query = query.filter(poids_total_subq.c.total_poids <= Decimal(str(poids_max)))
+        
+        # B45-P2: Filtres avancés - Catégories (multi-sélection)
+        if categories and len(categories) > 0:
+            # Filtrer les tickets qui ont au moins une ligne avec une des catégories spécifiées
+            tickets_with_categories = (
+                self.db.query(LigneDepot.ticket_id)
+                .filter(LigneDepot.category_id.in_(categories))
+                .distinct()
+                .subquery()
+            )
+            query = query.join(tickets_with_categories, TicketDepot.id == tickets_with_categories.c.ticket_id)
+        
+        # B45-P2: Filtres avancés - Destinations (multi-sélection)
+        if destinations and len(destinations) > 0:
+            # Convertir les strings en enum Destination
+            dest_enums = []
+            for dest_str in destinations:
+                try:
+                    dest_enums.append(DBLigneDestination(dest_str))
+                except ValueError:
+                    # Ignorer les destinations invalides
+                    continue
+            
+            if dest_enums:
+                # Filtrer les tickets qui ont au moins une ligne avec une des destinations spécifiées
+                tickets_with_destinations = (
+                    self.db.query(LigneDepot.ticket_id)
+                    .filter(LigneDepot.destination.in_(dest_enums))
+                    .distinct()
+                    .subquery()
+                )
+                query = query.join(tickets_with_destinations, TicketDepot.id == tickets_with_destinations.c.ticket_id)
+        
+        # B45-P2: Filtres avancés - Nombre de lignes (min/max)
+        if lignes_min is not None or lignes_max is not None:
+            # Compter le nombre de lignes par ticket
+            lignes_count_subq = (
+                self.db.query(
+                    LigneDepot.ticket_id,
+                    func.count(LigneDepot.id).label("lignes_count")
+                )
+                .group_by(LigneDepot.ticket_id)
+                .subquery()
+            )
+            query = query.join(lignes_count_subq, TicketDepot.id == lignes_count_subq.c.ticket_id)
+            
+            if lignes_min is not None:
+                query = query.filter(lignes_count_subq.c.lignes_count >= lignes_min)
+            if lignes_max is not None:
+                query = query.filter(lignes_count_subq.c.lignes_count <= lignes_max)
         
         # Compter le total
         total = query.count()
@@ -202,11 +394,34 @@ class ReceptionService:
             selectinload(TicketDepot.lignes).selectinload(LigneDepot.category)
         ).filter(TicketDepot.id == ticket_id).first()
 
-    def _calculate_ticket_totals(self, ticket: TicketDepot) -> Tuple[int, Decimal]:
-        """Calculer le nombre de lignes et le poids total d'un ticket."""
+    def _calculate_ticket_totals(self, ticket: TicketDepot) -> Tuple[int, Decimal, Decimal, Decimal, Decimal]:
+        """
+        Calculer le nombre de lignes et les poids par flux d'un ticket.
+        
+        Returns:
+            (total_lignes, total_poids, poids_entree, poids_direct, poids_sortie)
+        """
         total_lignes = len(ticket.lignes)
-        total_poids = sum(ligne.poids_kg for ligne in ticket.lignes)
-        return total_lignes, total_poids
+        total_poids = Decimal(0)
+        poids_entree = Decimal(0)  # is_exit=false AND destination=MAGASIN
+        poids_direct = Decimal(0)   # is_exit=false AND destination IN (RECYCLAGE, DECHETERIE)
+        poids_sortie = Decimal(0)   # is_exit=true
+        
+        for ligne in ticket.lignes:
+            poids = ligne.poids_kg
+            total_poids += poids
+            
+            if ligne.is_exit:
+                # Sortie de boutique
+                poids_sortie += poids
+            elif ligne.destination == 'MAGASIN':
+                # Entrée en boutique
+                poids_entree += poids
+            elif ligne.destination in ('RECYCLAGE', 'DECHETERIE'):
+                # Recyclage/déchetterie direct
+                poids_direct += poids
+        
+        return total_lignes, total_poids, poids_entree, poids_direct, poids_sortie
 
     def get_lignes_depot_filtered(
         self,

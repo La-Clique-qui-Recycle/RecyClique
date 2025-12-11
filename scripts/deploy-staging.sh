@@ -29,7 +29,15 @@ if $COMPOSE_CMD --help 2>/dev/null | grep -q -- "--env-file"; then
   $COMPOSE_CMD -f docker-compose.staging.yml -p recyclic-staging --env-file .env.staging --env-file .build-meta.env down || true
 
   # 3. Démarrer les services avec les nouvelles images (interruption minimale)
-  exec $COMPOSE_CMD -f docker-compose.staging.yml -p recyclic-staging --env-file .env.staging --env-file .build-meta.env up -d --remove-orphans
+  $COMPOSE_CMD -f docker-compose.staging.yml -p recyclic-staging --env-file .env.staging --env-file .build-meta.env up -d --remove-orphans
+
+  # 4. Activer le service de backup automatique (Story B46-P4)
+  echo "📦 Activation du service de backup automatique..."
+  if [ -f "docker-compose.backup.yml" ]; then
+    $COMPOSE_CMD -f docker-compose.backup.yml -p recyclic-staging --env-file .env.staging --profile backup up -d postgres-backup || echo "⚠️  Service backup non démarré (peut nécessiter configuration)"
+  else
+    echo "⚠️  docker-compose.backup.yml non trouvé, service backup non activé"
+  fi
 else
   echo "❌ La commande '$COMPOSE_CMD' ne supporte pas --env-file. Merci d'installer docker compose v2 (recommandé)." >&2
   echo "   Commande alternative manuelle (si .env.staging renommé temporairement en .env) :" >&2

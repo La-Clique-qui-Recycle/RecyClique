@@ -1,5 +1,44 @@
 from pydantic import BaseModel, Field, ConfigDict, field_validator
-from typing import Optional
+from typing import Optional, Dict, Any
+
+
+class WorkflowFeatureOption(BaseModel):
+    """Schéma pour une option de feature dans workflow_options."""
+    model_config = ConfigDict(from_attributes=True)
+    
+    enabled: bool = Field(..., description="Indique si l'option est activée")
+    label: Optional[str] = Field(None, description="Libellé de l'option (optionnel)")
+
+
+class WorkflowOptions(BaseModel):
+    """Schéma pour les options de workflow d'une caisse.
+    
+    Structure:
+    {
+        "features": {
+            "no_item_pricing": {
+                "enabled": true,
+                "label": "Mode prix global (total saisi manuellement, article sans prix)"
+            }
+        }
+    }
+    """
+    model_config = ConfigDict(from_attributes=True)
+    
+    features: Dict[str, WorkflowFeatureOption] = Field(
+        default_factory=dict,
+        description="Dictionnaire des features de workflow disponibles"
+    )
+    
+    @field_validator('features', mode='before')
+    @classmethod
+    def validate_features(cls, v):
+        """Valide que features est un dictionnaire."""
+        if v is None:
+            return {}
+        if not isinstance(v, dict):
+            raise ValueError("features doit être un dictionnaire")
+        return v
 
 
 class CashRegisterBase(BaseModel):
@@ -9,6 +48,12 @@ class CashRegisterBase(BaseModel):
     location: Optional[str] = Field(None, max_length=255, description="Localisation du poste")
     site_id: Optional[str] = Field(None, description="ID du site")
     is_active: bool = Field(default=True, description="Poste actif")
+    workflow_options: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Options de workflow configurables (JSONB)"
+    )
+    enable_virtual: bool = Field(default=False, description="Activer les caisses virtuelles")
+    enable_deferred: bool = Field(default=False, description="Activer les caisses différées")
 
     @field_validator('site_id', mode='before')
     @classmethod
@@ -38,6 +83,9 @@ class CashRegisterUpdate(BaseModel):
     location: Optional[str] = Field(None, max_length=255)
     site_id: Optional[str] = Field(None)
     is_active: Optional[bool] = Field(None)
+    workflow_options: Optional[Dict[str, Any]] = Field(None, description="Options de workflow configurables (JSONB)")
+    enable_virtual: Optional[bool] = Field(None, description="Activer les caisses virtuelles")
+    enable_deferred: Optional[bool] = Field(None, description="Activer les caisses différées")
 
     @field_validator("site_id", mode="before")
     @classmethod

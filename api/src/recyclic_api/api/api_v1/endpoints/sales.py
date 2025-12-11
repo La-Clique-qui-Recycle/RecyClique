@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import List
 from uuid import UUID
+from datetime import datetime, timezone
 from recyclic_api.core.database import get_db
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import Optional
@@ -12,6 +13,7 @@ from recyclic_api.models.sale_item import SaleItem
 from recyclic_api.models.cash_session import CashSession
 from recyclic_api.models.user import User, UserRole
 from recyclic_api.schemas.sale import SaleResponse, SaleCreate, SaleUpdate
+from recyclic_api.core.logging import log_transaction_event
 
 router = APIRouter()
 auth_scheme = HTTPBearer(auto_error=False)
@@ -114,9 +116,39 @@ async def create_sale(
     except Exception:
         raise HTTPException(status_code=401, detail="Unauthorized", headers={"WWW-Authenticate": "Bearer"})
 
+    # Récupérer la session pour vérifier si elle est différée (B44-P1)
+    cash_session = db.query(CashSession).filter(CashSession.id == sale_data.cash_session_id).first()
+    if not cash_session:
+        raise HTTPException(status_code=404, detail="Session de caisse non trouvée")
+    
+    # Story B49-P2: Validation métier pour mode prix global
+    # Calculer le sous-total (somme des total_price des items avec prix >0)
+    subtotal = sum(item.total_price for item in sale_data.items if item.total_price > 0)
+    
+    # Validation : si un sous-total existe, total_amount doit être >= sous-total
+    if subtotal > 0 and sale_data.total_amount < subtotal:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Le total ({sale_data.total_amount}) ne peut pas être inférieur au sous-total ({subtotal})"
+        )
+    
+    # Déterminer la date de création de la vente (B44-P1)
+    # Si la session est différée (opened_at < now()), utiliser opened_at de la session
+    sale_created_at = None
+    if cash_session.opened_at:
+        now = datetime.now(timezone.utc)
+        # S'assurer que opened_at est timezone-aware pour la comparaison
+        session_opened_at = cash_session.opened_at
+        if session_opened_at.tzinfo is None:
+            session_opened_at = session_opened_at.replace(tzinfo=timezone.utc)
+        # Si opened_at est dans le passé, c'est une session différée
+        if session_opened_at < now:
+            sale_created_at = session_opened_at
+    
     # Create the sale with operator_id for traceability
     # Story 1.1.2: preset_id et notes sont maintenant sur sale_items (par item individuel)
     # Story B40-P5: Ajout du champ note sur le ticket de caisse
+    # Story B44-P1: Utiliser opened_at de la session si session différée
     db_sale = Sale(
         cash_session_id=sale_data.cash_session_id,
         operator_id=user_id,  # Associate sale with current operator
@@ -125,6 +157,11 @@ async def create_sale(
         payment_method=sale_data.payment_method,
         note=sale_data.note  # Story B40-P5: Notes sur les tickets
     )
+    
+    # Si sale_created_at est défini, l'utiliser pour created_at (contourner le default du modèle)
+    if sale_created_at is not None:
+        db_sale.created_at = sale_created_at
+    
     db.add(db_sale)
     db.flush()  # Get the sale ID
     
@@ -145,8 +182,7 @@ async def create_sale(
     # Commit to ensure the sale is in the database before querying
     db.commit()
 
-    # Update cash session counters
-    cash_session = db.query(CashSession).filter(CashSession.id == sale_data.cash_session_id).first()
+    # Update cash session counters (cash_session déjà récupéré plus haut)
     if cash_session:
         # Calculate total sales and items for this session (includes the sale we just created)
         session_sales = db.query(
@@ -160,5 +196,39 @@ async def create_sale(
         cash_session.current_amount = cash_session.initial_amount + cash_session.total_sales
 
         db.commit()
+    
+    # B48-P2: Logger la validation paiement
+    # Construire l'état du panier AVANT validation (items reçus dans la requête)
+    cart_state_before = {
+        "items_count": len(sale_data.items),
+        "items": [
+            {
+                "id": f"item-{idx}",
+                "category": item.category,
+                "weight": item.weight,
+                "price": item.total_price
+            }
+            for idx, item in enumerate(sale_data.items)
+        ],
+        "total": sale_data.total_amount
+    }
+    
+    # État du panier APRÈS validation (devrait être vide car le frontend vide le panier après succès)
+    cart_state_after = {
+        "items_count": 0,
+        "items": [],
+        "total": 0.0
+    }
+    
+    log_transaction_event("PAYMENT_VALIDATED", {
+        "user_id": str(user_id),
+        "session_id": str(sale_data.cash_session_id),
+        "transaction_id": str(db_sale.id),
+        "cart_state_before": cart_state_before,
+        "cart_state_after": cart_state_after,
+        "payment_method": sale_data.payment_method.value if hasattr(sale_data.payment_method, 'value') else str(sale_data.payment_method),
+        "amount": float(sale_data.total_amount)
+    })
+    
     db.refresh(db_sale)
     return db_sale

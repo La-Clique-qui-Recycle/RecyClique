@@ -23,7 +23,15 @@ if $COMPOSE_CMD --help 2>/dev/null | grep -q -- "--env-file"; then
   # Arrêter la stack existante (projet explicite)
   $COMPOSE_CMD -p recyclic-local --env-file .env --env-file .build-meta.env down || true
   docker rm -f recyclic-local-postgres recyclic-local-redis 2>/dev/null || true
-  exec $COMPOSE_CMD -p recyclic-local --env-file .env --env-file .build-meta.env up -d --build --remove-orphans
+  $COMPOSE_CMD -p recyclic-local --env-file .env --env-file .build-meta.env up -d --build --remove-orphans
+
+  # Activer le service de backup automatique si ENABLE_BACKUP_SERVICE=true (optionnel en dev)
+  if [ "${ENABLE_BACKUP_SERVICE:-false}" = "true" ]; then
+    echo "📦 Activation du service de backup automatique (optionnel en dev)..."
+    if [ -f "docker-compose.backup.yml" ]; then
+      $COMPOSE_CMD -f docker-compose.backup.yml -p recyclic-local --env-file .env --profile backup up -d postgres-backup || echo "⚠️  Service backup non démarré (peut nécessiter configuration)"
+    fi
+  fi
 else
   echo "❌ La commande '$COMPOSE_CMD' ne supporte pas --env-file. Merci d'installer docker compose v2 (recommandé)." >&2
   echo "   Alternative: renommer temporairement .env et sourcer .build-meta.env avant up." >&2

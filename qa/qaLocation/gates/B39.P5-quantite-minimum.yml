@@ -30,3 +30,12 @@ recommendations:
   future:
     - action: "Consider adding quantity increment/decrement buttons for better UX"
       refs: ["frontend/src/components/business/SaleWizard.tsx"]
+
+
+
+
+
+
+
+
+

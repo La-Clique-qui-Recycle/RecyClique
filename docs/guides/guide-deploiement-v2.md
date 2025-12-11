@@ -44,7 +44,11 @@ nano .env
 # 3. Démarrer
 docker compose --profile dev up -d --build
 
-# 4. Accéder
+# 4. (Optionnel) Activer le service de backup automatique
+# Définir ENABLE_BACKUP_SERVICE=true dans .env pour activer
+# docker compose -f docker-compose.backup.yml --profile backup up -d postgres-backup
+
+# 5. Accéder
 # Frontend: http://localhost:4444
 # API: http://localhost:8000
 # API Docs: http://localhost:8000/docs
@@ -93,6 +97,9 @@ docker compose restart api
 
 # Arrêter
 docker compose --profile dev down
+
+# (Si service backup activé) Arrêter aussi le service backup
+docker compose -f docker-compose.backup.yml --profile backup down
 ```
 
 ---
@@ -104,6 +111,7 @@ docker compose --profile dev down
 - Serveur avec Docker installé
 - DNS configuré pour `devrecyclic.jarvos.eu`
 - Traefik en cours d'exécution
+- **Dossier `./backups` créé avec permissions appropriées** (voir section Volumes ci-dessous)
 
 ### Déploiement
 
@@ -128,12 +136,17 @@ bash scripts/backup-database.sh staging
 # 6. Déployer la stack staging
 docker compose -p recyclic-staging -f docker-compose.staging.yml --env-file .env.staging up -d --build
 
-# 7. Valider Traefik
+# 7. Activer le service de backup automatique (Story B46-P4)
+docker compose -f docker-compose.backup.yml -p recyclic-staging --env-file .env.staging --profile backup up -d postgres-backup
+
+# 8. Valider Traefik
 bash scripts/validate-traefik.sh staging
 
-# 8. Vérifier
+# 9. Vérifier
 curl https://devrecyclic.jarvos.eu/api/health
 ```
+
+**Note :** Le service de backup automatique est activé automatiquement par le script `deploy-staging.sh`. Si vous déployez manuellement, n'oubliez pas l'étape 7.
 
 ### Variables Critiques (.env.staging)
 
@@ -177,6 +190,13 @@ Le déploiement en production nécessite une procédure complète avec validatio
 
 **→ Utiliser le runbook complet : [Deployment Independent Stacks](../runbooks/deployment-independent-stacks.md)**
 
+### Prérequis
+
+- Serveur avec Docker installé
+- DNS configuré pour `recyclic.jarvos.eu`
+- Traefik en cours d'exécution
+- **Dossier `./backups` créé avec permissions appropriées** (voir section Volumes ci-dessous)
+
 ### Résumé des Commandes (après lecture du runbook)
 
 ```bash
@@ -192,6 +212,9 @@ docker compose --profile prod down --remove-orphans
 # Phase 3 : Déploiement de la nouvelle stack
 docker compose -p recyclic-prod -f docker-compose.prod.yml --env-file .env.production up -d --build
 
+# Phase 3.5 : Activer le service de backup automatique (Story B46-P4)
+docker compose -f docker-compose.backup.yml -p recyclic-prod --env-file .env.production --profile backup up -d postgres-backup
+
 # Phase 4 : Validation
 watch -n 5 'docker compose -p recyclic-prod -f docker-compose.prod.yml ps'
 bash scripts/validate-traefik.sh prod
@@ -200,6 +223,8 @@ bash scripts/validate-traefik.sh prod
 curl https://recyclic.jarvos.eu/api/health
 curl -I https://recyclic.jarvos.eu
 ```
+
+**Note :** Le service de backup automatique est activé automatiquement par le script `deploy-prod.sh`. Si vous déployez manuellement, n'oubliez pas l'étape 3.5.
 
 ### Variables Critiques (.env.production)
 
@@ -335,6 +360,30 @@ docker compose -p recyclic-prod -f docker-compose.prod.yml --env-file .env.produ
 ```
 
 ### Backup de la Base de Données
+
+#### Backup Automatique (Story B46-P4)
+
+Le service de backup automatique s'exécute quotidiennement à 2h00 (configurable via `BACKUP_TIME`).
+
+**Activation :**
+- ✅ **Automatique** : Activé automatiquement par `deploy-prod.sh` et `deploy-staging.sh`
+- 🔧 **Manuelle** : `docker compose -f docker-compose.backup.yml -p recyclic-prod --env-file .env.production --profile backup up -d postgres-backup`
+
+**Vérification :**
+```bash
+# Vérifier que le service backup est actif
+docker compose -f docker-compose.backup.yml -p recyclic-prod --profile backup ps
+
+# Voir les logs du service backup
+docker compose -f docker-compose.backup.yml -p recyclic-prod --profile backup logs -f postgres-backup
+
+# Vérifier les backups créés
+ls -lh ./backups/
+```
+
+**Documentation complète :** Voir [`docs/runbooks/database-backup-automation.md`](../runbooks/database-backup-automation.md)
+
+#### Backup Manuel
 
 ```bash
 # Utiliser le script automatisé
@@ -475,6 +524,46 @@ Avec l'option `-p` (project name), Docker Compose préfixe automatiquement les v
 - Isolation totale entre environnements
 - Pas de conflit de noms
 - Pour voir les volumes : `docker volume ls | grep recyclic`
+
+### Volume de Backups (`./backups:/backups`)
+
+**⚠️ IMPORTANT :** Le service `api` monte le volume `./backups:/backups` pour stocker les sauvegardes automatiques créées avant les imports de base de données (Story B46-P2).
+
+**Configuration requise sur le serveur VPS (staging et production) :**
+
+```bash
+# 1. Créer le dossier backups à la racine du projet
+cd /opt/recyclic  # Ou le chemin de votre projet
+mkdir -p ./backups
+
+# 2. Définir les permissions appropriées (lecture/écriture pour l'utilisateur Docker)
+chmod 755 ./backups
+
+# 3. Vérifier que le dossier existe et est accessible
+ls -ld ./backups
+# Doit afficher : drwxr-xr-x ... ./backups
+```
+
+**Configuration dans docker-compose :**
+
+Le volume est déjà configuré dans les 3 fichiers docker-compose :
+- `docker-compose.yml` (dev) : `volumes: - ./backups:/backups`
+- `docker-compose.staging.yml` (staging) : `volumes: - ./backups:/backups`
+- `docker-compose.prod.yml` (production) : `volumes: - ./backups:/backups`
+
+**Utilisation :**
+
+Les backups automatiques créés avant les imports de base de données sont stockés dans `/backups` (dans le conteneur) qui correspond à `./backups` sur le serveur hôte. Les fichiers sont nommés `pre_restore_YYYYMMDD_HHMMSS.dump` (format binaire PostgreSQL).
+
+**Vérification après déploiement :**
+
+```bash
+# Vérifier que le volume est bien monté
+docker compose -p recyclic-prod -f docker-compose.prod.yml exec api ls -la /backups
+
+# Vérifier depuis l'hôte
+ls -lh ./backups/
+```
 
 ### Restauration de Base de Données
 

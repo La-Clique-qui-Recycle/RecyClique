@@ -311,3 +311,12 @@ export const getMockPresetsByCategory = (categoryId: string): VirtualPreset[] =>
 export const getMockActiveCategories = (): VirtualCategory[] => {
   return mockCategories.filter(cat => cat.is_active && cat.is_visible);
 };
+
+
+
+
+
+
+
+
+
