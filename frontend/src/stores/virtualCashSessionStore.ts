@@ -418,6 +418,17 @@ export const useVirtualCashSessionStore = create<VirtualCashSessionState>()(
         set({ loading: true, error: null });
 
         try {
+          // Validation: s'assurer que initial_amount est un number valide
+          const initialAmount = typeof data.initial_amount === 'number' 
+            ? data.initial_amount 
+            : parseFloat(String(data.initial_amount || '0').replace(',', '.'));
+          
+          if (isNaN(initialAmount) || initialAmount < 0) {
+            const errorMsg = 'Montant initial invalide';
+            set({ error: errorMsg, loading: false });
+            return null;
+          }
+
           // B49-P3: Charger les options de workflow depuis la caisse source si register_id est présent
           let registerOptions: Record<string, any> | null = null;
           if (data.register_id) {
@@ -438,8 +449,8 @@ export const useVirtualCashSessionStore = create<VirtualCashSessionState>()(
           const session: CashSession = {
             id: generateVirtualId('session'),
             operator_id: data.operator_id,
-            initial_amount: data.initial_amount,
-            current_amount: data.initial_amount,
+            initial_amount: initialAmount,
+            current_amount: initialAmount,
             status: 'open',
             opened_at: new Date().toISOString(),
             total_sales: 0,
