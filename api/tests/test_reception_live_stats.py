@@ -14,9 +14,11 @@ from recyclic_api.models.user import User, UserRole, UserStatus
 from recyclic_api.models.sale import Sale
 from recyclic_api.models.sale_item import SaleItem
 from recyclic_api.models.category import Category
-from recyclic_api.models.poste_reception import PosteReception
+from recyclic_api.models.poste_reception import PosteReception, PosteReceptionStatus
+from recyclic_api.models.cash_session import CashSession, CashSessionStatus
 from recyclic_api.services.reception_stats_service import ReceptionLiveStatsService
 from recyclic_api.core.config import settings
+from recyclic_api.core.security import hash_password
 
 
 class TestReceptionLiveStatsService:
@@ -25,13 +27,14 @@ class TestReceptionLiveStatsService:
     def test_count_open_tickets_no_tickets(self, db_session: Session):
         """Test counting open tickets when none exist."""
         service = ReceptionLiveStatsService(db_session)
-        count = service._count_open_tickets(None)
+        now = datetime.now(timezone.utc)
+        start_of_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        count = service._count_open_tickets(None, start_of_today)
         assert count == 0
 
     def test_count_open_tickets_with_open_and_closed(self, db_session: Session):
         """Test counting open tickets with mix of open and closed."""
         # Create test data
-        poste = PosteReception(id=uuid.uuid4(), name="Test Poste", status="open")
         user = User(
             id=uuid.uuid4(),
             username="test@example.com",
@@ -39,7 +42,19 @@ class TestReceptionLiveStatsService:
             role=UserRole.USER,
             status=UserStatus.ACTIVE
         )
-        db_session.add_all([poste, user])
+        db_session.add(user)
+        db_session.commit()
+        
+        # Create poste with opened_at today
+        now = datetime.now(timezone.utc)
+        start_of_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        poste = PosteReception(
+            id=uuid.uuid4(),
+            opened_by_user_id=user.id,
+            opened_at=start_of_today + timedelta(hours=1),  # Today
+            status=PosteReceptionStatus.OPENED.value
+        )
+        db_session.add(poste)
         db_session.commit()
 
         # Create open ticket
@@ -61,20 +76,29 @@ class TestReceptionLiveStatsService:
         db_session.commit()
 
         service = ReceptionLiveStatsService(db_session)
-        count = service._count_open_tickets(None)
+        now = datetime.now(timezone.utc)
+        start_of_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        count = service._count_open_tickets(None, start_of_today)
         assert count == 1
 
     def test_count_closed_tickets_24h_no_recent_closures(self, db_session: Session):
         """Test counting closed tickets when none closed in last 24h."""
         service = ReceptionLiveStatsService(db_session)
-        threshold = datetime.now(timezone.utc) - timedelta(hours=24)
-        count = service._count_closed_tickets_24h(None, threshold)
+        now = datetime.now(timezone.utc)
+        threshold = now - timedelta(hours=24)
+        start_of_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        count = service._count_closed_tickets_24h(None, threshold, start_of_today)
         assert count == 0
 
     def test_count_closed_tickets_24h_with_recent_and_old(self, db_session: Session):
         """Test counting closed tickets with mix of recent and old closures."""
         # Create test data
-        poste = PosteReception(id=uuid.uuid4(), name="Test Poste", status="open")
+        poste = PosteReception(
+            id=uuid.uuid4(),
+            opened_by_user_id=user.id,
+            opened_at=datetime.now(timezone.utc),
+            status=PosteReceptionStatus.OPENED.value
+        )
         user = User(
             id=uuid.uuid4(),
             username="test@example.com",
@@ -105,15 +129,19 @@ class TestReceptionLiveStatsService:
         db_session.commit()
 
         service = ReceptionLiveStatsService(db_session)
-        threshold = datetime.now(timezone.utc) - timedelta(hours=24)
-        count = service._count_closed_tickets_24h(None, threshold)
+        now = datetime.now(timezone.utc)
+        threshold = now - timedelta(hours=24)
+        start_of_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        count = service._count_closed_tickets_24h(None, threshold, start_of_today)
         assert count == 1
 
     def test_calculate_turnover_24h_no_sales(self, db_session: Session):
         """Test calculating turnover when no sales exist."""
         service = ReceptionLiveStatsService(db_session)
-        threshold = datetime.now(timezone.utc) - timedelta(hours=24)
-        turnover = service._calculate_turnover_24h(None, threshold)
+        now = datetime.now(timezone.utc)
+        threshold = now - timedelta(hours=24)
+        start_of_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        turnover = service._calculate_turnover_24h(None, threshold, start_of_today)
         assert turnover == Decimal('0')
 
     def test_calculate_turnover_24h_with_sales(self, db_session: Session):
@@ -122,11 +150,28 @@ class TestReceptionLiveStatsService:
         user = User(
             id=uuid.uuid4(),
             username="test@example.com",
-            hashed_password="hash",
+            hashed_password=hash_password("testpass"),
             role=UserRole.USER,
             status=UserStatus.ACTIVE
         )
-        session = type('MockSession', (), {'id': uuid.uuid4()})()
+        db_session.add(user)
+        db_session.commit()
+        
+        # Create real cash session (opened today)
+        now = datetime.now(timezone.utc)
+        start_of_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        session = CashSession(
+            id=uuid.uuid4(),
+            operator_id=user.id,
+            site_id=uuid.uuid4(),
+            initial_amount=50.0,
+            current_amount=50.0,
+            status=CashSessionStatus.CLOSED,
+            opened_at=start_of_today + timedelta(hours=1),  # Today
+            closed_at=start_of_today + timedelta(hours=3),
+        )
+        db_session.add(session)
+        db_session.commit()
 
         # Create recent sale (2 hours ago)
         recent_sale = Sale(
@@ -150,15 +195,19 @@ class TestReceptionLiveStatsService:
         db_session.commit()
 
         service = ReceptionLiveStatsService(db_session)
-        threshold = datetime.now(timezone.utc) - timedelta(hours=24)
-        turnover = service._calculate_turnover_24h(None, threshold)
+        now = datetime.now(timezone.utc)
+        threshold = now - timedelta(hours=24)
+        start_of_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        turnover = service._calculate_turnover_24h(None, threshold, start_of_today)
         assert turnover == Decimal('100.50')
 
     def test_calculate_donations_24h_no_donations(self, db_session: Session):
         """Test calculating donations when none exist."""
         service = ReceptionLiveStatsService(db_session)
-        threshold = datetime.now(timezone.utc) - timedelta(hours=24)
-        donations = service._calculate_donations_24h(None, threshold)
+        now = datetime.now(timezone.utc)
+        threshold = now - timedelta(hours=24)
+        start_of_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        donations = service._calculate_donations_24h(None, threshold, start_of_today)
         assert donations == Decimal('0')
 
     def test_calculate_donations_24h_with_donations(self, db_session: Session):
@@ -167,11 +216,28 @@ class TestReceptionLiveStatsService:
         user = User(
             id=uuid.uuid4(),
             username="test@example.com",
-            hashed_password="hash",
+            hashed_password=hash_password("testpass"),
             role=UserRole.USER,
             status=UserStatus.ACTIVE
         )
-        session = type('MockSession', (), {'id': uuid.uuid4()})()
+        db_session.add(user)
+        db_session.commit()
+        
+        # Create real cash session (opened today)
+        now = datetime.now(timezone.utc)
+        start_of_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        session = CashSession(
+            id=uuid.uuid4(),
+            operator_id=user.id,
+            site_id=uuid.uuid4(),
+            initial_amount=50.0,
+            current_amount=50.0,
+            status=CashSessionStatus.CLOSED,
+            opened_at=start_of_today + timedelta(hours=1),  # Today
+            closed_at=start_of_today + timedelta(hours=3),
+        )
+        db_session.add(session)
+        db_session.commit()
 
         # Create sale with donation (2 hours ago)
         sale_with_donation = Sale(
@@ -207,14 +273,21 @@ class TestReceptionLiveStatsService:
         db_session.commit()
 
         service = ReceptionLiveStatsService(db_session)
-        threshold = datetime.now(timezone.utc) - timedelta(hours=24)
-        donations = service._calculate_donations_24h(None, threshold)
+        now = datetime.now(timezone.utc)
+        threshold = now - timedelta(hours=24)
+        start_of_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        donations = service._calculate_donations_24h(None, threshold, start_of_today)
         assert donations == Decimal('5.50')
 
     def test_calculate_weight_in_open_and_recent_closed(self, db_session: Session):
         """Test calculating weight received from open tickets and recently closed."""
         # Create test data
-        poste = PosteReception(id=uuid.uuid4(), name="Test Poste", status="open")
+        poste = PosteReception(
+            id=uuid.uuid4(),
+            opened_by_user_id=user.id,
+            opened_at=datetime.now(timezone.utc),
+            status=PosteReceptionStatus.OPENED.value
+        )
         user = User(
             id=uuid.uuid4(),
             username="test@example.com",
@@ -269,8 +342,10 @@ class TestReceptionLiveStatsService:
         db_session.commit()
 
         service = ReceptionLiveStatsService(db_session)
-        threshold = datetime.now(timezone.utc) - timedelta(hours=24)
-        weight_in = service._calculate_weight_in(None, threshold)
+        now = datetime.now(timezone.utc)
+        threshold = now - timedelta(hours=24)
+        start_of_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        weight_in = service._calculate_weight_in(None, threshold, start_of_today)
         assert weight_in == Decimal('15.75')  # 10.5 + 5.25, old weight excluded
 
     def test_calculate_weight_out_recent_sales(self, db_session: Session):
@@ -279,11 +354,28 @@ class TestReceptionLiveStatsService:
         user = User(
             id=uuid.uuid4(),
             username="test@example.com",
-            hashed_password="hash",
+            hashed_password=hash_password("testpass"),
             role=UserRole.USER,
             status=UserStatus.ACTIVE
         )
-        session = type('MockSession', (), {'id': uuid.uuid4()})()
+        db_session.add(user)
+        db_session.commit()
+        
+        # Create real cash session (opened today)
+        now = datetime.now(timezone.utc)
+        start_of_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        session = CashSession(
+            id=uuid.uuid4(),
+            operator_id=user.id,
+            site_id=uuid.uuid4(),
+            initial_amount=50.0,
+            current_amount=50.0,
+            status=CashSessionStatus.CLOSED,
+            opened_at=start_of_today + timedelta(hours=1),  # Today
+            closed_at=start_of_today + timedelta(hours=3),
+        )
+        db_session.add(session)
+        db_session.commit()
 
         # Create recent sale with items (2 hours ago)
         recent_sale = Sale(
@@ -322,26 +414,51 @@ class TestReceptionLiveStatsService:
         db_session.commit()
 
         service = ReceptionLiveStatsService(db_session)
-        threshold = datetime.now(timezone.utc) - timedelta(hours=24)
-        weight_out = service._calculate_weight_out(None, threshold)
+        now = datetime.now(timezone.utc)
+        threshold = now - timedelta(hours=24)
+        start_of_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        weight_out = service._calculate_weight_out(None, threshold, start_of_today)
         assert weight_out == Decimal('6.25')  # 2.5 + 3.75, old weight excluded
 
     @pytest.mark.asyncio
     async def test_get_live_stats_full_scenario(self, db_session: Session):
         """Test complete live stats calculation with realistic data."""
         # Create comprehensive test data
-        poste = PosteReception(id=uuid.uuid4(), name="Test Poste", status="open")
         user = User(
             id=uuid.uuid4(),
             username="test@example.com",
-            hashed_password="hash",
+            hashed_password=hash_password("testpass"),
             role=UserRole.USER,
             status=UserStatus.ACTIVE
         )
         category = Category(id=uuid.uuid4(), name="Test Category", is_active=True)
-        session = type('MockSession', (), {'id': uuid.uuid4()})()
+        
+        db_session.add_all([user, category])
+        db_session.commit()
+        
+        # Create poste with opened_at today
+        now = datetime.now(timezone.utc)
+        start_of_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        poste = PosteReception(
+            id=uuid.uuid4(),
+            opened_by_user_id=user.id,
+            opened_at=start_of_today + timedelta(hours=1),  # Today
+            status=PosteReceptionStatus.OPENED.value
+        )
+        
+        # Create real cash session (opened today)
+        session = CashSession(
+            id=uuid.uuid4(),
+            operator_id=user.id,
+            site_id=uuid.uuid4(),
+            initial_amount=50.0,
+            current_amount=50.0,
+            status=CashSessionStatus.CLOSED,
+            opened_at=start_of_today + timedelta(hours=1),  # Today
+            closed_at=start_of_today + timedelta(hours=3),
+        )
 
-        db_session.add_all([poste, user, category])
+        db_session.add_all([poste, session])
         db_session.commit()
 
         # Create 2 open tickets with total 15kg
@@ -478,7 +595,12 @@ class TestReceptionLiveStatsEndpoint:
         import time
 
         # Create some test data to simulate load
-        poste = PosteReception(id=uuid.uuid4(), name="Test Poste", status="open")
+        poste = PosteReception(
+            id=uuid.uuid4(),
+            opened_by_user_id=user.id,
+            opened_at=datetime.now(timezone.utc),
+            status=PosteReceptionStatus.OPENED.value
+        )
         user = User(
             id=uuid.uuid4(),
             username="test@example.com",
@@ -517,3 +639,5 @@ class TestReceptionLiveStatsEndpoint:
 
         assert response.status_code == 200
         assert response_time_ms < 500  # Should respond within 500ms
+
+

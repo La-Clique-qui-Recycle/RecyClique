@@ -210,3 +210,12 @@ docker-compose exec frontend ls -la /app/tests/
 
 **Auteur:** Auto (Scrum Master) - 2025-11-26
 
+
+
+
+
+
+
+
+
+

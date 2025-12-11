@@ -248,6 +248,14 @@ export const getReceptionLiveStats = async () => {
   return response.data;
 };
 
+// Unified Live Stats (B48-P7)
+export const getUnifiedLiveStats = async (periodType = 'daily') => {
+  const response = await api.get('/v1/stats/live', {
+    params: { period_type: periodType }
+  });
+  return response.data;
+};
+
 // Cash Live Stats (B40-P2)
 export const getCashLiveStats = async () => {
   const today = new Date();

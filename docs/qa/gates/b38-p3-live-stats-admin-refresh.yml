@@ -44,3 +44,12 @@ recommendations:
       refs: ["frontend/src/hooks/useLiveReceptionStats.ts"]
     - action: "Add more granular error tracking with Sentry breadcrumbs for debugging"
       refs: ["frontend/src/hooks/useLiveReceptionStats.ts"]
+
+
+
+
+
+
+
+
+

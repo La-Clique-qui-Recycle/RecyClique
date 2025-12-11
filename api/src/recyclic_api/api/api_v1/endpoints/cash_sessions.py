@@ -1,8 +1,9 @@
 import logging
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 from recyclic_api.core.database import get_db
 from recyclic_api.core.auth import get_current_user, require_role, require_role_strict
@@ -40,6 +41,26 @@ router = APIRouter()
 
 logger = logging.getLogger(__name__)
 
+
+def enrich_session_response(session: CashSession, service: CashSessionService) -> CashSessionResponse:
+    """Story B49-P1: Enrichit une réponse de session avec les options du register.
+    
+    Args:
+        session: La session de caisse à enrichir
+        service: Le service de session pour récupérer les options
+        
+    Returns:
+        CashSessionResponse enrichi avec register_options
+    """
+    # Récupérer les options du register via la méthode publique qui valide avec Pydantic
+    register_options = service.get_register_options(session)
+    
+    # Construire la réponse avec tous les champs
+    response_data = CashSessionResponse.model_validate(session).model_dump()
+    response_data['register_options'] = register_options
+    
+    return CashSessionResponse(**response_data)
+
 @router.post(
     "/", 
     response_model=CashSessionResponse,
@@ -70,8 +91,16 @@ logger = logging.getLogger(__name__)
                         "status": "open",
                         "opened_at": "2025-01-27T10:30:00Z",
                         "closed_at": None,
-                        "total_sales": 0.0,
-                        "total_items": 0
+                    "total_sales": 0.0,
+                    "total_items": 0,
+                    "register_options": {
+                        "features": {
+                            "no_item_pricing": {
+                                "enabled": False,
+                                "label": "Mode prix global (total saisi manuellement, article sans prix)"
+                            }
+                        }
+                    }
                     }
                 }
             }
@@ -106,28 +135,49 @@ async def create_cash_session(
 ):
     service = CashSessionService(db)
     try:
-        # Vérifier qu'il n'y a pas déjà une session ouverte pour cet opérateur
-        existing_session = service.get_open_session_by_operator(session_data.operator_id)
-        if existing_session:
-            log_cash_session_opening(
-                user_id=str(current_user.id),
-                username=current_user.username or "Unknown",
-                session_id="",
-                opening_amount=session_data.initial_amount,
-                success=False,
-                db=db
-            )
-            raise HTTPException(
-                status_code=400,
-                detail="Une session de caisse est déjà ouverte pour cet opérateur"
-            )
+        # Vérifier les permissions si opened_at est fourni (saisie différée)
+        if session_data.opened_at is not None:
+            if current_user.role not in [UserRole.ADMIN, UserRole.SUPER_ADMIN]:
+                log_cash_session_opening(
+                    user_id=str(current_user.id),
+                    username=current_user.username or "Unknown",
+                    session_id="",
+                    opening_amount=session_data.initial_amount,
+                    success=False,
+                    db=db
+                )
+                raise HTTPException(
+                    status_code=403,
+                    detail="Seuls les administrateurs peuvent créer des sessions avec une date personnalisée (saisie différée)"
+                )
+        
+        # B44-P1: Vérifier qu'il n'y a pas déjà une session ouverte pour cet opérateur
+        # Exception: les sessions différées peuvent être créées même si l'opérateur a une session normale ouverte
+        if session_data.opened_at is None:
+            # Pour les sessions normales, vérifier qu'il n'y a pas déjà une session ouverte
+            existing_session = service.get_open_session_by_operator(session_data.operator_id)
+            if existing_session:
+                log_cash_session_opening(
+                    user_id=str(current_user.id),
+                    username=current_user.username or "Unknown",
+                    session_id="",
+                    opening_amount=session_data.initial_amount,
+                    success=False,
+                    db=db
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail="Une session de caisse est déjà ouverte pour cet opérateur"
+                )
+        # Pour les sessions différées, on permet la création même si l'opérateur a une session normale ouverte
 
-        # Créer la nouvelle session
+        # Créer la nouvelle session avec opened_at si fourni
         cash_session = service.create_session(
             operator_id=session_data.operator_id,
             site_id=session_data.site_id,
             initial_amount=session_data.initial_amount,
             register_id=session_data.register_id,
+            opened_at=session_data.opened_at,
         )
 
         # Initialiser les métriques d'étape (commencer par 'entry' pour les sessions de réception)
@@ -136,13 +186,17 @@ async def create_cash_session(
         # Sauvegarder l'initialisation des métriques
         db.commit()
 
-        # Log de l'ouverture de session
+        # Log de l'ouverture de session (avec flag is_deferred si opened_at fourni)
+        is_deferred = session_data.opened_at is not None
         log_cash_session_opening(
             user_id=str(current_user.id),
             username=current_user.username or "Unknown",
             session_id=str(cash_session.id),
             opening_amount=session_data.initial_amount,
             success=True,
+            is_deferred=is_deferred,
+            opened_at=session_data.opened_at,
+            created_at=datetime.now(timezone.utc) if is_deferred else None,
             db=db
         )
 
@@ -150,7 +204,8 @@ async def create_cash_session(
         try:
             # Rafraîchir l'objet depuis la DB pour s'assurer que tous les champs sont chargés
             db.refresh(cash_session)
-            response = CashSessionResponse.model_validate(cash_session)
+            # Story B49-P1: Enrichir avec les options du register
+            response = enrich_session_response(cash_session, service)
             return response
         except Exception as serialization_error:
             logger.error(f"Erreur lors de la sérialisation de la session {cash_session.id}: {serialization_error}", exc_info=True)
@@ -254,7 +309,15 @@ async def get_cash_session_status(
                                 "opened_at": "2025-01-27T10:30:00Z",
                                 "closed_at": None,
                                 "total_sales": 50.0,
-                                "total_items": 5
+                                "total_items": 5,
+                                "register_options": {
+                                    "features": {
+                                        "no_item_pricing": {
+                                            "enabled": False,
+                                            "label": "Mode prix global (total saisi manuellement, article sans prix)"
+                                        }
+                                    }
+                                }
                             }
                         ],
                         "total": 1,
@@ -286,6 +349,16 @@ async def get_cash_sessions(
     date_from: Optional[datetime] = Query(None, description="Date de début (ISO 8601)"),
     date_to: Optional[datetime] = Query(None, description="Date de fin (ISO 8601)"),
     search: Optional[str] = Query(None, description="Recherche textuelle (nom opérateur ou ID de session)"),
+    include_empty: bool = Query(False, description="B44-P3: Inclure les sessions vides (sans transaction)"),
+    # B45-P2: Filtres avancés
+    amount_min: Optional[float] = Query(None, ge=0, description="Montant minimum (CA total)"),
+    amount_max: Optional[float] = Query(None, ge=0, description="Montant maximum (CA total)"),
+    variance_threshold: Optional[float] = Query(None, description="Seuil de variance (écart minimum)"),
+    variance_has_variance: Optional[bool] = Query(None, description="Filtrer par présence/absence de variance"),
+    duration_min_hours: Optional[float] = Query(None, ge=0, description="Durée minimum de session (en heures)"),
+    duration_max_hours: Optional[float] = Query(None, ge=0, description="Durée maximum de session (en heures)"),
+    payment_methods: Optional[List[str]] = Query(None, description="Méthodes de paiement (multi-sélection)"),
+    has_donation: Optional[bool] = Query(None, description="Filtrer par présence de don"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role_strict([UserRole.USER, UserRole.ADMIN, UserRole.SUPER_ADMIN]))
 ):
@@ -300,12 +373,22 @@ async def get_cash_sessions(
         date_from=date_from,
         date_to=date_to,
         search=search,
+        include_empty=include_empty,
+        amount_min=amount_min,
+        amount_max=amount_max,
+        variance_threshold=variance_threshold,
+        variance_has_variance=variance_has_variance,
+        duration_min_hours=duration_min_hours,
+        duration_max_hours=duration_max_hours,
+        payment_methods=payment_methods,
+        has_donation=has_donation,
     )
     
     sessions, total = service.get_sessions_with_filters(filters)
     
+    # Story B49-P1: Enrichir chaque session avec les options du register
     return CashSessionListResponse(
-        data=[CashSessionResponse.model_validate(session) for session in sessions],
+        data=[enrich_session_response(session, service) for session in sessions],
         total=total,
         skip=skip,
         limit=limit
@@ -332,8 +415,8 @@ async def get_current_cash_session(
             return None
         
         logging.info(f"=== DEBUG: Retour de la session {session.id} ===")
-        # Retourner directement l'objet session - FastAPI gère la sérialisation
-        return session
+        # Story B49-P1: Enrichir avec les options du register
+        return enrich_session_response(session, service)
         
     except Exception as e:
         # Log de l'erreur pour debug
@@ -391,7 +474,15 @@ async def get_current_cash_session(
                                 "created_at": "2025-01-27T11:00:00Z",
                                 "operator_id": "550e8400-e29b-41d4-a716-446655440001"
                             }
-                        ]
+                        ],
+                        "register_options": {
+                            "features": {
+                                "no_item_pricing": {
+                                    "enabled": False,
+                                    "label": "Mode prix global (total saisi manuellement, article sans prix)"
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -450,6 +541,9 @@ async def get_cash_session_detail(
         for sale in session.sales:
             sales_data.append(SaleDetail.model_validate(sale))
         
+        # Story B49-P1: Charger les options du register
+        register_options = service.get_register_options(session)
+        
         # Construire la réponse détaillée - éviter model_validate pour éviter l'erreur 500
         response_data = {
             "id": str(session.id),
@@ -467,6 +561,7 @@ async def get_cash_session_detail(
             "actual_amount": session.actual_amount,
             "variance": session.variance,
             "variance_comment": session.variance_comment,
+            "register_options": register_options,  # Story B49-P1: Ajouter les options
             "sales": sales_data,
             "operator_name": session.operator.username if session.operator else None,
             "site_name": session.site.name if session.site else None
@@ -515,7 +610,8 @@ async def update_cash_session(
     # Mettre à jour la session
     updated_session = service.update_session(session_id, session_update)
     
-    return CashSessionResponse.model_validate(updated_session)
+    # Story B49-P1: Enrichir avec les options du register
+    return enrich_session_response(updated_session, service)
 
 
 @router.post(
@@ -549,7 +645,15 @@ async def update_cash_session(
                         "opened_at": "2025-01-27T10:30:00Z",
                         "closed_at": "2025-01-27T18:30:00Z",
                         "total_sales": 50.0,
-                        "total_items": 5
+                        "total_items": 5,
+                        "register_options": {
+                            "features": {
+                                "no_item_pricing": {
+                                    "enabled": False,
+                                    "label": "Mode prix global (total saisi manuellement, article sans prix)"
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -650,14 +754,36 @@ async def close_cash_session(
                 detail="Un commentaire est obligatoire en cas d'écart entre le montant théorique et le montant physique"
             )
         
-        # Fermer la session avec contrôle des montants
+        # B44-P3: Fermer la session avec contrôle des montants
+        # Si la session est vide, elle sera supprimée au lieu d'être fermée
         closed_session = service.close_session_with_amounts(
             session_id, 
             close_data.actual_amount, 
             close_data.variance_comment
         )
         
-        # Log de la fermeture de session
+        # B44-P3: Si la session était vide, elle a été supprimée
+        if closed_session is None:
+            # Session vide supprimée : retourner un message informatif
+            log_cash_session_closing(
+                user_id=str(current_user.id),
+                username=current_user.username or "Unknown",
+                session_id=session_id,
+                closing_amount=0,
+                success=True,
+                db=db
+            )
+            # Retourner une réponse JSON personnalisée (pas CashSessionResponse)
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "message": "Session vide non enregistrée",
+                    "session_id": session_id,
+                    "deleted": True
+                }
+            )
+        
+        # Log de la fermeture de session normale
         log_cash_session_closing(
             user_id=str(current_user.id),
             username=current_user.username or "Unknown",
@@ -721,7 +847,8 @@ async def close_cash_session(
             except Exception as exc:  # noqa: BLE001 - keep closing flow resilient
                 logger.error("Failed to send cash session report email: %s", exc)
 
-        response_model = CashSessionResponse.model_validate(closed_session)
+        # Story B49-P1: Enrichir avec les options du register
+        response_model = enrich_session_response(closed_session, service)
         response_model = response_model.model_copy(update={
             'report_download_url': report_download_url,
             'report_email_sent': email_sent,
@@ -748,13 +875,22 @@ async def get_cash_session_stats(
     date_to: Optional[datetime] = Query(None, description="Date de fin (ISO 8601)"),
     site_id: Optional[str] = Query(None, description="Filtrer par ID de site"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)  # Changed: Allow all authenticated users
+    current_user: User = Depends(get_current_user),  # Changed: Allow all authenticated users
+    response: Response = Response(),
 ):
     """
     Récupère les statistiques des sessions de caisse (KPIs agrégés).
 
     Seuls les administrateurs peuvent voir les statistiques.
+    
+    **⚠️ DEPRECATED:** This endpoint is deprecated. Use `/v1/stats/live` instead.
+    This endpoint will be removed in 3 months (2025-03-09).
     """
+    # Add deprecation headers (Story B48-P7)
+    response.headers["Deprecation"] = "true"
+    response.headers["Sunset"] = "Mon, 09 Mar 2025 00:00:00 GMT"
+    response.headers["Link"] = '</v1/stats/live>; rel="successor-version"'
+    
     service = CashSessionService(db)
 
     stats = service.get_session_stats(date_from=date_from, date_to=date_to, site_id=site_id)

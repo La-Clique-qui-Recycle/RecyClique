@@ -47,6 +47,20 @@ class Settings(BaseSettings):
     CASH_SESSION_REPORT_TOKEN_TTL_SECONDS: int = 900
     CASH_SESSION_REPORT_RETENTION_DAYS: int = 30
 
+    # Legacy Import - LLM Fallback (B47-P5)
+    # Provider à utiliser pour le fallback LLM sur les catégories legacy.
+    # Exemples : "openrouter", "none" (par défaut = désactivé).
+    LEGACY_IMPORT_LLM_PROVIDER: str | None = None
+    # Identifiant du modèle LLM à utiliser (dépend du provider).
+    LEGACY_IMPORT_LLM_MODEL: str | None = None
+    # Taille de batch maximale pour l'envoi de catégories non mappées au LLM.
+    LEGACY_IMPORT_LLM_BATCH_SIZE: int = 20
+
+    # Clé API OpenRouter (si LEGACY_IMPORT_LLM_PROVIDER = "openrouter").
+    OPENROUTER_API_KEY: str | None = None
+    # URL de base de l'API OpenRouter (surchargable pour tests / mocks).
+    OPENROUTER_API_BASE_URL: str = "https://openrouter.ai/api/v1"
+
     # Email Service
 
     BREVO_API_KEY: str | None = None

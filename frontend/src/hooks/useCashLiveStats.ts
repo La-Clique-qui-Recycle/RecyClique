@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { getCashLiveStats, getReceptionLiveStats } from '../services/api';
+import { getUnifiedLiveStats } from '../services/api';
 import { useAuthStore } from '../stores/authStore';
 
 export interface CashLiveStats {
@@ -65,8 +65,8 @@ export function useCashLiveStats({
   const mountedRef = useRef(true);
 
   /**
-   * Récupère les données live depuis l'API
-   * Optimisé pour éviter les appels inutiles selon les permissions
+   * Récupère les données live depuis l'API unifiée
+   * Utilise le nouvel endpoint /v1/stats/live (Story B48-P7)
    */
   const fetchLiveStats = useCallback(async () => {
     if (!mountedRef.current || !userEnabled) return;
@@ -75,40 +75,18 @@ export function useCashLiveStats({
       setIsLoading(true);
       setError(null);
 
-      // Récupérer les stats de caisse (toujours disponible)
-      const cashStats = await getCashLiveStats();
+      // Récupérer les stats unifiées depuis le nouvel endpoint
+      const unifiedStats = await getUnifiedLiveStats('daily');
 
-      // Récupérer les stats de réception seulement si l'utilisateur est admin
-      // Évite les erreurs 403/500 inutiles pour les caissiers
-      let receptionStats = { weight_in: 0, weight_out: 0 };
-      
-      if (isAdmin) {
-        try {
-          receptionStats = await getReceptionLiveStats();
-        } catch (receptionError: unknown) {
-          // Gérer silencieusement les erreurs de réception pour les admins
-          // (peut être dû à un problème serveur temporaire)
-          if (receptionError && typeof receptionError === 'object' && 'response' in receptionError) {
-            const axiosError = receptionError as any;
-            // Log seulement les erreurs serveur, pas les 403 (ne devrait pas arriver pour admin)
-            if (axiosError.response?.status >= 500) {
-              console.warn('Erreur serveur lors de la récupération des stats réception:', axiosError.response?.status);
-            }
-          } else {
-            console.debug('Stats réception non disponibles');
-          }
-          // Utiliser les valeurs par défaut (0) en cas d'erreur
-        }
-      }
-
+      // Extraire les stats caisse depuis la réponse unifiée
       const stats: CashLiveStats = {
-        ticketsCount: cashStats.number_of_sales || 0,
-        lastTicketAmount: 0, // Sera mis à jour depuis le store local ou l'API
-        ca: cashStats.total_sales || 0,
-        donations: cashStats.total_donations || 0,
-        weightOut: cashStats.total_weight_sold || 0,
-        weightIn: receptionStats.weight_in || 0,
-        timestamp: new Date().toISOString()
+        ticketsCount: unifiedStats.tickets_count || 0,
+        lastTicketAmount: unifiedStats.last_ticket_amount || 0,
+        ca: unifiedStats.ca || 0,
+        donations: unifiedStats.donations || 0,
+        weightOut: unifiedStats.weight_out || 0, // Inclut ventes + is_exit=true
+        weightIn: unifiedStats.weight_in || 0, // Exclut is_exit=true
+        timestamp: unifiedStats.period_end || new Date().toISOString()
       };
 
       setData(stats);

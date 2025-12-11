@@ -375,6 +375,23 @@ const Settings: React.FC = () => {
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [importConfirmationText, setImportConfirmationText] = useState('')
   
+  // États pour l'historique des imports
+  const [importHistory, setImportHistory] = useState<Array<{
+    id: string;
+    timestamp: string;
+    actor_username: string | null;
+    description: string;
+    details: {
+      filename?: string;
+      file_size_mb?: number;
+      duration_seconds?: number;
+      success: boolean;
+      error_message?: string;
+      backup_created?: string;
+    };
+  }>>([])
+  const [loadingImportHistory, setLoadingImportHistory] = useState(false)
+  
   // États pour le seuil d'activité "En ligne"
   const [activityThreshold, setActivityThreshold] = useState(15)
   const [loadingActivityThreshold, setLoadingActivityThreshold] = useState(false)
@@ -489,6 +506,7 @@ const Settings: React.FC = () => {
     loadSessionSettings()
     loadActivityThreshold()
     loadEmailSettings()
+    loadImportHistory()
 
     return () => {
       isCancelled = true
@@ -591,18 +609,29 @@ const Settings: React.FC = () => {
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     if (file) {
-      // Vérifier que c'est un fichier SQL
-      if (!file.name.toLowerCase().endsWith('.sql')) {
-        alert('❌ Veuillez sélectionner un fichier SQL (.sql)')
+      // Vérifier que c'est un fichier .dump
+      if (!file.name.toLowerCase().endsWith('.dump')) {
+        alert('❌ Veuillez sélectionner un fichier .dump (format binaire PostgreSQL)')
+        event.target.value = '' // Réinitialiser l'input
         return
       }
+      
+      // Vérifier la taille du fichier (limite 500MB, comme côté backend)
+      const maxSizeBytes = 500 * 1024 * 1024 // 500MB
+      if (file.size > maxSizeBytes) {
+        const fileSizeMB = (file.size / 1024 / 1024).toFixed(2)
+        alert(`❌ Le fichier est trop volumineux (${fileSizeMB} MB). La limite est de 500 MB.`)
+        event.target.value = '' // Réinitialiser l'input
+        return
+      }
+      
       setSelectedFile(file)
     }
   }
 
   const handleImportStep1 = () => {
     if (!selectedFile) {
-      alert('❌ Veuillez sélectionner un fichier SQL')
+      alert('❌ Veuillez sélectionner un fichier .dump')
       return
     }
     // Passer à l'étape de confirmation
@@ -628,6 +657,9 @@ const Settings: React.FC = () => {
       setShowImportModal(false)
       setSelectedFile(null)
       setImportConfirmationText('')
+      
+      // Recharger l'historique après un import réussi
+      await loadImportHistory()
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Erreur inconnue'
       alert(`❌ Erreur lors de l'import de la base de données: ${errorMessage}`)
@@ -641,6 +673,21 @@ const Settings: React.FC = () => {
     setShowImportModal(false)
     setSelectedFile(null)
     setImportConfirmationText('')
+  }
+
+  // Fonction pour charger l'historique des imports
+  const loadImportHistory = async () => {
+    if (!isSuperAdmin) return
+    
+    try {
+      setLoadingImportHistory(true)
+      const history = await adminService.getDatabaseImportHistory(1, 5)
+      setImportHistory(history.entries)
+    } catch (err) {
+      console.error('Erreur lors du chargement de l\'historique des imports:', err)
+    } finally {
+      setLoadingImportHistory(false)
+    }
   }
 
   // Fonctions pour les paramètres de session
@@ -858,7 +905,7 @@ const Settings: React.FC = () => {
               <ActionInfo>
                 <ActionTitle>Export de la base de données</ActionTitle>
                 <ActionDescription>
-                  Génère un fichier SQL complet de sauvegarde de la base de données.
+                  Génère un fichier .dump (format binaire PostgreSQL) complet de sauvegarde de la base de données.
                   Utile pour les backups manuels ou avant des opérations de maintenance majeures.
                 </ActionDescription>
               </ActionInfo>
@@ -882,24 +929,102 @@ const Settings: React.FC = () => {
               <ActionInfo>
                 <ActionTitle>Import de sauvegarde</ActionTitle>
                 <ActionDescription>
-                  Importe un fichier SQL de sauvegarde et remplace la base de données existante.
-                  Une sauvegarde automatique est créée avant l'import.
+                  Importe un fichier .dump (format binaire PostgreSQL) de sauvegarde et remplace la base de données existante.
+                  Une sauvegarde automatique est créée avant l'import dans /backups.
                 </ActionDescription>
               </ActionInfo>
               <Button
                 variant="danger"
                 onClick={handleImportDatabase}
-                disabled={true}
-                style={{ opacity: 0.6, cursor: 'not-allowed' }}
+                disabled={importingDatabase}
               >
-                🚧 Fonctionnalité en développement
+                {importingDatabase ? '⏳ Import en cours...' : '📥 Importer'}
               </Button>
             </ActionHeader>
-            <WarningBox style={{ backgroundColor: '#fef3cd', borderColor: '#fde68a', color: '#92400e' }}>
-              <strong>🚧 FONCTIONNALITÉ EN DÉVELOPPEMENT :</strong> L'import de sauvegarde est temporairement désactivé 
-              en raison de problèmes techniques avec les fichiers de sauvegarde PostgreSQL. 
-              Cette fonctionnalité sera bientôt disponible.
+            <WarningBox>
+              <strong>⚠️ Attention :</strong> Cette opération remplace complètement la base de données existante.
+              Seuls les fichiers .dump (format binaire PostgreSQL) sont acceptés. Une sauvegarde automatique
+              est créée avant l'import dans /backups.
             </WarningBox>
+          </ActionCard>
+
+          {/* Historique des imports */}
+          <ActionCard>
+            <ActionHeader>
+              <ActionInfo>
+                <ActionTitle>Historique des imports</ActionTitle>
+                <ActionDescription>
+                  Liste des 5 derniers imports de base de données effectués. Chaque import est tracé dans le journal d'audit.
+                </ActionDescription>
+              </ActionInfo>
+            </ActionHeader>
+            {loadingImportHistory ? (
+              <div style={{ textAlign: 'center', padding: '20px' }}>
+                Chargement de l'historique...
+              </div>
+            ) : importHistory.length === 0 ? (
+              <div style={{ padding: '16px', color: '#6b7280', textAlign: 'center' }}>
+                Aucun import effectué pour le moment.
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                {importHistory.map((entry) => (
+                  <div
+                    key={entry.id}
+                    style={{
+                      padding: '12px',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '6px',
+                      backgroundColor: entry.details.success ? '#f0fdf4' : '#fef2f2'
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontWeight: 600, marginBottom: '4px' }}>
+                          {entry.details.filename || 'Fichier inconnu'}
+                        </div>
+                        <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>
+                          {new Date(entry.timestamp).toLocaleString('fr-FR', {
+                            dateStyle: 'short',
+                            timeStyle: 'short'
+                          })}
+                          {entry.actor_username && ` • Par ${entry.actor_username}`}
+                        </div>
+                      </div>
+                      <div style={{
+                        padding: '4px 8px',
+                        borderRadius: '4px',
+                        fontSize: '0.75rem',
+                        fontWeight: 600,
+                        backgroundColor: entry.details.success ? '#10b981' : '#ef4444',
+                        color: 'white'
+                      }}>
+                        {entry.details.success ? '✅ Succès' : '❌ Échec'}
+                      </div>
+                    </div>
+                    <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>
+                      {entry.details.file_size_mb && `Taille: ${entry.details.file_size_mb} MB`}
+                      {entry.details.duration_seconds && ` • Durée: ${entry.details.duration_seconds}s`}
+                      {entry.details.backup_created && ` • Backup: ${entry.details.backup_created}`}
+                    </div>
+                    {entry.details.error_message && (
+                      <div style={{ marginTop: '8px', padding: '8px', backgroundColor: '#fee2e2', borderRadius: '4px', fontSize: '0.875rem', color: '#dc2626' }}>
+                        <strong>Erreur:</strong> {entry.details.error_message}
+                      </div>
+                    )}
+                  </div>
+                ))}
+                <div style={{ marginTop: '8px', textAlign: 'center' }}>
+                  <Button
+                    variant="secondary"
+                    onClick={() => navigate('/admin/audit-log?action_type=db_import')}
+                    style={{ fontSize: '0.875rem' }}
+                  >
+                    Voir tous les imports dans le journal d'audit →
+                  </Button>
+                </div>
+              </div>
+            )}
           </ActionCard>
 
           {/* Purge des données transactionnelles */}
@@ -1362,14 +1487,14 @@ const Settings: React.FC = () => {
           <ModalContent>
             <ModalTitle>📥 Import de sauvegarde</ModalTitle>
             <ModalText>
-              Sélectionnez un fichier SQL de sauvegarde à importer. Cette action remplacera
-              complètement la base de données existante.
+              Sélectionnez un fichier .dump (format binaire PostgreSQL) de sauvegarde à importer. 
+              Cette action remplacera complètement la base de données existante.
             </ModalText>
             
             <div style={{ margin: '20px 0' }}>
               <input
                 type="file"
-                accept=".sql"
+                accept=".dump"
                 onChange={handleFileSelect}
                 style={{
                   width: '100%',

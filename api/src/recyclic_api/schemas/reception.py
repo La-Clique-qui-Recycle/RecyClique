@@ -8,6 +8,12 @@ from datetime import datetime
 from recyclic_api.models.ligne_depot import Destination
 
 
+class OpenPosteRequest(BaseModel):
+    """Corps de requête pour ouvrir un poste de réception."""
+
+    opened_at: Optional[datetime] = Field(None, description="Date d'ouverture du poste (optionnel, uniquement ADMIN/SUPER_ADMIN)")
+
+
 class OpenPosteResponse(BaseModel):
     """Réponse lors de l'ouverture d'un poste de réception."""
 
@@ -47,6 +53,7 @@ class CreateLigneRequest(BaseModel):
     )
     destination: Destination = Field(..., description="Destination de l'objet")
     notes: Optional[str] = Field(None, description="Notes libres")
+    is_exit: Optional[bool] = Field(False, description="Indique si c'est une sortie de stock (défaut: False)")
 
 
 class UpdateLigneRequest(BaseModel):
@@ -58,6 +65,7 @@ class UpdateLigneRequest(BaseModel):
     )
     destination: Optional[Destination] = Field(None, description="Nouvelle destination de l'objet")
     notes: Optional[str] = Field(None, description="Notes libres")
+    is_exit: Optional[bool] = Field(None, description="Indique si c'est une sortie de stock")
 
 
 class LigneResponse(BaseModel):
@@ -70,6 +78,7 @@ class LigneResponse(BaseModel):
     poids_kg: Decimal = Field(..., description="Poids en kilogrammes")
     destination: Destination = Field(..., description="Destination de l'objet")
     notes: Optional[str] = Field(None, description="Notes libres")
+    is_exit: bool = Field(..., description="Indique si c'est une sortie de stock")
 
 
 # Schémas pour l'historique des tickets
@@ -84,6 +93,10 @@ class TicketSummaryResponse(BaseModel):
     status: str = Field(..., description="Statut du ticket (opened|closed)")
     total_lignes: int = Field(..., description="Nombre total de lignes")
     total_poids: Decimal = Field(..., description="Poids total en kilogrammes")
+    # B48-P6: Répartition des poids par flux
+    poids_entree: Decimal = Field(..., description="Poids entré en boutique (is_exit=false, destination=MAGASIN)")
+    poids_direct: Decimal = Field(..., description="Poids recyclé/déchetterie direct (is_exit=false, destination IN (RECYCLAGE, DECHETERIE))")
+    poids_sortie: Decimal = Field(..., description="Poids sorti de boutique (is_exit=true)")
 
 
 class TicketDetailResponse(BaseModel):

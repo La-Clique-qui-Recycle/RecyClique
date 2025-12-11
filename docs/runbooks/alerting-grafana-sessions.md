@@ -379,3 +379,12 @@ Pour toute question sur la configuration :
 **Dernière mise à jour :** 2025-11-26  
 **Version du document :** 1.0
 
+
+
+
+
+
+
+
+
+

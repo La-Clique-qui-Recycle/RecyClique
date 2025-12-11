@@ -35,6 +35,11 @@ class DisplayOrderUpdate(BaseModel):
     display_order: int
 
 
+class DisplayOrderEntryUpdate(BaseModel):
+    """Story B48-P4: Schéma pour la mise à jour de l'ordre ENTRY/DEPOT"""
+    display_order_entry: int
+
+
 @router.post(
     "/",
     response_model=CategoryRead,
@@ -56,16 +61,21 @@ async def create_category(
     "/",
     response_model=List[CategoryRead],
     summary="List all categories",
-    description="Get all categories, optionally filtered by active status. Requires authentication."
+    description="Get all categories, optionally filtered by active status. Story B48-P1: Exclut les catégories archivées par défaut. Requires authentication."
 )
 async def get_categories(
     is_active: Optional[bool] = Query(None, description="Filter by active status"),
+    include_archived: bool = Query(False, description="Story B48-P1: Include archived categories (deleted_at IS NOT NULL)"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get all categories with optional filter"""
+    """Get all categories with optional filter.
+    
+    Story B48-P1: Par défaut, exclut les catégories archivées (deleted_at IS NULL).
+    Utiliser include_archived=True pour voir toutes les catégories (admin).
+    """
     service = CategoryService(db)
-    return await service.get_categories(is_active=is_active)
+    return await service.get_categories(is_active=is_active, include_archived=include_archived)
 
 
 @router.get(
@@ -231,16 +241,45 @@ async def update_category(
     "/{category_id}",
     response_model=CategoryRead,
     summary="Soft delete a category",
-    description="Soft delete a category by setting is_active to False. Requires ADMIN or SUPER_ADMIN role."
+    description="Story B48-P1: Soft delete a category by setting deleted_at timestamp. Requires ADMIN or SUPER_ADMIN role."
 )
 async def delete_category(
     category_id: str,
     current_user: User = Depends(require_role_strict([UserRole.ADMIN, UserRole.SUPER_ADMIN])),
     db: Session = Depends(get_db)
 ):
-    """Soft delete a category"""
+    """Soft delete a category (Story B48-P1: uses deleted_at instead of is_active)"""
     service = CategoryService(db)
-    category = await service.soft_delete_category(category_id)
+    try:
+        category = await service.soft_delete_category(category_id)
+    except HTTPException as e:
+        # Re-raise HTTP exceptions (e.g., validation hiérarchie)
+        raise e
+
+    if not category:
+        raise HTTPException(status_code=404, detail="Category not found")
+
+    return category
+
+
+@router.post(
+    "/{category_id}/restore",
+    response_model=CategoryRead,
+    summary="Restore a soft-deleted category",
+    description="Story B48-P1: Restore a category by setting deleted_at to NULL. Requires ADMIN or SUPER_ADMIN role."
+)
+async def restore_category(
+    category_id: str,
+    current_user: User = Depends(require_role_strict([UserRole.ADMIN, UserRole.SUPER_ADMIN])),
+    db: Session = Depends(get_db)
+):
+    """Restore a soft-deleted category (Story B48-P1)"""
+    service = CategoryService(db)
+    try:
+        category = await service.restore_category(category_id)
+    except HTTPException as e:
+        # Re-raise HTTP exceptions (e.g., already active)
+        raise e
 
     if not category:
         raise HTTPException(status_code=404, detail="Category not found")
@@ -261,6 +300,23 @@ async def hard_delete_category(
 ):
     service = CategoryService(db)
     await service.hard_delete_category(category_id)
+
+
+@router.get(
+    "/{category_id}/has-usage",
+    response_model=dict,
+    summary="Check if category has usage",
+    description="Check if a category is used in any transactions, preset buttons, or has children. Returns True if it can be safely hard-deleted (no usage), False otherwise. Requires authentication."
+)
+async def check_category_usage(
+    category_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Check if a category has any usage"""
+    service = CategoryService(db)
+    has_usage = await service.has_usage(category_id)
+    return {"has_usage": has_usage, "can_hard_delete": not has_usage}
 
 
 @router.get(
@@ -353,6 +409,23 @@ async def update_category_display_order(
     """Update category display order"""
     service = CategoryManagementService(db)
     return await service.update_display_order(category_id, order_data.display_order)
+
+
+@router.put(
+    "/{category_id}/display-order-entry",
+    response_model=CategoryRead,
+    summary="Update category display order for ENTRY/DEPOT",
+    description="Story B48-P4: Update category display order for ENTRY/DEPOT tickets. Requires ADMIN or SUPER_ADMIN role."
+)
+async def update_category_display_order_entry(
+    category_id: str,
+    order_data: DisplayOrderEntryUpdate,
+    current_user: User = Depends(require_role_strict([UserRole.ADMIN, UserRole.SUPER_ADMIN])),
+    db: Session = Depends(get_db)
+):
+    """Story B48-P4: Update category display order for ENTRY/DEPOT tickets"""
+    service = CategoryManagementService(db)
+    return await service.update_display_order_entry(category_id, order_data.display_order_entry)
 
 
 @router.get(

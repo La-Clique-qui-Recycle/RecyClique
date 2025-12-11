@@ -215,3 +215,12 @@ En cas de problème, rollback possible par :
 **Validation requise :** Tests passent, PO + QA validés
 **Stories liées :** B39-P2, B39-P3, B39-P4, B39-P6 pour alignement complet
 **Document de référence :** `docs/ux/reception-workflow.md` pour patterns UX
+
+
+
+
+
+
+
+
+

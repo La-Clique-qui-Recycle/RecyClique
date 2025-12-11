@@ -105,7 +105,22 @@ Thumbs.db
 
 # Logs
 *.log
+logs/
 .build-meta.env
+
+# Database backups and dumps (B46-P2, B46-P4)
+backups/
+*.dump
+
+# Database files (test databases)
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Temporary export files
+*.csv
+!docs/**/*.csv
 
 # Gemini CLI generated
 frontend/coverage/
@@ -117,3 +132,14 @@ test_reception_api.js
 
 # other datas
 /docs/photos_imports/*
+
+# Meeting transcriptions (BMAD Workflow)
+# Ignorer les fichiers audio et transcriptions, mais garder la structure
+meetings/**/*.mp3
+meetings/**/*.wav
+meetings/**/*.m4a
+meetings/**/*.flac
+meetings/**/*.ogg
+meetings/**/transcriptions/*.json
+meetings/**/logs/*.log
+meetings/**/state.json

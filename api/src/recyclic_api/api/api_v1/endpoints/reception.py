@@ -1,17 +1,19 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, Query, Response, Body, Request
 from sqlalchemy.orm import Session
 from uuid import UUID
-from typing import Optional
+from typing import Optional, List
 from datetime import date, datetime
 import csv
 import io
 
 from recyclic_api.core.database import get_db
 from recyclic_api.core.auth import require_role_strict
-from recyclic_api.models.user import UserRole
+from recyclic_api.models.user import UserRole, User
+from recyclic_api.utils.report_tokens import generate_download_token, verify_download_token
 from recyclic_api.schemas.reception import (
+    OpenPosteRequest,
     OpenPosteResponse,
     CreateTicketRequest,
     CreateTicketResponse,
@@ -37,11 +39,28 @@ router = APIRouter()
 
 @router.post("/postes/open", response_model=OpenPosteResponse)
 def open_poste(
+    payload: Optional[OpenPosteRequest] = Body(None),
     db: Session = Depends(get_db),
     current_user=Depends(require_role_strict([UserRole.USER, UserRole.ADMIN, UserRole.SUPER_ADMIN])),
 ):
+    """
+    Ouvrir un poste de réception.
+    
+    Si `opened_at` est fourni, seuls ADMIN et SUPER_ADMIN peuvent créer le poste (saisie différée).
+    """
+    opened_at = payload.opened_at if payload else None
+    
+    # Validation des permissions: si opened_at fourni, requiert ADMIN ou SUPER_ADMIN
+    if opened_at is not None:
+        if current_user.role not in [UserRole.ADMIN, UserRole.SUPER_ADMIN]:
+            from fastapi import HTTPException, status
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Seuls les administrateurs peuvent créer des postes avec une date personnalisée"
+            )
+    
     service = ReceptionService(db)
-    poste = service.open_poste(opened_by_user_id=current_user.id)
+    poste = service.open_poste(opened_by_user_id=current_user.id, opened_at=opened_at)
     return {"id": str(poste.id), "status": poste.status}
 
 
@@ -93,12 +112,14 @@ def add_ligne(
         poids_kg=float(payload.poids_kg),
         destination=payload.destination,
         notes=payload.notes,
+        is_exit=payload.is_exit if payload.is_exit is not None else False,
     )
     
     # Récupérer le nom de la catégorie
+    from recyclic_api.services.category_service import CategoryService
     category_label = "Catégorie inconnue"
     if ligne.category:
-        category_label = ligne.category.name
+        category_label = ligne.category.name  # Story B48-P5: Utilise name (nom court/rapide)
     
     return {
         "id": str(ligne.id),
@@ -108,6 +129,7 @@ def add_ligne(
         "poids_kg": ligne.poids_kg,
         "destination": ligne.destination,
         "notes": ligne.notes,
+        "is_exit": ligne.is_exit,
     }
 
 
@@ -116,14 +138,17 @@ def get_categories(
     db: Session = Depends(get_db),
     current_user=Depends(require_role_strict([UserRole.USER, UserRole.ADMIN, UserRole.SUPER_ADMIN])),
 ):
-    """Récupérer les catégories disponibles."""
+    """Récupérer les catégories disponibles.
+    
+    Story B48-P5: Retourne name (nom court/rapide) pour l'affichage opérationnel.
+    """
     categories = db.query(Category).filter(
         Category.is_active == True
     ).all()
     return [
         {
             "id": str(cat.id),
-            "name": cat.name
+            "name": cat.name  # Story B48-P5: Nom court/rapide (toujours utilisé)
         }
         for cat in categories
     ]
@@ -143,12 +168,14 @@ def update_ligne(
         poids_kg=float(payload.poids_kg) if payload.poids_kg is not None else None,
         destination=payload.destination,
         notes=payload.notes,
+        is_exit=payload.is_exit,
     )
     
     # Récupérer le nom de la catégorie
+    from recyclic_api.services.category_service import CategoryService
     category_label = "Catégorie inconnue"
     if ligne.category:
-        category_label = ligne.category.name
+        category_label = ligne.category.name  # Story B48-P5: Utilise name (nom court/rapide)
     
     return {
         "id": str(ligne.id),
@@ -158,6 +185,7 @@ def update_ligne(
         "poids_kg": ligne.poids_kg,
         "destination": ligne.destination,
         "notes": ligne.notes,
+        "is_exit": ligne.is_exit,
     }
 
 
@@ -178,17 +206,63 @@ def get_tickets(
     page: int = Query(1, ge=1, description="Numéro de page"),
     per_page: int = Query(10, ge=1, le=100, description="Nombre d'éléments par page"),
     status: Optional[str] = Query(None, description="Filtrer par statut"),
+    date_from: Optional[datetime] = Query(None, description="Date de début (inclusive) au format ISO 8601"),
+    date_to: Optional[datetime] = Query(None, description="Date de fin (inclusive) au format ISO 8601"),
+    benevole_id: Optional[str] = Query(None, description="ID du bénévole"),
+    search: Optional[str] = Query(None, description="Recherche textuelle (ID ticket ou nom bénévole)"),
+    include_empty: bool = Query(False, description="B44-P4: Inclure les tickets vides (sans lignes)"),
+    # B45-P2: Filtres avancés
+    poids_min: Optional[float] = Query(None, ge=0, description="Poids minimum total du ticket (kg)"),
+    poids_max: Optional[float] = Query(None, ge=0, description="Poids maximum total du ticket (kg)"),
+    categories: Optional[List[str]] = Query(None, description="Catégories (multi-sélection)"),
+    destinations: Optional[List[str]] = Query(None, description="Destinations (multi-sélection)"),
+    lignes_min: Optional[int] = Query(None, ge=0, description="Nombre minimum de lignes"),
+    lignes_max: Optional[int] = Query(None, ge=0, description="Nombre maximum de lignes"),
     db: Session = Depends(get_db),
     current_user=Depends(require_role_strict([UserRole.USER, UserRole.ADMIN, UserRole.SUPER_ADMIN])),
 ):
     """Récupérer la liste des tickets de réception avec pagination."""
+    from uuid import UUID
+    
     service = ReceptionService(db)
-    tickets, total = service.get_tickets_list(page=page, per_page=per_page, status=status)
+    benevole_uuid = None
+    if benevole_id:
+        try:
+            benevole_uuid = UUID(benevole_id)
+        except ValueError:
+            from fastapi import HTTPException, status
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="benevole_id invalide")
+    
+    # Convertir les catégories en UUIDs
+    category_uuids = None
+    if categories:
+        try:
+            category_uuids = [UUID(cat_id) for cat_id in categories]
+        except ValueError:
+            from fastapi import HTTPException, status
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="categories invalides")
+    
+    tickets, total = service.get_tickets_list(
+        page=page, 
+        per_page=per_page, 
+        status=status,
+        date_from=date_from,
+        date_to=date_to,
+        benevole_id=benevole_uuid,
+        search=search,
+        include_empty=include_empty,
+        poids_min=poids_min,
+        poids_max=poids_max,
+        categories=category_uuids,
+        destinations=destinations,
+        lignes_min=lignes_min,
+        lignes_max=lignes_max,
+    )
     
     # Calculer les totaux pour chaque ticket
     ticket_summaries = []
     for ticket in tickets:
-        total_lignes, total_poids = service._calculate_ticket_totals(ticket)
+        total_lignes, total_poids, poids_entree, poids_direct, poids_sortie = service._calculate_ticket_totals(ticket)
         ticket_summaries.append(TicketSummaryResponse(
             id=str(ticket.id),
             poste_id=str(ticket.poste_id),
@@ -197,7 +271,10 @@ def get_tickets(
             closed_at=ticket.closed_at,
             status=ticket.status,
             total_lignes=total_lignes,
-            total_poids=total_poids
+            total_poids=total_poids,
+            poids_entree=poids_entree,
+            poids_direct=poids_direct,
+            poids_sortie=poids_sortie
         ))
     
     total_pages = (total + per_page - 1) // per_page
@@ -240,7 +317,8 @@ def get_ticket_detail(
             category_label=category_label,
             poids_kg=ligne.poids_kg,
             destination=ligne.destination,
-            notes=ligne.notes
+            notes=ligne.notes,
+            is_exit=ligne.is_exit
         ))
     
     return TicketDetailResponse(
@@ -251,6 +329,173 @@ def get_ticket_detail(
         closed_at=ticket.closed_at,
         status=ticket.status,
         lignes=lignes
+    )
+
+
+@router.post("/tickets/{ticket_id}/download-token")
+def generate_ticket_download_token(
+    ticket_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role_strict([UserRole.ADMIN, UserRole.SUPER_ADMIN])),
+):
+    """Générer un token de téléchargement pour un ticket de réception (B44-P4)."""
+    from fastapi import HTTPException, status
+    
+    service = ReceptionService(db)
+    ticket = service.get_ticket_detail(UUID(ticket_id))
+    
+    if not ticket:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket introuvable")
+    
+    # Générer le nom de fichier (même format que dans export_ticket_csv)
+    benevole_username = ticket.benevole.username or "utilisateur_inconnu"
+    benevole_safe = benevole_username.replace(' ', '_').replace('/', '_').replace('\\', '_')[:20]
+    date_str = ticket.created_at.strftime("%Y%m%d") if ticket.created_at else datetime.utcnow().strftime("%Y%m%d")
+    timestamp = ticket.created_at.strftime("%H%M%S") if ticket.created_at else datetime.utcnow().strftime("%H%M%S")
+    uuid_short = str(ticket.id).replace('-', '')[:8]
+    filename = f"rapport_reception_{date_str}_{benevole_safe}_{uuid_short}_{timestamp}.csv"
+    
+    # Générer le token (TTL de 60 secondes pour les téléchargements directs)
+    token = generate_download_token(filename, ttl_seconds=60)
+    
+    # Construire l'URL de téléchargement (pointant vers l'API)
+    # Le frontend utilisera cette URL directement pour le téléchargement
+    download_url = f"/api/v1/reception/tickets/{ticket_id}/export-csv?token={token}"
+    
+    return {"download_url": download_url, "filename": filename, "expires_in_seconds": 60}
+
+
+@router.get("/tickets/{ticket_id}/export-csv")
+def export_ticket_csv(
+    ticket_id: str,
+    token: str = Query(..., description="Token de téléchargement signé (obligatoire)"),
+    db: Session = Depends(get_db),
+):
+    """
+    Exporter un ticket de réception au format CSV.
+    
+    Authentification via token signé (généré via POST /tickets/{ticket_id}/download-token).
+    Le navigateur télécharge directement depuis cette URL, garantissant que le nom de fichier
+    depuis le header Content-Disposition est respecté.
+    """
+    from fastapi import HTTPException, status
+    
+    service = ReceptionService(db)
+    ticket = service.get_ticket_detail(UUID(ticket_id))
+    
+    if not ticket:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket introuvable")
+    
+    # Générer le nom de fichier (même format que dans generate_ticket_download_token)
+    benevole_username = ticket.benevole.username or "utilisateur_inconnu"
+    benevole_safe = benevole_username.replace(' ', '_').replace('/', '_').replace('\\', '_')[:20]
+    date_str = ticket.created_at.strftime("%Y%m%d") if ticket.created_at else datetime.utcnow().strftime("%Y%m%d")
+    timestamp = ticket.created_at.strftime("%H%M%S") if ticket.created_at else datetime.utcnow().strftime("%H%M%S")
+    uuid_short = str(ticket.id).replace('-', '')[:8]
+    filename = f"rapport_reception_{date_str}_{benevole_safe}_{uuid_short}_{timestamp}.csv"
+    
+    # Vérifier le token signé (obligatoire)
+    if not verify_download_token(token, filename):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Token de téléchargement invalide ou expiré")
+    
+    # Calculer les totaux
+    total_lignes, total_poids = service._calculate_ticket_totals(ticket)
+    
+    # Fonctions de formatage (identique aux sessions de caisse)
+    def _format_weight(value: Optional[float]) -> str:
+        """Format un poids avec virgule comme séparateur décimal (format français)"""
+        if value is None:
+            return ''
+        # Utiliser virgule au lieu de point pour les décimales (format français)
+        return f"{value:.3f}".replace('.', ',')
+    
+    def _format_date(dt: Optional[datetime]) -> str:
+        if dt is None:
+            return ''
+        return dt.strftime('%Y-%m-%d %H:%M:%S')
+    
+    # Créer le contenu CSV avec le même format que les sessions de caisse
+    output = io.StringIO()
+    # Utiliser point-virgule comme délimiteur (standard français pour CSV)
+    # QUOTE_MINIMAL pour échapper automatiquement les guillemets et caractères spéciaux
+    writer = csv.writer(output, delimiter=';', quoting=csv.QUOTE_MINIMAL)
+    
+    # Section 1: Résumé du ticket (format tabulaire lisible, identique aux sessions de caisse)
+    writer.writerow(['=== RÉSUMÉ DU TICKET DE RÉCEPTION ==='])
+    writer.writerow(['Champ', 'Valeur'])
+    writer.writerow(['ID Ticket', str(ticket.id)])
+    writer.writerow(['ID Poste', str(ticket.poste_id)])
+    writer.writerow(['Bénévole', ticket.benevole.username or "Utilisateur inconnu"])
+    writer.writerow(['Date création', _format_date(ticket.created_at)])
+    if ticket.closed_at:
+        writer.writerow(['Date fermeture', _format_date(ticket.closed_at)])
+    writer.writerow(['Statut', ticket.status])
+    writer.writerow(['Nombre de lignes', str(total_lignes)])
+    writer.writerow(['Poids total (kg)', _format_weight(total_poids)])
+    
+    # Ligne vide pour séparation (avec le bon nombre de colonnes pour éviter les erreurs d'import)
+    writer.writerow(['', ''])  # 2 colonnes pour le résumé
+    
+    # Section 2: Détails des lignes de dépôt
+    writer.writerow(['=== DÉTAILS DES LIGNES DE DÉPÔT ==='])
+    writer.writerow([
+        'ID Ligne',
+        'Catégorie',
+        'Poids (kg)',
+        'Destination',
+        'Notes'
+    ])
+    
+    # Données des lignes
+    for ligne in ticket.lignes:
+        category_label = "Catégorie inconnue"
+        if ligne.category:
+            category_label = ligne.category.name
+        
+        destination_value = ""
+        if ligne.destination:
+            destination_value = ligne.destination.value if hasattr(ligne.destination, 'value') else str(ligne.destination)
+        
+        # Nettoyer les notes (retirer les retours à la ligne)
+        notes = (ligne.notes or "").replace('\n', ' ').replace('\r', ' ').strip()
+        
+        writer.writerow([
+            str(ligne.id),
+            category_label,
+            _format_weight(ligne.poids_kg),
+            destination_value,
+            notes
+        ])
+    
+    # Préparer la réponse
+    csv_content = output.getvalue()
+    output.close()
+    
+    # Encoder le contenu CSV en UTF-8 bytes avec BOM (identique aux sessions de caisse)
+    csv_bytes = csv_content.encode('utf-8-sig')  # BOM UTF-8 pour Excel
+    
+    # Générer un nom de fichier lisible (format similaire aux sessions de caisse)
+    # Format: rapport_reception_YYYYMMDD_benevole_{uuid_tronque}_{timestamp}.csv
+    # Exemple: rapport_reception_20250127_admintest1_a1b2c3d4_143022.csv
+    benevole_username = ticket.benevole.username or "utilisateur_inconnu"
+    # Nettoyer le nom d'utilisateur pour le nom de fichier (remplacer espaces et caractères spéciaux)
+    benevole_safe = benevole_username.replace(' ', '_').replace('/', '_').replace('\\', '_')[:20]
+    
+    date_str = ticket.created_at.strftime("%Y%m%d") if ticket.created_at else datetime.utcnow().strftime("%Y%m%d")
+    timestamp = ticket.created_at.strftime("%H%M%S") if ticket.created_at else datetime.utcnow().strftime("%H%M%S")
+    
+    # UUID tronqué (8 premiers caractères) pour identifier le ticket
+    uuid_short = str(ticket.id).replace('-', '')[:8]
+    
+    filename = f"rapport_reception_{date_str}_{benevole_safe}_{uuid_short}_{timestamp}.csv"
+    
+    return Response(
+        content=csv_bytes,
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f"attachment; filename=\"{filename}\"",
+            "Content-Length": str(len(csv_bytes))
+        }
     )
 
 
@@ -293,7 +538,7 @@ def get_lignes_depot(
             ticket_id=str(ligne.ticket_id),
             poste_id=str(ligne.ticket.poste_id),
             benevole_username=ligne.ticket.benevole.username or "Utilisateur inconnu",
-            category_label=ligne.category.name if ligne.category else "Catégorie inconnue",
+            category_label=ligne.category.name if ligne.category else "Catégorie inconnue",  # Story B48-P5: Nom court/rapide
             poids_kg=ligne.poids_kg,
             destination=ligne.destination,
             notes=ligne.notes,
@@ -361,7 +606,7 @@ def export_lignes_depot_csv(
             str(ligne.ticket_id),
             str(ligne.ticket.poste_id),
             ligne.ticket.benevole.username or "Utilisateur inconnu",
-            ligne.category.name if ligne.category else "Catégorie inconnue",
+            ligne.category.name if ligne.category else "Catégorie inconnue",  # Story B48-P5: Nom court/rapide
             str(ligne.poids_kg),
             ligne.destination.value if ligne.destination else "",
             ligne.notes or "",
@@ -406,6 +651,7 @@ async def get_live_reception_stats(
     site_id: Optional[str] = Query(None, description="Optional site filter for future multi-site support"),
     db: Session = Depends(get_db),
     current_user=Depends(require_role_strict([UserRole.ADMIN, UserRole.SUPER_ADMIN])),
+    response: Response = Response(),
 ):
     """
     Get live reception statistics for admin dashboard.
@@ -414,7 +660,15 @@ async def get_live_reception_stats(
     turnover, donations, and weight metrics for the last 24 hours.
 
     Requires admin or super-admin permissions.
+    
+    **⚠️ DEPRECATED:** This endpoint is deprecated. Use `/v1/stats/live` instead.
+    This endpoint will be removed in 3 months (2025-03-09).
     """
+    # Add deprecation headers (Story B48-P7)
+    response.headers["Deprecation"] = "true"
+    response.headers["Sunset"] = "Mon, 09 Mar 2025 00:00:00 GMT"
+    response.headers["Link"] = '</v1/stats/live>; rel="successor-version"'
+    
     if not settings.LIVE_RECEPTION_STATS_ENABLED:
         # Return zeros when feature is disabled (backward compatibility)
         return ReceptionLiveStatsResponse(

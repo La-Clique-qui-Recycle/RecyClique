@@ -125,7 +125,7 @@ import os
 import pytest
 from fastapi.testclient import TestClient
 from httpx import AsyncClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 import json
 from typing import Generator
@@ -181,6 +181,19 @@ def create_tables_if_not_exist():
     """Créer les tables si elles n'existent pas"""
     try:
         print("🔧 Création des tables...")
+        # Créer les types ENUM PostgreSQL nécessaires avant de créer les tables
+        # (Base.metadata.create_all() ne les crée pas automatiquement)
+        if SQLALCHEMY_DATABASE_URL.startswith("postgresql"):
+            with engine.connect() as conn:
+                # Créer le type ENUM cashsessionstep s'il n'existe pas
+                conn.execute(text("""
+                    DO $$ BEGIN
+                        CREATE TYPE cashsessionstep AS ENUM ('ENTRY', 'SALE', 'EXIT');
+                    EXCEPTION
+                        WHEN duplicate_object THEN null;
+                    END $$;
+                """))
+                conn.commit()
         Base.metadata.create_all(bind=engine)
         print("✅ Tables créées avec succès")
     except Exception as e:
@@ -270,11 +283,44 @@ def admin_client(db_session: Session) -> Generator[TestClient, None, None]:
     # Génération du token
     access_token = create_access_token(data={"sub": str(admin_user.id)})
 
-    # Configuration du client de test
+    # Configuration du client de test avec headers par défaut
+    # TestClient n'utilise pas automatiquement client.headers, il faut passer headers dans chaque requête
+    # On crée un wrapper qui injecte automatiquement le header
+    class AuthenticatedTestClient:
+        """Wrapper pour TestClient qui injecte automatiquement le header Authorization."""
+        def __init__(self, client: TestClient, token: str):
+            self._client = client
+            self._auth_header = {"Authorization": f"Bearer {token}"}
+        
+        def get(self, url: str, **kwargs):
+            headers = kwargs.pop("headers", {})
+            headers.update(self._auth_header)
+            return self._client.get(url, headers=headers, **kwargs)
+        
+        def post(self, url: str, **kwargs):
+            headers = kwargs.pop("headers", {})
+            headers.update(self._auth_header)
+            return self._client.post(url, headers=headers, **kwargs)
+        
+        def patch(self, url: str, **kwargs):
+            headers = kwargs.pop("headers", {})
+            headers.update(self._auth_header)
+            return self._client.patch(url, headers=headers, **kwargs)
+        
+        def put(self, url: str, **kwargs):
+            headers = kwargs.pop("headers", {})
+            headers.update(self._auth_header)
+            return self._client.put(url, headers=headers, **kwargs)
+        
+        def delete(self, url: str, **kwargs):
+            headers = kwargs.pop("headers", {})
+            headers.update(self._auth_header)
+            return self._client.delete(url, headers=headers, **kwargs)
+    
     client = TestClient(app)
-    client.headers["Authorization"] = f"Bearer {access_token}"
+    authenticated_client = AuthenticatedTestClient(client, access_token)
 
-    yield client
+    yield authenticated_client
 
 @pytest.fixture(scope="function")
 def super_admin_client(db_session: Session) -> Generator[TestClient, None, None]:

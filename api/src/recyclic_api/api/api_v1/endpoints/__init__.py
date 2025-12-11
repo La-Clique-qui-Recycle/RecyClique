@@ -26,3 +26,4 @@ from .webhooks import router as webhooks_router
 from .activity import router as activity_router
 from .presets import router as presets_router
 from .transactions import router as transactions_router
+from .legacy_import import router as legacy_import_router

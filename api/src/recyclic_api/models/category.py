@@ -11,16 +11,19 @@ class Category(Base):
     __tablename__ = "categories"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    name = Column(String, unique=True, nullable=False, index=True)
+    name = Column(String, unique=True, nullable=False, index=True)  # Nom court/rapide (inchangé)
+    official_name = Column(String(255), nullable=True)  # Story B48-P5: Nom complet officiel (optionnel)
     is_active = Column(Boolean, default=True, nullable=False)
     parent_id = Column(UUID(as_uuid=True), ForeignKey("categories.id"), nullable=True, index=True)
     price = Column(Numeric(10, 2), nullable=True)
     max_price = Column(Numeric(10, 2), nullable=True)
     display_order = Column(Integer, default=0, nullable=False, index=True)
+    display_order_entry = Column(Integer, default=0, nullable=False, index=True)  # Story B48-P4: Ordre pour ENTRY/DEPOT
     is_visible = Column(Boolean, default=True, nullable=False, index=True)
     shortcut_key = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    deleted_at = Column(DateTime(timezone=True), nullable=True, index=True)
 
     # Self-referencing relationship
     parent = relationship("Category", remote_side=[id], back_populates="children")

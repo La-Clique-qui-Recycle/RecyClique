@@ -7,19 +7,17 @@ import {
   Button,
   Stack,
   Alert,
-  Table,
-  Badge,
   ActionIcon,
   Paper,
   Modal,
   LoadingOverlay,
-  Box,
-  Collapse,
   Menu,
   FileInput,
   Divider,
   Checkbox,
-  Tabs
+  SegmentedControl,
+  Select,
+  TextInput
 } from '@mantine/core';
 import {
   IconPlus,
@@ -28,25 +26,30 @@ import {
   IconEdit,
   IconTrash,
   IconCheck,
-  IconChevronDown,
-  IconChevronRight,
   IconDownload,
   IconFileTypePdf,
   IconFileSpreadsheet,
-  IconFileTypeCsv
+  IconFileTypeCsv,
+  IconArchive,
+  IconRestore,
+  IconArrowsSort,
+  IconSearch
 } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 import { Category, categoryService } from '../../services/categoryService';
 import { CategoryForm } from '../../components/business/CategoryForm';
 import { EnhancedCategorySelector } from '../../components/categories/EnhancedCategorySelector';
+import { useCategoryStore } from '../../stores/categoryStore';
 
 const AdminCategories: React.FC = () => {
+  // Story B48-P4: Accès au store pour forcer le rechargement après archivage/suppression
+  const { fetchCategories: refreshCategoryStore } = useCategoryStore();
+
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingCategory, setEditingCategory] = useState<Category | null>(null);
-  const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
   const [exporting, setExporting] = useState(false);
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -54,12 +57,16 @@ const AdminCategories: React.FC = () => {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [deleteExisting, setDeleteExisting] = useState(false);
   const [executeErrors, setExecuteErrors] = useState<string[]>([]);
+  const [includeArchived, setIncludeArchived] = useState(false); // Story B48-P1: Toggle pour afficher les éléments archivés
+  const [ticketType, setTicketType] = useState<'sale' | 'entry'>('sale'); // Story B48-P4: Toggle SALE/CASH vs ENTRY/DEPOT
+  const [sortBy, setSortBy] = useState<'order' | 'name' | 'created'>('order'); // Story B48-P4: Option de tri
+  const [searchQuery, setSearchQuery] = useState(''); // Story B48-P4: Recherche
 
   const fetchCategories = async () => {
     setLoading(true);
     setError(null);
     try {
-      const data = await categoryService.getCategories();
+      const data = await categoryService.getCategories(undefined, includeArchived);
       setCategories(data);
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Erreur lors du chargement des catégories');
@@ -75,13 +82,7 @@ const AdminCategories: React.FC = () => {
 
   useEffect(() => {
     fetchCategories();
-  }, []);
-
-  // Déplier par défaut toutes les catégories racines
-  useEffect(() => {
-    const roots = organizeCategories(categories).map(c => c.id);
-    setExpandedCategories(new Set(roots));
-  }, [categories]);
+  }, [includeArchived]); // Story B48-P1: Recharger quand le toggle change
 
   const handleCreate = () => {
     setEditingCategory(null);
@@ -168,7 +169,34 @@ const AdminCategories: React.FC = () => {
     }
   };
 
-  const handleSubmit = async (data: { name: string; parent_id?: string | null; price?: number | null; max_price?: number | null }) => {
+  // Story B48-P1: Restaurer une catégorie archivée
+  const handleRestore = async (category: Category) => {
+    try {
+      await categoryService.restoreCategory(category.id);
+      notifications.show({
+        title: 'Succès',
+        message: 'Catégorie restaurée avec succès',
+        color: 'green',
+      });
+      fetchCategories();
+      await refreshCategoryStore(true); // Story B48-P4: Forcer le rechargement du store
+    } catch (err: any) {
+      const errorDetail = err.response?.data?.detail;
+      let errorMessage = 'Impossible de restaurer la catégorie';
+      if (typeof errorDetail === 'string') {
+        errorMessage = errorDetail;
+      } else if (errorDetail?.detail) {
+        errorMessage = errorDetail.detail;
+      }
+      notifications.show({
+        title: 'Erreur',
+        message: errorMessage,
+        color: 'red',
+      });
+    }
+  };
+
+  const handleSubmit = async (data: { name: string; official_name?: string | null; parent_id?: string | null; price?: number | null; max_price?: number | null }) => {
     try {
       if (editingCategory) {
         await categoryService.updateCategory(editingCategory.id, data);
@@ -235,119 +263,6 @@ const AdminCategories: React.FC = () => {
       setExporting(false);
     }
   };
-
-  // Fonction pour organiser les catégories en hiérarchie
-  const organizeCategories = (categories: Category[]) => {
-    const categoryMap = new Map<string, Category & { children: Category[] }>();
-    const rootCategories: (Category & { children: Category[] })[] = [];
-
-    // Créer un map avec des enfants vides
-    categories.forEach(cat => {
-      categoryMap.set(cat.id, { ...cat, children: [] });
-    });
-
-    // Organiser la hiérarchie
-    categories.forEach(cat => {
-      const categoryWithChildren = categoryMap.get(cat.id)!;
-      if (cat.parent_id && categoryMap.has(cat.parent_id)) {
-        categoryMap.get(cat.parent_id)!.children.push(categoryWithChildren);
-      } else {
-        rootCategories.push(categoryWithChildren);
-      }
-    });
-
-    return rootCategories;
-  };
-
-  // Fonction pour basculer l'expansion d'une catégorie
-  const toggleExpansion = (categoryId: string) => {
-    setExpandedCategories(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(categoryId)) {
-        newSet.delete(categoryId);
-      } else {
-        newSet.add(categoryId);
-      }
-      return newSet;
-    });
-  };
-
-  // Composant récursif pour afficher la hiérarchie
-  const CategoryTreeItem: React.FC<{
-    category: Category & { children: Category[] };
-    level: number;
-  }> = ({ category, level }) => {
-    const isExpanded = expandedCategories.has(category.id);
-    const hasChildren = category.children.length > 0;
-    const indent = level * 20;
-
-    return (
-      <>
-        <tr key={category.id}>
-          <td>
-            <Group gap="xs" style={{ paddingLeft: indent }}>
-              {hasChildren && (
-                <ActionIcon
-                  variant="subtle"
-                  size="sm"
-                  onClick={() => toggleExpansion(category.id)}
-                  data-testid={`expand-${category.id}`}
-                >
-                  {isExpanded ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}
-                </ActionIcon>
-              )}
-              {!hasChildren && <Box w={20} />}
-              <Text size="sm" fw={level === 0 ? 600 : 400}>
-                {category.name}
-              </Text>
-            </Group>
-          </td>
-          <td>
-            <Badge color={category.is_active ? 'green' : 'gray'}>
-              {category.is_active ? 'Actif' : 'Inactif'}
-            </Badge>
-          </td>
-          <td>
-            {category.price != null && Number(category.price) !== 0
-              ? `${Number(category.price).toFixed(2)} €`
-              : '—'}
-          </td>
-          <td>
-            {category.max_price != null && Number(category.max_price) !== 0
-              ? `${Number(category.max_price).toFixed(2)} €`
-              : '—'}
-          </td>
-          <td>
-            <Group gap="xs">
-              <ActionIcon
-                variant="light"
-                color="blue"
-                onClick={() => handleEdit(category)}
-                title="Modifier"
-                data-testid={`edit-${category.id}`}
-              >
-                <IconEdit size={18} />
-              </ActionIcon>
-            </Group>
-          </td>
-        </tr>
-        {hasChildren && isExpanded && (
-          <>
-            {category.children.map(child => (
-              <CategoryTreeItem
-                key={child.id}
-                category={child}
-                level={level + 1}
-              />
-            ))}
-          </>
-        )}
-      </>
-    );
-  };
-
-  // Organiser les catégories en hiérarchie
-  const hierarchicalCategories = organizeCategories(categories);
 
   return (
     <Container size="lg" py="xl">
@@ -433,65 +348,161 @@ const AdminCategories: React.FC = () => {
           </Alert>
         )}
 
-        <Tabs defaultValue="management">
-          <Tabs.List>
-            <Tabs.Tab value="management">Gestion des catégories</Tabs.Tab>
-            <Tabs.Tab value="visibility">Visibilité pour tickets de réception</Tabs.Tab>
-          </Tabs.List>
+        {/* Story B48-P4: Unified view with SegmentedControl toggle */}
+        <Paper shadow="sm" p="md" withBorder pos="relative">
+          <LoadingOverlay visible={loading} />
 
-          <Tabs.Panel value="management" pt="md">
-            <Paper shadow="sm" p="md" withBorder pos="relative">
-              <LoadingOverlay visible={loading} />
-              <Table striped highlightOnHover>
-            <thead>
-              <tr>
-                <th>Nom</th>
-                <th>Statut</th>
-                <th>Prix minimum</th>
-                <th>Prix maximum</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {hierarchicalCategories.length > 0 ? (
-                hierarchicalCategories.map(category => (
-                  <CategoryTreeItem
-                    key={category.id}
-                    category={category}
-                    level={0}
-                  />
-                ))
-              ) : (
-                <tr>
-                  <td colSpan={3}>
-                    <Text ta="center" c="dimmed">
-                      Aucune catégorie trouvée
-                    </Text>
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </Table>
-        </Paper>
-          </Tabs.Panel>
+          <Stack gap="md">
+            {/* Header controls */}
+            <Group justify="space-between" align="flex-start" wrap="wrap">
+              <Checkbox
+                label="Afficher les éléments archivés"
+                checked={includeArchived}
+                onChange={(e) => setIncludeArchived(e.currentTarget.checked)}
+                data-testid="include-archived-toggle"
+                style={{ alignSelf: 'center' }}
+              />
 
-          <Tabs.Panel value="visibility" pt="md">
-            <Paper shadow="sm" p="md" withBorder>
-              <Stack gap="md">
-                <Alert color="blue" title="Gestion de la visibilité">
-                  <Text size="sm">
-                    Utilisez les cases à cocher pour contrôler quelles catégories apparaissent dans les tickets ENTRY/DEPOT.
-                    Les tickets SALE/CASH REGISTER affichent toujours toutes les catégories, indépendamment de ces paramètres.
-                  </Text>
-                </Alert>
-                <EnhancedCategorySelector
-                  showVisibilityControls={true}
-                  showDisplayOrder={true}
+              <Group gap="md" align="flex-end">
+                <TextInput
+                  placeholder="Rechercher une catégorie..."
+                  value={searchQuery}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSearchQuery(e.currentTarget.value)}
+                  leftSection={<IconSearch size={16} />}
+                  size="sm"
+                  style={{ width: 250 }}
+                  data-testid="search-input"
                 />
-              </Stack>
-            </Paper>
-          </Tabs.Panel>
-        </Tabs>
+
+                <Select
+                  label="Trier par"
+                  value={sortBy}
+                  onChange={(value) => setSortBy(value as 'order' | 'name' | 'created')}
+                  data={[
+                    { value: 'order', label: 'Ordre d\'affichage' },
+                    { value: 'name', label: 'Nom (alphabétique)' },
+                    { value: 'created', label: 'Date de création' }
+                  ]}
+                  leftSection={<IconArrowsSort size={16} />}
+                  size="sm"
+                  style={{ width: 180 }}
+                  data-testid="sort-select"
+                />
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <Text size="xs" c="dimmed" style={{ marginBottom: 0, lineHeight: 1 }}>
+                    Type de ticket
+                  </Text>
+                  <SegmentedControl
+                    value={ticketType}
+                    onChange={(value) => setTicketType(value as 'sale' | 'entry')}
+                    data={[
+                      { label: 'Caisse', value: 'sale' },
+                      { label: 'Réception', value: 'entry' }
+                    ]}
+                    data-testid="ticket-type-toggle"
+                  />
+                </div>
+              </Group>
+            </Group>
+
+            {/* Info alert for Réception mode */}
+            {ticketType === 'entry' && (
+              <Alert color="blue" title="Mode Réception">
+                <Text size="sm">
+                  Dans ce mode, vous pouvez gérer la visibilité et l'ordre d'affichage des catégories pour les tickets de réception.
+                  Utilisez les cases à cocher pour afficher/masquer les catégories dans les tickets de réception.
+                </Text>
+              </Alert>
+            )}
+
+            {/* Unified category management view */}
+            <EnhancedCategorySelector
+              showVisibilityControls={ticketType === 'entry'}
+              showDisplayOrder={true}
+              useDisplayOrderEntry={ticketType === 'entry'}
+              showActions={true}
+              enableDragDrop={true}
+              sortBy={sortBy}
+              searchQuery={searchQuery}
+              overrideCategories={categories}
+              onEdit={handleEdit}
+              onVisibilityChange={(categoryId: string, isVisible: boolean) => {
+                // Mettre à jour localement la visibilité sans recharger la page
+                setCategories(prevCategories => {
+                  return prevCategories.map(cat => {
+                    if (cat.id === categoryId) {
+                      return { ...cat, is_visible: isVisible }
+                    }
+                    return cat
+                  })
+                })
+              }}
+              onDisplayOrderChange={(categoryId: string, newOrder: number) => {
+                // Mettre à jour localement l'ordre sans recharger la page
+                // Cette fonction est appelée pour chaque catégorie mise à jour
+                setCategories(prevCategories => {
+                  return prevCategories.map(cat => {
+                    if (cat.id === categoryId) {
+                      // Mettre à jour l'ordre selon le type de ticket
+                      if (ticketType === 'entry') {
+                        return { ...cat, display_order_entry: newOrder }
+                      } else {
+                        return { ...cat, display_order: newOrder }
+                      }
+                    }
+                    return cat
+                  })
+                })
+              }}
+              onDelete={async (category) => {
+                if (!category) return;
+                let hasUsage = true;
+                try {
+                  const usage = await categoryService.checkCategoryUsage(category.id);
+                  hasUsage = usage.has_usage;
+
+                  if (!usage.has_usage) {
+                    if (window.confirm(`Êtes-vous sûr de vouloir supprimer définitivement "${category.name}" ? Cette action est irréversible.`)) {
+                      await categoryService.hardDeleteCategory(category.id);
+                      notifications.show({
+                        title: 'Catégorie supprimée',
+                        message: 'La catégorie a été supprimée définitivement.',
+                        color: 'green'
+                      });
+                      fetchCategories();
+                      await refreshCategoryStore(true); // Story B48-P4: Forcer le rechargement du store
+                    }
+                  } else {
+                    if (window.confirm(`La catégorie "${category.name}" est utilisée dans l'historique. Voulez-vous l'archiver ? Elle sera masquée mais restera disponible dans l'historique.`)) {
+                      await categoryService.deleteCategory(category.id);
+                      notifications.show({
+                        title: 'Catégorie archivée',
+                        message: 'La catégorie a été archivée.',
+                        color: 'green'
+                      });
+                      fetchCategories();
+                      await refreshCategoryStore(true); // Story B48-P4: Forcer le rechargement du store
+                    }
+                  }
+                } catch (e: any) {
+                  const errorDetail = e?.response?.data?.detail;
+                  let errorMessage = hasUsage ? 'Archivage échoué' : 'Suppression échouée';
+                  if (typeof errorDetail === 'string') {
+                    errorMessage = errorDetail;
+                  } else if (errorDetail?.detail) {
+                    errorMessage = errorDetail.detail;
+                  }
+                  notifications.show({
+                    title: 'Erreur',
+                    message: errorMessage,
+                    color: 'red'
+                  });
+                }
+              }}
+            />
+          </Stack>
+        </Paper>
       </Stack>
 
       <Modal
@@ -499,22 +510,90 @@ const AdminCategories: React.FC = () => {
         onClose={() => setModalOpen(false)}
         title={editingCategory ? 'Modifier la catégorie' : 'Nouvelle catégorie'}
       >
-        <CategoryForm
-          category={editingCategory}
-          onSubmit={handleSubmit}
-          onCancel={() => setModalOpen(false)}
-          onDelete={async () => {
-            if (!editingCategory) return;
-            try {
-              await categoryService.hardDeleteCategory(editingCategory.id);
-              setCategories(prev => prev.filter(c => c.id !== editingCategory.id));
-              notifications.show({ title: 'Supprimée', message: 'Catégorie supprimée définitivement', color: 'green' });
-              setModalOpen(false);
-            } catch (e: any) {
-              notifications.show({ title: 'Erreur', message: e?.response?.data?.detail || 'Suppression échouée', color: 'red' });
-            }
-          }}
-        />
+        <Stack>
+          {/* Story B48-P1: Bouton Restaurer pour catégories archivées */}
+          {editingCategory?.deleted_at && (
+            <Alert color="blue" icon={<IconArchive size={16} />}>
+              <Group justify="space-between">
+                <div>
+                  <Text size="sm" fw={500}>Cette catégorie est archivée</Text>
+                  <Text size="xs" c="dimmed">
+                    Archivée le {new Date(editingCategory.deleted_at).toLocaleDateString('fr-FR', {
+                      year: 'numeric',
+                      month: 'long',
+                      day: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit'
+                    })}
+                  </Text>
+                </div>
+                <Button
+                  leftSection={<IconRestore size={16} />}
+                  variant="light"
+                  color="blue"
+                  onClick={async () => {
+                    if (!editingCategory) return;
+                    if (window.confirm('Êtes-vous sûr de vouloir restaurer cette catégorie ?')) {
+                      await handleRestore(editingCategory);
+                      setModalOpen(false);
+                    }
+                  }}
+                  data-testid="restore-category-button"
+                >
+                  Restaurer
+                </Button>
+              </Group>
+            </Alert>
+          )}
+          <CategoryForm
+            category={editingCategory}
+            onSubmit={handleSubmit}
+            onCancel={() => setModalOpen(false)}
+            onDelete={async () => {
+              if (!editingCategory) return;
+              let hasUsage = true; // Default to true to be safe
+              try {
+                // Check if category has usage to decide between hard delete and soft delete
+                const usage = await categoryService.checkCategoryUsage(editingCategory.id);
+                hasUsage = usage.has_usage;
+                
+                if (!usage.has_usage) {
+                  // No usage: hard delete (permanent deletion)
+                  await categoryService.hardDeleteCategory(editingCategory.id);
+                  notifications.show({
+                    title: 'Catégorie supprimée',
+                    message: 'La catégorie a été supprimée définitivement car elle n\'était utilisée nulle part.',
+                    color: 'green'
+                  });
+                } else {
+                  // Has usage: soft delete (archive)
+                  await categoryService.deleteCategory(editingCategory.id);
+                  notifications.show({
+                    title: 'Catégorie archivée',
+                    message: 'La catégorie a été archivée. Elle est masquée des sélecteurs mais reste disponible dans l\'historique.',
+                    color: 'green'
+                  });
+                }
+                setModalOpen(false);
+                fetchCategories(); // Recharger l'état local
+                await refreshCategoryStore(true); // Story B48-P4: Forcer le rechargement du store Zustand
+              } catch (e: any) {
+                const errorDetail = e?.response?.data?.detail;
+                let errorMessage = hasUsage ? 'Archivage échoué' : 'Suppression échouée';
+                if (typeof errorDetail === 'string') {
+                  errorMessage = errorDetail;
+                } else if (errorDetail?.detail) {
+                  errorMessage = errorDetail.detail;
+                }
+                notifications.show({ 
+                  title: 'Erreur', 
+                  message: errorMessage, 
+                  color: 'red' 
+                });
+              }
+            }}
+          />
+        </Stack>
       </Modal>
 
       <Modal

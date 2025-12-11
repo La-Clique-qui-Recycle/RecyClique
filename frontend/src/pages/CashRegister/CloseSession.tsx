@@ -5,7 +5,7 @@ import { ArrowLeft, Calculator, AlertTriangle, CheckCircle } from 'lucide-react'
 import { useCashSessionStoreInjected, useCashStores } from '../../providers/CashStoreProvider';
 
 const Container = styled.div`
-  max-width: 800px;
+  max-width: 1200px;
   margin: 0 auto;
   padding: 20px;
 `;
@@ -45,26 +45,34 @@ const Card = styled.div`
   background: white;
   border-radius: 12px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-  padding: 2rem;
-  margin-bottom: 2rem;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
 `;
 
 const SectionTitle = styled.h2`
   color: #333;
-  margin: 0 0 1.5rem 0;
+  margin: 0 0 0.75rem 0;
   font-size: 1.25rem;
 `;
 
 const SummaryGrid = styled.div`
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 1.5rem;
-  margin-bottom: 2rem;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1rem;
+  margin-bottom: 0;
+  
+  @media (max-width: 1024px) {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  
+  @media (max-width: 640px) {
+    grid-template-columns: 1fr;
+  }
 `;
 
 const SummaryItem = styled.div`
   background: #f8f9fa;
-  padding: 1.5rem;
+  padding: 1rem;
   border-radius: 8px;
   border-left: 4px solid #2e7d32;
 `;
@@ -84,7 +92,7 @@ const SummaryValue = styled.div`
 const Form = styled.form`
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
+  gap: 1rem;
 `;
 
 const FormGroup = styled.div`
@@ -120,9 +128,11 @@ const TextArea = styled.textarea`
   border: 2px solid #ddd;
   border-radius: 8px;
   font-size: 1rem;
-  min-height: 100px;
+  min-height: 40px;
+  height: 40px;
   resize: vertical;
   transition: border-color 0.2s;
+  line-height: 1.5;
 
   &:focus {
     outline: none;
@@ -165,7 +175,7 @@ const ButtonGroup = styled.div`
   display: flex;
   gap: 1rem;
   justify-content: flex-end;
-  margin-top: 2rem;
+  margin-top: 1rem;
 `;
 
 const Button = styled.button<{ variant?: 'primary' | 'secondary' }>`
@@ -225,13 +235,14 @@ const LoadingSpinner = styled.div`
 
 export default function CloseSession() {
   const navigate = useNavigate();
-  const { cashSessionStore, isVirtualMode } = useCashStores();
+  const { cashSessionStore, isVirtualMode, isDeferredMode } = useCashStores();
   const { currentSession, closeSession, refreshSession, loading, error } = cashSessionStore;
 
   const [actualAmount, setActualAmount] = useState<string>('');
   const [varianceComment, setVarianceComment] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isLoadingSession, setIsLoadingSession] = useState(true);
+  const [showEmptySessionWarning, setShowEmptySessionWarning] = useState(false);  // B44-P3: Avertissement session vide
 
   // Calculer les montants
   const theoreticalAmount = currentSession ?
@@ -252,19 +263,58 @@ export default function CloseSession() {
     loadSessionData();
   }, [refreshSession]);
 
+  // B44-P3: Afficher directement l'avertissement si la session est vide au chargement
+  useEffect(() => {
+    if (!isLoadingSession && currentSession) {
+      const isEmpty = (currentSession.total_sales === 0 || currentSession.total_sales === null || currentSession.total_sales === undefined) &&
+                     (currentSession.total_items === 0 || currentSession.total_items === null || currentSession.total_items === undefined);
+      if (isEmpty) {
+        setShowEmptySessionWarning(true);
+      }
+    }
+  }, [isLoadingSession, currentSession]);
+
   useEffect(() => {
     // Rediriger si pas de session active (après le chargement initial)
+    // Toujours vers /caisse qui gère les 3 modes
     if (!isLoadingSession && (!currentSession || currentSession.status !== 'open')) {
-      navigate('/cash-register/session/open');
+      navigate('/caisse');
     }
   }, [currentSession, navigate, isLoadingSession]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    
+  // B44-P3: Détecter si la session est vide (aucune transaction)
+  const isSessionEmpty = currentSession && 
+    (currentSession.total_sales === 0 || currentSession.total_sales === null || currentSession.total_sales === undefined) &&
+    (currentSession.total_items === 0 || currentSession.total_items === null || currentSession.total_items === undefined);
+
+  const performCloseSession = async () => {
     if (!currentSession) return;
 
-    // Valider que le commentaire est fourni si il y a un écart
+    // B44-P3: Si la session est vide, pas besoin de saisir le montant
+    if (isSessionEmpty) {
+      setIsSubmitting(true);
+      try {
+        // Pour une session vide, on passe le montant initial comme montant physique
+        // (pas d'écart possible puisqu'il n'y a pas eu de transaction)
+        const success = await closeSession(currentSession.id, {
+          actual_amount: currentSession.initial_amount || 0,
+          variance_comment: undefined
+        });
+
+        if (success) {
+          // Session vide supprimée : rediriger
+          navigate('/caisse');
+        }
+      } catch (err) {
+        console.error('Erreur lors de la fermeture de session:', err);
+      } finally {
+        setIsSubmitting(false);
+        setShowEmptySessionWarning(false);
+      }
+      return;
+    }
+
+    // Session avec transactions : valider le montant et l'écart
     if (hasVariance && !varianceComment.trim()) {
       alert('Un commentaire est obligatoire en cas d\'écart entre le montant théorique et le montant physique');
       return;
@@ -279,22 +329,35 @@ export default function CloseSession() {
       });
 
       if (success) {
-        // Rediriger selon le mode : virtuel → dashboard virtuel, réel → dashboard réel
-        if (isVirtualMode) {
-          navigate('/cash-register/virtual');
-        } else {
-          navigate('/caisse');
-        }
+        // Rediriger selon le mode : toujours vers le menu principal /caisse qui gère les 3 modes
+        navigate('/caisse');
       }
     } catch (err) {
       console.error('Erreur lors de la fermeture de session:', err);
     } finally {
       setIsSubmitting(false);
+      setShowEmptySessionWarning(false);
     }
   };
 
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    if (!currentSession) return;
+
+    // B44-P3: Si la session est vide, l'avertissement est déjà affiché au chargement
+    // On ne devrait pas arriver ici si la session est vide (le formulaire est masqué)
+    if (isSessionEmpty) {
+      return;
+    }
+
+    await performCloseSession();
+  };
+
   const handleCancel = () => {
-    navigate('/cash-register/sale');
+    // Retourner à la vente avec le bon chemin selon le mode
+    const basePath = isDeferredMode ? '/cash-register/deferred' : (isVirtualMode ? '/cash-register/virtual' : '/cash-register');
+    navigate(`${basePath}/sale`);
   };
 
   if (isLoadingSession || !currentSession || currentSession.status !== 'open') {
@@ -321,7 +384,10 @@ export default function CloseSession() {
   return (
     <Container>
       <Header>
-        <BackButton onClick={() => navigate('/cash-register/sale')}>
+        <BackButton onClick={() => {
+          const basePath = isDeferredMode ? '/cash-register/deferred' : (isVirtualMode ? '/cash-register/virtual' : '/cash-register');
+          navigate(`${basePath}/sale`);
+        }}>
           <ArrowLeft size={20} />
           Retour à la vente
         </BackButton>
@@ -337,7 +403,56 @@ export default function CloseSession() {
         </ErrorMessage>
       )}
 
-      <Card>
+      {/* B44-P3: Avertissement pour session vide - affiché directement si session vide */}
+      {showEmptySessionWarning && isSessionEmpty ? (
+        <Card style={{ border: '2px solid #ff9800', backgroundColor: '#fff3e0' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
+            <AlertTriangle size={24} color="#ff9800" />
+            <h3 style={{ margin: 0, color: '#e65100' }}>Session sans transaction</h3>
+          </div>
+          <p style={{ marginBottom: '1rem', color: '#5d4037' }}>
+            Cette session n'a eu aucune transaction (aucune vente). Elle ne sera pas enregistrée dans l'historique.
+          </p>
+          <div style={{ display: 'flex', gap: '1rem' }}>
+            <button
+              type="button"
+              onClick={performCloseSession}
+              disabled={isSubmitting}
+              style={{
+                padding: '0.75rem 1.5rem',
+                backgroundColor: '#ff9800',
+                color: 'white',
+                border: 'none',
+                borderRadius: '8px',
+                cursor: isSubmitting ? 'not-allowed' : 'pointer',
+                fontWeight: 'bold',
+                opacity: isSubmitting ? 0.6 : 1
+              }}
+            >
+              {isSubmitting ? 'Suppression...' : 'Continuer quand même'}
+            </button>
+            <button
+              type="button"
+              onClick={handleCancel}
+              disabled={isSubmitting}
+              style={{
+                padding: '0.75rem 1.5rem',
+                backgroundColor: '#f5f5f5',
+                color: '#333',
+                border: '1px solid #ddd',
+                borderRadius: '8px',
+                cursor: isSubmitting ? 'not-allowed' : 'pointer',
+                opacity: isSubmitting ? 0.6 : 1
+              }}
+            >
+              Annuler
+            </button>
+          </div>
+        </Card>
+      ) : (
+        <>
+          {/* Formulaire de fermeture normal (seulement si session avec transactions) */}
+          <Card>
         <SectionTitle>Résumé de la Session</SectionTitle>
         <SummaryGrid>
           <SummaryItem>
@@ -429,6 +544,8 @@ export default function CloseSession() {
           </ButtonGroup>
         </Form>
       </Card>
+        </>
+      )}
     </Container>
   );
 }

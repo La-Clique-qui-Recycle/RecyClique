@@ -13,6 +13,7 @@ class PaymentMethod(str, enum.Enum):
     CASH = "cash"
     CARD = "card"
     CHECK = "check"
+    FREE = "free"  # Gratuit/Don
 
 
 class Sale(Base):

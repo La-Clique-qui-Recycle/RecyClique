@@ -26,6 +26,9 @@ class CategoryManagementService:
         """
         Get categories filtered by visibility.
         
+        Story B48-P1: Exclut automatiquement les catégories archivées (deleted_at IS NULL)
+        pour les APIs opérationnelles (caisse/réception).
+        
         Args:
             is_active: Filter by active status (default: True)
             for_entry_tickets: If True, filter by is_visible. If False, return all categories.
@@ -35,6 +38,9 @@ class CategoryManagementService:
         """
         query = self.db.query(Category)
         
+        # Story B48-P1: Exclure les catégories archivées pour les APIs opérationnelles
+        query = query.filter(Category.deleted_at.is_(None))
+        
         if is_active is not None:
             query = query.filter(Category.is_active == is_active)
         
@@ -43,8 +49,11 @@ class CategoryManagementService:
         if for_entry_tickets:
             query = query.filter(Category.is_visible == True)
         
-        # Order by display_order first, then name
-        query = query.order_by(Category.display_order, Category.name)
+        # Story B48-P4: Order by display_order_entry for ENTRY tickets, display_order for SALE tickets
+        if for_entry_tickets:
+            query = query.order_by(Category.display_order_entry, Category.name)
+        else:
+            query = query.order_by(Category.display_order, Category.name)
         
         categories = query.all()
         return [CategoryRead.model_validate(cat) for cat in categories]
@@ -132,9 +141,44 @@ class CategoryManagementService:
         category.display_order = display_order
         self.db.commit()
         self.db.refresh(category)
-        
+
         return CategoryRead.model_validate(category)
-    
+
+    async def update_display_order_entry(
+        self,
+        category_id: str,
+        display_order_entry: int
+    ) -> CategoryRead:
+        """
+        Story B48-P4: Update category display order for ENTRY/DEPOT tickets.
+
+        Args:
+            category_id: Category ID
+            display_order_entry: New display order value for ENTRY/DEPOT context
+
+        Returns:
+            Updated category
+
+        Raises:
+            HTTPException: If category not found
+        """
+        try:
+            cat_uuid = UUID(category_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid category ID format: '{category_id}'")
+
+        category = self.db.query(Category).filter(Category.id == cat_uuid).first()
+
+        if not category:
+            raise HTTPException(status_code=404, detail=f"Category with ID '{category_id}' not found")
+
+        # Story B48-P4: Update display order for ENTRY/DEPOT tickets
+        category.display_order_entry = display_order_entry
+        self.db.commit()
+        self.db.refresh(category)
+
+        return CategoryRead.model_validate(category)
+
     async def get_categories_for_entry_tickets(
         self,
         is_active: Optional[bool] = True

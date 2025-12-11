@@ -148,6 +148,7 @@ export const ReceptionKPIBanner: React.FC = () => {
   const stats = data || {
     tickets_open: 0,
     tickets_closed_24h: 0,
+    tickets_count: 0, // Nombre de tickets de caisse (ventes) - Story B48-P7
     items_received: 0,
     turnover_eur: 0,
     donations_eur: 0,
@@ -160,7 +161,7 @@ export const ReceptionKPIBanner: React.FC = () => {
       <KPIGrid>
         <KPIItem>
           <KPILabel>Tickets caisse</KPILabel>
-          <KPIValue>{stats.tickets_closed_24h}</KPIValue>
+          <KPIValue>{stats.tickets_count}</KPIValue>
         </KPIItem>
 
         <KPIItem>

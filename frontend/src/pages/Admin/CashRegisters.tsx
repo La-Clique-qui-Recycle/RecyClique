@@ -3,6 +3,7 @@ import styled from 'styled-components';
 import { getCashRegisters, deleteCashRegister } from '../../services/api';
 import CashRegisterForm from '../../components/business/CashRegisterForm';
 import DeleteConfirmationModal from '../../components/business/DeleteConfirmationModal';
+import { WorkflowOptions } from '../../types/cashRegister';
 
 const Container = styled.div`
   background: white;
@@ -72,6 +73,35 @@ const ActionButton = styled.button<{ variant?: 'edit' | 'delete' }>`
   `}
 `;
 
+const Badge = styled.span<{ variant?: 'virtual' | 'deferred' | 'no-item-pricing' }>`
+  display: inline-block;
+  padding: 2px 8px;
+  margin: 0 4px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 500;
+  
+  ${props => props.variant === 'virtual' ? `
+    background: #e3f2fd;
+    color: #1976d2;
+  ` : props.variant === 'deferred' ? `
+    background: #fff3e0;
+    color: #f57c00;
+  ` : props.variant === 'no-item-pricing' ? `
+    background: #f3e5f5;
+    color: #7b1fa2;
+  ` : `
+    background: #f5f5f5;
+    color: #666;
+  `}
+`;
+
+const BadgeContainer = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+`;
+
 const ModalOverlay = styled.div`
   position: fixed;
   top: 0;
@@ -91,6 +121,9 @@ interface CashRegister {
   location?: string;
   site_id?: string;
   is_active: boolean;
+  enable_virtual?: boolean;
+  enable_deferred?: boolean;
+  workflow_options?: WorkflowOptions;
 }
 
 export default function CashRegisters() {
@@ -286,13 +319,14 @@ export default function CashRegisters() {
               <Th role="columnheader" scope="col">Nom</Th>
               <Th role="columnheader" scope="col">Localisation</Th>
               <Th role="columnheader" scope="col">Actif</Th>
+              <Th role="columnheader" scope="col">Options</Th>
               <Th role="columnheader" scope="col">Actions</Th>
             </tr>
           </thead>
           <tbody>
             {items.length === 0 ? (
               <tr role="row">
-                <Td role="cell" colSpan={4} style={{ textAlign: 'center', padding: '40px' }}>
+                <Td role="cell" colSpan={5} style={{ textAlign: 'center', padding: '40px' }}>
                   <div
                     style={{
                       color: '#666',
@@ -340,6 +374,41 @@ export default function CashRegisters() {
                     >
                       {item.is_active ? 'Oui' : 'Non'}
                     </span>
+                  </Td>
+                  <Td role="cell">
+                    <BadgeContainer>
+                      {item.enable_virtual && (
+                        <Badge
+                          variant="virtual"
+                          aria-label="Caisse virtuelle activée"
+                          data-testid={`badge-virtual-${item.id}`}
+                        >
+                          Virtuelle
+                        </Badge>
+                      )}
+                      {item.enable_deferred && (
+                        <Badge
+                          variant="deferred"
+                          aria-label="Caisse différée activée"
+                          data-testid={`badge-deferred-${item.id}`}
+                        >
+                          Différée
+                        </Badge>
+                      )}
+                      {item.workflow_options?.features?.no_item_pricing?.enabled && (
+                        <Badge
+                          variant="no-item-pricing"
+                          aria-label="Mode prix global activé"
+                          data-testid={`badge-no-item-pricing-${item.id}`}
+                        >
+                          Prix global
+                        </Badge>
+                      )}
+                      {!item.enable_virtual && !item.enable_deferred && 
+                       !item.workflow_options?.features?.no_item_pricing?.enabled && (
+                        <span style={{ color: '#999', fontSize: '12px' }}>-</span>
+                      )}
+                    </BadgeContainer>
                   </Td>
                   <Td role="cell">
                     <ActionButton

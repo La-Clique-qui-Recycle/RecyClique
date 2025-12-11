@@ -512,7 +512,9 @@ const WeightDisplay = styled.input`
   }
 `;
 
-const Select = styled.select`
+const Select = styled.select.withConfig({
+  shouldForwardProp: (prop) => prop !== 'ref'
+})`
   width: 100%;
   padding: 10px;
   border: 1px solid #e0e0e0;
@@ -880,12 +882,18 @@ interface TicketLine {
   category?: string;
   notes?: string;
   timestamp?: string;
+  is_exit?: boolean;
 }
 
 // ===== CONSTANTS =====
 
 const DESTINATIONS = [
   { value: 'MAGASIN', label: 'Magasin' },
+  { value: 'RECYCLAGE', label: 'Recyclage' },
+  { value: 'DECHETERIE', label: 'Déchetterie' }
+];
+
+const EXIT_DESTINATIONS = [
   { value: 'RECYCLAGE', label: 'Recyclage' },
   { value: 'DECHETERIE', label: 'Déchetterie' }
 ];
@@ -1000,7 +1008,7 @@ const useColumnCount = (containerRef: React.RefObject<HTMLElement>): number => {
 const TicketForm: React.FC = () => {
   const navigate = useNavigate();
   const { ticketId } = useParams<{ ticketId: string }>();
-  const { currentTicket, isLoading, addLineToTicket, updateTicketLine, deleteTicketLine, closeTicket } = useReception();
+  const { currentTicket, isLoading, addLineToTicket, updateTicketLine, deleteTicketLine, closeTicket, closePoste, poste, isDeferredMode, posteDate } = useReception();
   const { visibleCategories, activeCategories, fetchVisibleCategories, fetchCategories, loading: categoriesLoading, error: categoriesError } = useCategoryStore();
   const {
     initializeShortcuts,
@@ -1033,8 +1041,10 @@ const TicketForm: React.FC = () => {
   const [weightInput, setWeightInput] = useState<string>('');
   const [destination, setDestination] = useState<'MAGASIN' | 'RECYCLAGE' | 'DECHETERIE'>('MAGASIN');
   const [notes, setNotes] = useState<string>('');
+  const [isExit, setIsExit] = useState<boolean>(false);
   const [editingLineId, setEditingLineId] = useState<string | null>(null);
   const [weightInputFocused, setWeightInputFocused] = useState<boolean>(false);
+  const destinationSelectRef = useRef<HTMLSelectElement>(null);
   const weightInputRef = useRef<HTMLInputElement>(null);
   const categoriesContainerRef = useRef<HTMLDivElement>(null);
   const summaryContentRef = useRef<HTMLDivElement>(null);
@@ -1068,6 +1078,7 @@ const TicketForm: React.FC = () => {
     if (hasChildren) {
       // Navigation vers les sous-catégories
       setCurrentParentId(categoryId);
+      // Story B48-P5: Utiliser name (nom court/rapide) dans le breadcrumb
       setCategoryBreadcrumb(prev => [...prev, category.name]);
       // Reset selection when navigating
       setSelectedCategory('');
@@ -1122,18 +1133,29 @@ const TicketForm: React.FC = () => {
       return cat.parent_id === currentParentId;
     })
     .sort((a, b) => {
-      // Trier par display_order puis par nom
-      if (a.display_order !== b.display_order) {
-        return a.display_order - b.display_order;
+      // Story B48-P4: Trier par display_order_entry pour les tickets de réception (ENTRY)
+      // Utiliser display_order_entry (qui est déjà trié par le backend), avec fallback sur display_order
+      const orderA = (a.display_order_entry !== undefined && a.display_order_entry !== null) 
+        ? a.display_order_entry 
+        : a.display_order;
+      const orderB = (b.display_order_entry !== undefined && b.display_order_entry !== null) 
+        ? b.display_order_entry 
+        : b.display_order;
+      if (orderA !== orderB) {
+        return orderA - orderB;
       }
       return a.name.localeCompare(b.name);
     })
     .map(cat => {
       // AC 1.2.2: Si aucune sous-catégorie visible, la catégorie parent est sélectionnable
+      // Story B48-P5: Utiliser name (nom court/rapide) pour l'affichage, et official_name pour le tooltip
       const visibleChildren = categoriesToUse.filter(child => child.parent_id === cat.id);
+      // Story B48-P5: fullName seulement si official_name existe ET est différent de name
+      const fullName = cat.official_name && cat.official_name !== cat.name ? cat.official_name : null;
       return {
         id: cat.id,
-        label: cat.name,
+        label: cat.name,  // Story B48-P5: Nom court/rapide (toujours utilisé)
+        fullName: fullName,  // Story B48-P5: Nom complet officiel pour tooltip (seulement si différent de name)
         slug: cat.name.toLowerCase().replace(/\s+/g, '-'),
         hasChildren: visibleChildren.length > 0
       };
@@ -1222,21 +1244,31 @@ const TicketForm: React.FC = () => {
     }
 
     try {
+      // Utiliser les valeurs les plus récentes depuis les refs
+      const currentDestination = destinationRef.current;
+      const currentIsExit = isExitRef.current;
+      
       if (ticketId) {
         await receptionService.addLineToTicket(ticketId, {
           category_id: selectedCategory,
           weight: parseWeight(formattedWeight),
-          destination,
-          notes: notes || undefined
+          destination: currentDestination,
+          notes: notes || undefined,
+          is_exit: currentIsExit
         });
         const updatedTicket = await receptionService.getTicket(ticketId);
         setLoadedTicket(updatedTicket);
       } else {
+        // Utiliser les valeurs les plus récentes depuis les refs
+        const currentDestination = destinationRef.current;
+        const currentIsExit = isExitRef.current;
+        
         await addLineToTicket(currentTicket!.id, {
           category: selectedCategory,
           weight: parseWeight(formattedWeight),
-          destination,
-          notes: notes || undefined
+          destination: currentDestination,
+          notes: notes || undefined,
+          is_exit: currentIsExit
         });
       }
 
@@ -1244,6 +1276,7 @@ const TicketForm: React.FC = () => {
       setWeightInput('');
       setDestination('MAGASIN');
       setNotes('');
+      setIsExit(false); // Story B48-P3: Réinitialiser checkbox après ajout pour éviter erreurs sur objets suivants
 
       // Notify step state manager
       handleWeightInputCompleted();
@@ -1261,6 +1294,7 @@ const TicketForm: React.FC = () => {
       }, 100);
     } catch (err) {
       console.error('Erreur lors de l\'ajout de la ligne:', err);
+      alert(`Erreur lors de l'ajout de la ligne: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
@@ -1276,21 +1310,31 @@ const TicketForm: React.FC = () => {
     }
 
     try {
+      // Utiliser les valeurs les plus récentes depuis les refs
+      const currentDestination = destinationRef.current;
+      const currentIsExit = isExitRef.current;
+      
       if (ticketId) {
         await receptionService.updateTicketLine(ticketId, lineId, {
           category_id: selectedCategory,
           weight: parseWeight(formattedWeight),
-          destination,
-          notes: notes || undefined
+          destination: currentDestination,
+          notes: notes || undefined,
+          is_exit: currentIsExit
         });
         const updatedTicket = await receptionService.getTicket(ticketId);
         setLoadedTicket(updatedTicket);
       } else {
+        // Utiliser les valeurs les plus récentes depuis les refs
+        const currentDestination = destinationRef.current;
+        const currentIsExit = isExitRef.current;
+        
         await updateTicketLine(currentTicket!.id, lineId, {
           category: selectedCategory,
           weight: parseWeight(formattedWeight),
-          destination,
-          notes: notes || undefined
+          destination: currentDestination,
+          notes: notes || undefined,
+          is_exit: currentIsExit
         });
       }
 
@@ -1299,6 +1343,7 @@ const TicketForm: React.FC = () => {
       setWeightInput('');
       setDestination('MAGASIN');
       setNotes('');
+      setIsExit(false); // Story B48-P3: Réinitialiser checkbox après ajout pour éviter erreurs sur objets suivants
 
       // Notify step state manager
       handleWeightInputCompleted();
@@ -1336,6 +1381,7 @@ const TicketForm: React.FC = () => {
     setWeightInput(parseToInput(initial));
     setDestination(line.destination);
     setNotes(line.notes || '');
+    setIsExit(line.is_exit || false);
   };
 
 
@@ -1384,14 +1430,24 @@ const TicketForm: React.FC = () => {
       try {
         if (ticketId) {
           await receptionService.closeTicket(ticketId);
-          navigate('/reception');
         } else {
           await closeTicket(currentTicket!.id);
-          navigate('/reception');
         }
 
         // Notify step state manager
         handleTicketClosed();
+        
+        // Fermer le poste après la fermeture du ticket pour revenir à l'écran normal
+        if (poste) {
+          try {
+            await closePoste();
+          } catch (posteErr) {
+            console.error('Erreur lors de la fermeture du poste:', posteErr);
+            // Continuer même si la fermeture du poste échoue
+          }
+        }
+        
+        navigate('/reception');
       } catch (err) {
         console.error('Erreur lors de la clôture du ticket:', err);
       }
@@ -1499,6 +1555,99 @@ const TicketForm: React.FC = () => {
     };
   }, [ticket]);
 
+  // Story B48-P3: Raccourcis clavier dans le champ poids
+  // Utiliser des refs pour accéder aux valeurs les plus récentes
+  const isExitRef = useRef(isExit);
+  const destinationRef = useRef(destination);
+  
+  useEffect(() => {
+    isExitRef.current = isExit;
+  }, [isExit]);
+  
+  useEffect(() => {
+    destinationRef.current = destination;
+  }, [destination]);
+
+  useEffect(() => {
+    if (!ticket || isTicketClosed) return;
+
+    const handleWeightInputShortcuts = (event: KeyboardEvent) => {
+      const activeElement = document.activeElement;
+      
+      // Les raccourcis fonctionnent UNIQUEMENT quand on est dans le champ poids
+      if (activeElement !== weightInputRef.current) {
+        return; // Ne pas intercepter si on n'est pas dans le champ poids
+      }
+
+      // Story B48-P3: Raccourci "=" pour toggle "Sortie de boutique"
+      if (event.key === '=' || event.code === 'Equal') {
+        event.preventDefault();
+        event.stopPropagation();
+        setIsExit(prev => {
+          const newValue = !prev;
+          // Si on active, changer destination par défaut à RECYCLAGE
+          if (newValue) {
+            setDestination('RECYCLAGE');
+            destinationRef.current = 'RECYCLAGE';
+          } else {
+            setDestination('MAGASIN');
+            destinationRef.current = 'MAGASIN';
+          }
+          isExitRef.current = newValue;
+          return newValue;
+        });
+        return;
+      }
+
+      // Story B48-P3: Raccourci "ArrowDown" pour changer la destination
+      if (event.key === 'ArrowDown' || event.code === 'ArrowDown') {
+        event.preventDefault();
+        event.stopPropagation();
+        
+        // Utiliser setDestination avec une fonction callback pour avoir la valeur la plus récente
+        setDestination(prevDestination => {
+          // Utiliser la valeur la plus récente de isExit depuis la ref
+          const currentIsExit = isExitRef.current;
+          
+          // Déterminer les destinations disponibles selon isExit
+          const availableDestinations: ('MAGASIN' | 'RECYCLAGE' | 'DECHETERIE')[] = 
+            currentIsExit ? ['RECYCLAGE', 'DECHETERIE'] : ['MAGASIN', 'RECYCLAGE', 'DECHETERIE'];
+          
+          // Trouver l'index de la destination actuelle
+          let currentIndex = availableDestinations.indexOf(prevDestination);
+          
+          // Si la destination actuelle n'est pas dans la liste (peut arriver si on a changé isExit), prendre la première
+          if (currentIndex < 0) {
+            currentIndex = 0;
+          }
+          
+          // Passer à la destination suivante (cyclique)
+          const nextIndex = (currentIndex + 1) % availableDestinations.length;
+          const nextDestination = availableDestinations[nextIndex];
+          
+          // Mettre à jour la ref
+          destinationRef.current = nextDestination;
+          
+          // Forcer la mise à jour du select HTML natif directement
+          if (destinationSelectRef.current) {
+            destinationSelectRef.current.value = nextDestination;
+          }
+          
+          return nextDestination;
+        });
+        
+        return;
+      }
+    };
+
+    // Add global keydown listener for shortcuts in weight input
+    document.addEventListener('keydown', handleWeightInputShortcuts, true); // Use capture phase
+
+    return () => {
+      document.removeEventListener('keydown', handleWeightInputShortcuts, true);
+    };
+  }, [ticket, isTicketClosed]);
+
   // Tab navigation management - limit Tab to categories -> weight only
   useEffect(() => {
     if (!ticket || isTicketClosed) return;
@@ -1593,6 +1742,8 @@ const TicketForm: React.FC = () => {
         isLoading={isLoading}
         title={`Reception : Ticket #${ticket.id.slice(-8)}`}
         showBackButton={false}
+        isDeferred={isDeferredMode}
+        deferredDate={posteDate}
       />
       <ReceptionKPIBanner />
 
@@ -1636,6 +1787,7 @@ const TicketForm: React.FC = () => {
                       onKeyDown={(e) => handleKeyDown(e, category.id)}
                       tabIndex={0}
                       role="button"
+                      title={category.fullName ? `Dénomination officielle : ${category.fullName}` : undefined}  // Story B48-P5: Tooltip seulement si official_name existe et diffère de name
                       aria-label={
                         shortcutKey
                           ? `${category.hasChildren ? 'Naviguer vers' : 'Sélectionner'} ${category.label}. Raccourci clavier: ${shortcutKey} (position ${position})`
@@ -1703,13 +1855,48 @@ const TicketForm: React.FC = () => {
 
                     <ControlsSection data-testid="controls-section">
                     <FormGroup>
-                      <Label>Destination</Label>
+                      <Label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                        <input
+                          type="checkbox"
+                          checked={isExit}
+                          onChange={(e) => {
+                            const checked = e.target.checked;
+                            setIsExit(checked);
+                            // Story B48-P3: Si is_exit=true, changer destination par défaut à RECYCLAGE et filtrer
+                            if (checked) {
+                              setDestination('RECYCLAGE');
+                            } else {
+                              setDestination('MAGASIN');
+                            }
+                          }}
+                          tabIndex={-1}
+                        />
+                        <ShortcutBadge aria-hidden="true" style={{ position: 'static', margin: 0 }}>
+                          =
+                        </ShortcutBadge>
+                        <span>Sortie de boutique</span>
+                      </Label>
+                    </FormGroup>
+
+                    <FormGroup>
+                      <Label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                        <ShortcutBadge aria-hidden="true" style={{ position: 'static', margin: 0 }}>
+                          ↓
+                        </ShortcutBadge>
+                        <span>Destination</span>
+                      </Label>
                       <Select
+                        ref={destinationSelectRef}
+                        key={`destination-${destination}-${isExit}`}
                         value={destination}
-                        onChange={(e) => setDestination(e.target.value as 'MAGASIN' | 'RECYCLAGE' | 'DECHETERIE')}
+                        onChange={(e) => {
+                          const newValue = e.target.value as 'MAGASIN' | 'RECYCLAGE' | 'DECHETERIE';
+                          setDestination(newValue);
+                          destinationRef.current = newValue;
+                        }}
                         tabIndex={-1} // Prevent Tab navigation
                       >
-                        {DESTINATIONS.map((dest) => (
+                        {(isExit ? EXIT_DESTINATIONS : DESTINATIONS).map((dest) => (
                           <option key={dest.value} value={dest.value}>
                             {dest.label}
                           </option>
@@ -1758,7 +1945,11 @@ const TicketForm: React.FC = () => {
                            line.category || 'N/A'}
                         </SummaryItemCategory>
                         <SummaryItemDetails>
-                          {line.poids_kg || line.weight}kg - {DESTINATIONS.find(d => d.value === line.destination)?.label}
+                          {line.poids_kg || line.weight}kg - {
+                            line.is_exit && (line.destination === 'RECYCLAGE' || line.destination === 'DECHETERIE')
+                              ? `${DESTINATIONS.find(d => d.value === line.destination)?.label} depuis boutique`
+                              : DESTINATIONS.find(d => d.value === line.destination)?.label
+                          }
                           {line.notes && <><br />{line.notes}</>}
                         </SummaryItemDetails>
                       </SummaryItemInfo>
@@ -1835,6 +2026,7 @@ const TicketForm: React.FC = () => {
                         onKeyDown={(e) => handleKeyDown(e, category.id)}
                         tabIndex={0}
                         role="button"
+                        title={category.fullName ? `Dénomination officielle : ${category.fullName}` : undefined}  // Story B48-P5: Tooltip seulement si official_name existe et diffère de name
                         aria-label={
                           shortcutKey
                             ? `${category.hasChildren ? 'Naviguer vers' : 'Sélectionner'} ${category.label}. Raccourci clavier: ${shortcutKey} (position ${position})`
@@ -1909,13 +2101,48 @@ const TicketForm: React.FC = () => {
 
                       <ControlsSection data-testid="controls-section">
                       <FormGroup>
-                        <Label>Destination</Label>
+                        <Label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                          <input
+                            type="checkbox"
+                            checked={isExit}
+                            onChange={(e) => {
+                              const checked = e.target.checked;
+                              setIsExit(checked);
+                              // Story B48-P3: Si is_exit=true, changer destination par défaut à RECYCLAGE et filtrer
+                              if (checked) {
+                                setDestination('RECYCLAGE');
+                              } else {
+                                setDestination('MAGASIN');
+                              }
+                            }}
+                            tabIndex={-1}
+                          />
+                          <ShortcutBadge aria-hidden="true" style={{ position: 'static', margin: 0 }}>
+                            =
+                          </ShortcutBadge>
+                          <span>Sortie de boutique</span>
+                        </Label>
+                      </FormGroup>
+
+                      <FormGroup>
+                        <Label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                          <ShortcutBadge aria-hidden="true" style={{ position: 'static', margin: 0 }}>
+                            ↓
+                          </ShortcutBadge>
+                          <span>Destination</span>
+                        </Label>
                       <Select
+                        ref={destinationSelectRef}
+                        key={`destination-${destination}-${isExit}`}
                         value={destination}
-                        onChange={(e) => setDestination(e.target.value as 'MAGASIN' | 'RECYCLAGE' | 'DECHETERIE')}
+                        onChange={(e) => {
+                          const newValue = e.target.value as 'MAGASIN' | 'RECYCLAGE' | 'DECHETERIE';
+                          setDestination(newValue);
+                          destinationRef.current = newValue;
+                        }}
                         tabIndex={-1} // Prevent Tab navigation
                       >
-                          {DESTINATIONS.map((dest) => (
+                          {(isExit ? EXIT_DESTINATIONS : DESTINATIONS).map((dest) => (
                             <option key={dest.value} value={dest.value}>
                               {dest.label}
                             </option>
@@ -1972,7 +2199,11 @@ const TicketForm: React.FC = () => {
                              line.category || 'N/A'}
                           </SummaryItemCategory>
                           <SummaryItemDetails>
-                            {line.poids_kg || line.weight}kg - {DESTINATIONS.find(d => d.value === line.destination)?.label}
+                            {line.poids_kg || line.weight}kg - {
+                              line.is_exit && (line.destination === 'RECYCLAGE' || line.destination === 'DECHETERIE')
+                                ? `${DESTINATIONS.find(d => d.value === line.destination)?.label} depuis boutique`
+                                : DESTINATIONS.find(d => d.value === line.destination)?.label
+                            }
                             {line.notes && <><br />{line.notes}</>}
                           </SummaryItemDetails>
                         </SummaryItemInfo>

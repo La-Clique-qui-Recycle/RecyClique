@@ -4,6 +4,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from uuid import UUID
 from fastapi import HTTPException
+from datetime import datetime, timezone
 
 from ..models.category import Category
 from ..schemas.category import CategoryCreate, CategoryUpdate, CategoryRead, CategoryWithChildren
@@ -16,6 +17,7 @@ class CategoryService:
 
     def __init__(self, db: Session):
         self.db = db
+
 
     def _get_hierarchy_depth(self, category_id: UUID) -> int:
         """Calculate the depth of a category in the hierarchy (1-based)"""
@@ -76,7 +78,8 @@ class CategoryService:
 
         # Create new category
         new_category = Category(
-            name=category_data.name,
+            name=category_data.name,  # Nom court/rapide (obligatoire)
+            official_name=category_data.official_name,  # Story B48-P5: Nom complet officiel (optionnel)
             is_active=True,
             parent_id=parent_id,
             price=category_data.price,
@@ -97,10 +100,18 @@ class CategoryService:
 
         return CategoryRead.model_validate(new_category)
 
-    async def get_categories(self, is_active: Optional[bool] = None) -> List[CategoryRead]:
-        """Get all categories, optionally filtered by active status"""
+    async def get_categories(self, is_active: Optional[bool] = None, include_archived: bool = False) -> List[CategoryRead]:
+        """Get all categories, optionally filtered by active status.
+        
+        Story B48-P1: Par défaut, exclut les catégories archivées (deleted_at IS NULL).
+        Utiliser include_archived=True pour les APIs admin qui doivent voir toutes les catégories.
+        """
 
         query = self.db.query(Category)
+
+        # Story B48-P1: Filtrer les catégories archivées par défaut (sauf si include_archived=True)
+        if not include_archived:
+            query = query.filter(Category.deleted_at.is_(None))
 
         if is_active is not None:
             query = query.filter(Category.is_active == is_active)
@@ -226,10 +237,17 @@ class CategoryService:
 
         return CategoryRead.model_validate(category)
 
-    async def get_categories_hierarchy(self, is_active: Optional[bool] = None) -> List[CategoryWithChildren]:
-        """Get all categories with their children in a hierarchical structure"""
+    async def get_categories_hierarchy(self, is_active: Optional[bool] = None, include_archived: bool = False) -> List[CategoryWithChildren]:
+        """Get all categories with their children in a hierarchical structure.
+        
+        Story B48-P1: Par défaut, exclut les catégories archivées (deleted_at IS NULL).
+        """
         
         query = self.db.query(Category)
+        
+        # Story B48-P1: Filtrer les catégories archivées par défaut
+        if not include_archived:
+            query = query.filter(Category.deleted_at.is_(None))
         
         if is_active is not None:
             query = query.filter(Category.is_active == is_active)
@@ -243,14 +261,19 @@ class CategoryService:
         query = query.order_by(Category.name)
         root_categories = query.all()
         
-        return [self._build_category_hierarchy(cat) for cat in root_categories]
+        return [self._build_category_hierarchy(cat, include_archived) for cat in root_categories]
     
-    def _build_category_hierarchy(self, category: Category) -> CategoryWithChildren:
-        """Recursively build category hierarchy"""
+    def _build_category_hierarchy(self, category: Category, include_archived: bool = False) -> CategoryWithChildren:
+        """Recursively build category hierarchy.
+        
+        Story B48-P1: Filtre les enfants archivés si include_archived=False.
+        """
         children = []
         for child in category.children:
-            if child.is_active:  # Only include active children
-                children.append(self._build_category_hierarchy(child))
+            # Story B48-P1: Filtrer les enfants archivés si nécessaire
+            if include_archived or child.deleted_at is None:
+                if child.is_active:  # Only include active children
+                    children.append(self._build_category_hierarchy(child, include_archived))
         
         # Sort children by name for consistent ordering
         children.sort(key=lambda x: x.name)
@@ -262,11 +285,15 @@ class CategoryService:
             parent_id=str(category.parent_id) if category.parent_id else None,
             created_at=category.created_at,
             updated_at=category.updated_at,
+            deleted_at=category.deleted_at,
             children=children
         )
     
     async def get_category_children(self, category_id: str) -> List[CategoryRead]:
-        """Get direct children of a category"""
+        """Get direct children of a category.
+        
+        Story B48-P1: Exclut les enfants archivés (deleted_at IS NULL).
+        """
         
         try:
             cat_uuid = UUID(category_id)
@@ -275,7 +302,8 @@ class CategoryService:
         
         children = self.db.query(Category).filter(
             Category.parent_id == cat_uuid,
-            Category.is_active == True
+            Category.is_active == True,
+            Category.deleted_at.is_(None)  # Story B48-P1: Exclure les enfants archivés
         ).order_by(Category.name).all()
         
         return [CategoryRead.model_validate(child) for child in children]
@@ -331,7 +359,11 @@ class CategoryService:
         return breadcrumb
 
     async def soft_delete_category(self, category_id: str) -> Optional[CategoryRead]:
-        """Soft delete a category by setting is_active to False"""
+        """Soft delete a category by setting deleted_at timestamp.
+        
+        Story B48-P1: Validation hiérarchie - empêche la désactivation si la catégorie
+        a des enfants actifs (deleted_at IS NULL).
+        """
 
         try:
             cat_uuid = UUID(category_id)
@@ -344,8 +376,24 @@ class CategoryService:
         if not category:
             return None
 
-        # Soft delete by setting is_active to False
-        category.is_active = False
+        # Story B48-P1: Validation hiérarchie - vérifier qu'il n'y a pas d'enfants actifs
+        active_children_count = self.db.query(Category).filter(
+            Category.parent_id == cat_uuid,
+            Category.deleted_at.is_(None)
+        ).count()
+
+        if active_children_count > 0:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "detail": "Impossible de désactiver cette catégorie car elle contient des sous-catégories actives. Veuillez d'abord désactiver ou transférer les sous-catégories.",
+                    "category_id": str(category_id),
+                    "active_children_count": active_children_count
+                }
+            )
+
+        # Soft delete by setting deleted_at timestamp
+        category.deleted_at = datetime.now(timezone.utc)
         self.db.commit()
         self.db.refresh(category)
 
@@ -372,3 +420,73 @@ class CategoryService:
 
         self.db.delete(category)
         self.db.commit()
+
+    async def restore_category(self, category_id: str) -> Optional[CategoryRead]:
+        """Restore a soft-deleted category by setting deleted_at to NULL.
+        
+        Story B48-P1: Restauration d'une catégorie archivée.
+        """
+
+        try:
+            cat_uuid = UUID(category_id)
+        except ValueError:
+            return None
+
+        # Check if category exists
+        category = self.db.query(Category).filter(Category.id == cat_uuid).first()
+
+        if not category:
+            return None
+
+        # Check if category is already active (not deleted)
+        if category.deleted_at is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Category is already active (not deleted)"
+            )
+
+        # Restore by setting deleted_at to NULL
+        category.deleted_at = None
+        self.db.commit()
+        self.db.refresh(category)
+
+        return CategoryRead.model_validate(category)
+
+    async def has_usage(self, category_id: str) -> bool:
+        """Check if a category has any usage (ligne_depot, preset_buttons, children, or sale_items).
+        
+        Returns True if the category is used anywhere, False if it can be safely hard-deleted.
+        """
+        try:
+            cat_uuid = UUID(category_id)
+        except ValueError:
+            return True  # If invalid ID, assume it's used to be safe
+
+        category = self.db.query(Category).filter(Category.id == cat_uuid).first()
+        if not category:
+            return True  # If not found, assume it's used to be safe
+
+        # Check for children (subcategories)
+        has_children = self.db.query(Category).filter(Category.parent_id == cat_uuid).first() is not None
+        if has_children:
+            return True
+
+        # Check for ligne_depot usage
+        from recyclic_api.models.ligne_depot import LigneDepot
+        has_ligne_depot = self.db.query(LigneDepot).filter(LigneDepot.category_id == cat_uuid).first() is not None
+        if has_ligne_depot:
+            return True
+
+        # Check for preset_buttons usage
+        from recyclic_api.models.preset_button import PresetButton
+        has_preset_buttons = self.db.query(PresetButton).filter(PresetButton.category_id == cat_uuid).first() is not None
+        if has_preset_buttons:
+            return True
+
+        # Check for sale_items usage (by category name, not FK)
+        from recyclic_api.models.sale_item import SaleItem
+        has_sale_items = self.db.query(SaleItem).filter(SaleItem.category == category.name).first() is not None
+        if has_sale_items:
+            return True
+
+        return False  # No usage found, safe to hard delete

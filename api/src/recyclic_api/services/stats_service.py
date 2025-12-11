@@ -8,7 +8,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy.orm import Session
-from sqlalchemy import func, and_
+from sqlalchemy import func, and_, or_
 from fastapi import HTTPException, status
 
 from recyclic_api.models.ligne_depot import LigneDepot
@@ -48,6 +48,10 @@ class StatsService:
         """
         Get summary statistics for reception data.
 
+        Story B48-P1: Cette méthode NE FILTRE PAS sur `Category.deleted_at` pour conserver
+        les données historiques complètes. Les catégories archivées doivent rester incluses
+        dans les statistiques pour la comptabilité et les déclarations éco-organismes.
+
         Args:
             start_date: Optional start date filter (inclusive)
             end_date: Optional end date filter (inclusive)
@@ -61,6 +65,9 @@ class StatsService:
         # Validate date range
         self._validate_date_range(start_date, end_date)
         # Build base query
+        # Story B48-P1: Ne PAS filtrer Category.deleted_at - conserver toutes les catégories pour stats historiques
+        # Story B48-P3: Exclure is_exit=true pour weight_in (poids reçu, pas sorti)
+        from sqlalchemy import or_
         query = self.db.query(
             func.coalesce(func.sum(LigneDepot.poids_kg), 0).label('total_weight'),
             func.count(LigneDepot.id).label('total_items'),
@@ -68,6 +75,9 @@ class StatsService:
         ).join(
             TicketDepot,
             LigneDepot.ticket_id == TicketDepot.id
+        ).filter(
+            # Story B48-P3: Exclure les sorties (is_exit=true), inclure is_exit IS NULL pour rétrocompatibilité
+            or_(LigneDepot.is_exit == False, LigneDepot.is_exit.is_(None))
         )
 
         # Apply date filters if provided
@@ -103,29 +113,60 @@ class StatsService:
         """
         Get reception statistics grouped by category.
 
+        Story B48-P1: Cette méthode NE FILTRE PAS sur `Category.deleted_at` pour conserver
+        les données historiques complètes. Les catégories archivées doivent rester visibles
+        dans les statistiques pour :
+        - La comptabilité (traçabilité des transactions passées)
+        - Les déclarations éco-organismes (mapping des catégories historiques)
+        - L'intégrité des données (pas de perte d'information dans les rapports)
+
+        Seules les APIs opérationnelles (caisse/réception) filtrent `deleted_at IS NULL`
+        pour masquer les catégories archivées des sélecteurs.
+
+        Les données des catégories enfants sont agrégées vers leurs catégories parentes
+        pour n'afficher que les catégories principales dans le dashboard.
+
         Args:
             start_date: Optional start date filter (inclusive)
             end_date: Optional end date filter (inclusive)
 
         Returns:
-            List of CategoryStats, sorted by total_weight descending
+            List of CategoryStats, sorted by total_weight descending (uniquement catégories principales)
 
         Raises:
             HTTPException: If start_date is after end_date
         """
         # Validate date range
         self._validate_date_range(start_date, end_date)
-        # Build base query
+        
+        # Agréger les données des catégories enfants vers leurs catégories parentes
+        # Utiliser un LEFT JOIN pour obtenir la catégorie parente si elle existe
+        from sqlalchemy.orm import aliased
+        ParentCat = aliased(Category)
+        
+        # Build base query avec agrégation vers les catégories principales
+        # Story B48-P1: Ne PAS filtrer Category.deleted_at - conserver toutes les catégories pour stats historiques
+        # Story B48-P3: Exclure les sorties (is_exit=true), inclure is_exit IS NULL pour rétrocompatibilité
+        # Si la catégorie a un parent, on utilise le nom du parent, sinon le nom de la catégorie
+        # Commencer depuis LigneDepot pour éviter les problèmes de référence SQL
         query = self.db.query(
-            Category.name.label('category_name'),
+            func.coalesce(ParentCat.name, Category.name).label('category_name'),
             func.coalesce(func.sum(LigneDepot.poids_kg), 0).label('total_weight'),
             func.count(LigneDepot.id).label('total_items')
+        ).select_from(
+            LigneDepot
         ).join(
-            LigneDepot,
-            Category.id == LigneDepot.category_id
+            Category,
+            LigneDepot.category_id == Category.id
+        ).outerjoin(
+            ParentCat,
+            Category.parent_id == ParentCat.id
         ).join(
             TicketDepot,
             LigneDepot.ticket_id == TicketDepot.id
+        ).filter(
+            # Story B48-P3: Exclure les sorties (is_exit=true), inclure is_exit IS NULL pour rétrocompatibilité
+            or_(LigneDepot.is_exit == False, LigneDepot.is_exit.is_(None))
         )
 
         # Apply date filters if provided
@@ -144,8 +185,10 @@ class StatsService:
         if filters:
             query = query.filter(and_(*filters))
 
-        # Group by category and order by weight
-        query = query.group_by(Category.name).order_by(func.sum(LigneDepot.poids_kg).desc())
+        # Group by category principale and order by weight
+        query = query.group_by(
+            func.coalesce(ParentCat.name, Category.name)
+        ).order_by(func.sum(LigneDepot.poids_kg).desc())
 
         # Execute query
         results = query.all()

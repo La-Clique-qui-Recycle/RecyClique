@@ -125,3 +125,12 @@ Pour plus de détails, voir:
 - **RFC Sliding Session**: `docs/architecture/sliding-session-rfc.md`
 - **Documentation k6**: https://k6.io/docs/
 
+
+
+
+
+
+
+
+
+

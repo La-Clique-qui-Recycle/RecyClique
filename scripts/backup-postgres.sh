@@ -9,20 +9,31 @@ set -euo pipefail  # Arrêt en cas d'erreur, variables non définies, erreurs de
 
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-LOG_DIR="$PROJECT_ROOT/logs"
-BACKUP_DIR="$PROJECT_ROOT/backups"
+
+# Détecter si on est dans un conteneur Docker
+if [ -d "/backups" ] && [ -d "/logs" ]; then
+    # Environnement Docker (conteneur)
+    BACKUP_DIR="/backups"
+    LOG_DIR="/logs"
+    POSTGRES_HOST="${POSTGRES_HOST:-postgres}"  # Nom du service Docker
+else
+    # Environnement hôte
+    PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+    BACKUP_DIR="${BACKUP_DIR:-$PROJECT_ROOT/backups}"
+    LOG_DIR="${LOG_DIR:-$PROJECT_ROOT/logs}"
+    POSTGRES_HOST="${POSTGRES_HOST:-localhost}"
+    
+    # Variables d'environnement (chargées depuis .env)
+    if [ -f "$PROJECT_ROOT/.env" ]; then
+        source "$PROJECT_ROOT/.env"
+    fi
+fi
+
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 BACKUP_FILE="postgres_backup_${TIMESTAMP}.dump"
 LOG_FILE="$LOG_DIR/backup_postgres_${TIMESTAMP}.log"
 
-# Variables d'environnement (chargées depuis .env)
-if [ -f "$PROJECT_ROOT/.env" ]; then
-    source "$PROJECT_ROOT/.env"
-fi
-
 # Configuration par défaut
-POSTGRES_HOST="${POSTGRES_HOST:-localhost}"
 POSTGRES_PORT="${POSTGRES_PORT:-5432}"
 POSTGRES_DB="${POSTGRES_DB:-recyclic}"
 POSTGRES_USER="${POSTGRES_USER:-recyclic}"

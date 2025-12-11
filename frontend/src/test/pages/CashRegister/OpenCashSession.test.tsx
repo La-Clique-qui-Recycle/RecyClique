@@ -176,4 +176,140 @@ describe('OpenCashSession', () => {
     // Le test vérifie que le formulaire se soumet sans erreur
     expect(screen.getByText('Ouverture de Session de Caisse')).toBeInTheDocument();
   });
+
+  // B44-P3: Tests de saisie décimale avec point et virgule (format français)
+  describe('B44-P3: Decimal input handling (point and comma)', () => {
+    it('accepts decimal input with point and converts to comma for display (50.50 -> 50,50)', async () => {
+      renderWithProviders(<OpenCashSession />);
+      
+      const amountInput = screen.getByTestId('initial-amount-input');
+      
+      // Saisir 50.50 (point)
+      fireEvent.change(amountInput, { target: { value: '50.50' } });
+      
+      await waitFor(() => {
+        // Le point doit être converti en virgule pour l'affichage français
+        expect(amountInput).toHaveValue('50,50');
+      });
+    });
+
+    it('accepts decimal input with comma and keeps it (50,50 -> 50,50)', async () => {
+      renderWithProviders(<OpenCashSession />);
+      
+      const amountInput = screen.getByTestId('initial-amount-input');
+      
+      // Saisir 50,50 (virgule)
+      fireEvent.change(amountInput, { target: { value: '50,50' } });
+      
+      await waitFor(() => {
+        // La virgule doit être conservée pour l'affichage français
+        expect(amountInput).toHaveValue('50,50');
+      });
+    });
+
+    it('accepts point alone during typing and converts to comma (50. -> 50,)', async () => {
+      renderWithProviders(<OpenCashSession />);
+      
+      const amountInput = screen.getByTestId('initial-amount-input');
+      
+      // Saisir "50." (point seul)
+      fireEvent.change(amountInput, { target: { value: '50.' } });
+      
+      await waitFor(() => {
+        // Le point doit être converti en virgule pour l'affichage français
+        expect(amountInput).toHaveValue('50,');
+      });
+    });
+
+    it('accepts comma alone during typing and keeps it (50, -> 50,)', async () => {
+      renderWithProviders(<OpenCashSession />);
+      
+      const amountInput = screen.getByTestId('initial-amount-input');
+      
+      // Saisir "50," (virgule seule)
+      fireEvent.change(amountInput, { target: { value: '50,' } });
+      
+      await waitFor(() => {
+        // La virgule doit être conservée
+        expect(amountInput).toHaveValue('50,');
+      });
+    });
+
+    it('limits decimal places to 2 (50,123 -> 50,12)', async () => {
+      renderWithProviders(<OpenCashSession />);
+      
+      const amountInput = screen.getByTestId('initial-amount-input');
+      
+      // Saisir "50,123" (plus de 2 décimales)
+      fireEvent.change(amountInput, { target: { value: '50,123' } });
+      
+      await waitFor(() => {
+        // Doit être limité à 2 décimales
+        expect(amountInput).toHaveValue('50,12');
+      });
+    });
+
+    it('rejects invalid characters (abc)', async () => {
+      renderWithProviders(<OpenCashSession />);
+      
+      const amountInput = screen.getByTestId('initial-amount-input');
+      
+      // Saisir "50,50" d'abord
+      fireEvent.change(amountInput, { target: { value: '50,50' } });
+      await waitFor(() => {
+        expect(amountInput).toHaveValue('50,50');
+      });
+      
+      // Essayer d'ajouter des caractères invalides
+      fireEvent.change(amountInput, { target: { value: '50,50abc' } });
+      
+      await waitFor(() => {
+        // Les caractères invalides doivent être rejetés, valeur reste "50,50"
+        expect(amountInput).toHaveValue('50,50');
+      });
+    });
+
+    it('validates decimal amount on submit', async () => {
+      renderWithProviders(<OpenCashSession />);
+      
+      const amountInput = screen.getByTestId('initial-amount-input');
+      
+      // Saisir "50,50" (format français)
+      fireEvent.change(amountInput, { target: { value: '50,50' } });
+      await waitFor(() => {
+        expect(amountInput).toHaveValue('50,50');
+      });
+      
+      const submitButton = screen.getByText('Ouvrir la Session');
+      fireEvent.click(submitButton);
+      
+      // Le formulaire doit se soumettre sans erreur de validation
+      await waitFor(() => {
+        // Pas d'erreur de validation affichée
+        expect(screen.queryByText(/montant invalide/i)).not.toBeInTheDocument();
+      });
+    });
+
+    it('handles empty input', async () => {
+      renderWithProviders(<OpenCashSession />);
+      
+      const amountInput = screen.getByTestId('initial-amount-input');
+      
+      // Vider le champ
+      fireEvent.change(amountInput, { target: { value: '' } });
+      
+      await waitFor(() => {
+        expect(amountInput).toHaveValue('');
+      });
+      
+      // Soumettre le formulaire
+      const submitButton = screen.getByText('Ouvrir la Session');
+      fireEvent.click(submitButton);
+      
+      // Doit afficher une erreur de validation
+      await waitFor(() => {
+        expect(screen.getByText(/veuillez saisir un montant initial/i)).toBeInTheDocument();
+      });
+    });
+  });
 });

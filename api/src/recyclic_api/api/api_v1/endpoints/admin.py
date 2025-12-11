@@ -1,16 +1,19 @@
 ﻿from fastapi import APIRouter, Depends, HTTPException, status as http_status, Query, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import Optional, List
 from datetime import datetime, timezone
 import uuid
 import logging
+import io
+from pathlib import Path
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from uuid import UUID
 
 from recyclic_api.core.database import get_db
-from recyclic_api.core.auth import get_current_user, require_admin_role, require_admin_role_strict
+from recyclic_api.core.auth import get_current_user, require_admin_role, require_admin_role_strict, require_role_strict
 from recyclic_api.core.audit import log_role_change, log_admin_access, log_audit, AuditActionType
 from recyclic_api.models.user import User, UserRole, UserStatus
 from recyclic_api.models.user_status_history import UserStatusHistory
@@ -43,6 +46,7 @@ from recyclic_api.services.activity_service import (
     DEFAULT_ACTIVITY_THRESHOLD_MINUTES,
 )
 from recyclic_api.utils.session_metrics import session_metrics
+from recyclic_api.core.logging import TRANSACTION_LOG_FILE, TRANSACTION_LOG_DIR
 
 router = APIRouter(tags=["admin"])
 logger = logging.getLogger(__name__)
@@ -1409,6 +1413,166 @@ def reset_user_pin(
 
 
 @router.get(
+    "/transaction-logs",
+    response_model=dict,
+    summary="Logs transactionnels (Admin)",
+    description="Récupère les logs transactionnels avec filtres et pagination"
+)
+@limiter.limit("30/minute")
+async def get_transaction_logs(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin_role_strict()),
+    page: int = Query(1, ge=1, description="Numéro de page"),
+    page_size: int = Query(50, ge=1, le=200, description="Taille de page"),
+    event_type: Optional[str] = Query(None, description="Filtrer par type d'événement"),
+    user_id: Optional[str] = Query(None, description="Filtrer par ID utilisateur"),
+    session_id: Optional[str] = Query(None, description="Filtrer par ID session"),
+    start_date: Optional[datetime] = Query(None, description="Date de début (ISO format)"),
+    end_date: Optional[datetime] = Query(None, description="Date de fin (ISO format)")
+):
+    """
+    Récupère les logs transactionnels avec filtres et pagination.
+    Seuls les administrateurs peuvent accéder à cette fonctionnalité.
+    
+    B48-P2: Endpoint pour consulter les logs transactionnels depuis l'interface admin.
+    """
+    import json
+    from pathlib import Path
+    
+    try:
+        # Diagnostic: logger le chemin et l'existence du fichier
+        log_path = TRANSACTION_LOG_FILE.absolute()
+        log_exists = TRANSACTION_LOG_FILE.exists()
+        logger.info(f"Reading transaction logs from: {log_path}")
+        logger.info(f"Log file exists: {log_exists}")
+        
+        # Lire les fichiers rotatifs dans l'ordre (transactions.log, transactions.log.1, etc.)
+        log_files = []
+        if TRANSACTION_LOG_FILE.exists():
+            log_files.append(TRANSACTION_LOG_FILE)
+            logger.info(f"Found main log file: {TRANSACTION_LOG_FILE}")
+        else:
+            logger.warning(f"Transaction log file not found: {log_path}")
+            # Retourner une réponse vide plutôt qu'une erreur
+            return {
+                "entries": [],
+                "pagination": {
+                    "page": page,
+                    "page_size": page_size,
+                    "total_count": 0,
+                    "total_pages": 0,
+                    "has_next": False,
+                    "has_prev": False
+                }
+            }
+        
+        # Ajouter les fichiers de backup
+        for i in range(1, 6):  # BACKUP_COUNT = 5
+            backup_file = Path(f"{TRANSACTION_LOG_FILE}.{i}")
+            if backup_file.exists():
+                log_files.append(backup_file)
+                logger.info(f"Found backup log file: {backup_file}")
+        
+        # Parser les logs ligne par ligne
+        all_entries = []
+        for log_file in log_files:
+            try:
+                with open(log_file, 'r', encoding='utf-8') as f:
+                    for line_num, line in enumerate(f, 1):
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            entry = json.loads(line)
+                            # Si l'entry a un champ "message" qui contient un dict Python stringifié,
+                            # essayer de le parser (format ancien - avant la correction)
+                            # Format ancien: {"message": "{'event': 'SESSION_OPENED', ...}", "timestamp": "...", "level": "INFO"}
+                            # Format nouveau: {"event": "SESSION_OPENED", "timestamp": "...", ...}
+                            if "message" in entry and isinstance(entry["message"], str) and "event" not in entry:
+                                try:
+                                    import ast
+                                    # Essayer de parser le message comme dict Python (format: "{'key': 'value'}")
+                                    parsed_msg = ast.literal_eval(entry["message"])
+                                    if isinstance(parsed_msg, dict):
+                                        # Remplacer l'entry par le contenu du message (format correct)
+                                        entry = parsed_msg
+                                        # Le timestamp est déjà dans parsed_msg, pas besoin de le copier
+                                except (ValueError, SyntaxError):
+                                    # Si le parsing échoue, garder l'entry tel quel
+                                    pass
+                            all_entries.append(entry)
+                        except json.JSONDecodeError:
+                            # Ignorer les lignes invalides
+                            logger.warning(f"Ligne invalide dans {log_file}:{line_num}: {line[:100]}")
+                            continue
+            except Exception as e:
+                logger.error(f"Erreur lors de la lecture de {log_file}: {e}")
+                continue
+        
+        # Trier par timestamp (plus récent en premier)
+        all_entries.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+        
+        # Appliquer les filtres
+        filtered_entries = []
+        for entry in all_entries:
+            # Filtrer par event_type
+            if event_type and entry.get('event') != event_type:
+                continue
+            
+            # Filtrer par user_id
+            if user_id and entry.get('user_id') != user_id:
+                continue
+            
+            # Filtrer par session_id
+            if session_id and entry.get('session_id') != session_id:
+                continue
+            
+            # Filtrer par date
+            entry_timestamp = entry.get('timestamp')
+            if entry_timestamp:
+                try:
+                    entry_dt = datetime.fromisoformat(entry_timestamp.replace('Z', '+00:00'))
+                    if start_date and entry_dt < start_date:
+                        continue
+                    if end_date and entry_dt > end_date:
+                        continue
+                except (ValueError, AttributeError):
+                    # Ignorer les entrées avec timestamp invalide
+                    continue
+            
+            filtered_entries.append(entry)
+        
+        # Appliquer la pagination
+        total_count = len(filtered_entries)
+        offset = (page - 1) * page_size
+        paginated_entries = filtered_entries[offset:offset + page_size]
+        
+        # Calculer les informations de pagination
+        total_pages = (total_count + page_size - 1) // page_size if total_count > 0 else 0
+        has_next = page < total_pages
+        has_prev = page > 1
+        
+        return {
+            "entries": paginated_entries,
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total_count": total_count,
+                "total_pages": total_pages,
+                "has_next": has_next,
+                "has_prev": has_prev
+            }
+        }
+    except Exception as e:
+        logger.error(f"Erreur lors de la récupération des logs transactionnels: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erreur lors de la récupération des logs transactionnels: {str(e)}"
+        )
+
+
+@router.get(
     "/audit-log",
     response_model=dict,
     summary="Journal d'audit (Admin)",
@@ -1972,6 +2136,85 @@ async def get_admin_session_metrics(
         raise HTTPException(
             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Erreur lors de la récupération des métriques de session: {str(e)}"
+        )
+
+
+@router.get(
+    "/templates/reception-offline.csv",
+    summary="Télécharger le template CSV offline pour les réceptions",
+    description="Retourne un fichier CSV modèle vierge pour la saisie manuelle des réceptions en cas de panne réseau. Nécessite ADMIN ou SUPER_ADMIN.",
+)
+async def download_reception_offline_template(
+    current_user: User = Depends(require_role_strict([UserRole.ADMIN, UserRole.SUPER_ADMIN])),
+    db: Session = Depends(get_db)
+):
+    """
+    Génère et retourne le template CSV offline pour les réceptions.
+    
+    Le template contient les colonnes suivantes:
+    - date: Format ISO 8601 (YYYY-MM-DD)
+    - category: Nom exact de la catégorie en base
+    - poids_kg: Nombre décimal avec 2 décimales (ex: 12.50)
+    - destination: MAGASIN, RECYCLAGE, ou DECHETERIE
+    - notes: Texte libre (optionnel)
+    
+    Le fichier est encodé en UTF-8 avec BOM pour compatibilité Excel.
+    """
+    try:
+        # Importer le script de génération
+        import sys
+        scripts_path = Path(__file__).parent.parent.parent.parent.parent.parent / "scripts"
+        if str(scripts_path) not in sys.path:
+            sys.path.insert(0, str(scripts_path))
+        
+        # Importer et exécuter la fonction de génération
+        from generate_offline_template import generate_template_csv
+        
+        # Générer le contenu CSV
+        csv_content = generate_template_csv()
+        
+        # Nom du fichier
+        filename = "template-reception-offline.csv"
+        
+        # Log de l'accès admin
+        log_admin_access(
+            str(current_user.id),
+            current_user.username or "Unknown",
+            "/admin/templates/reception-offline.csv",
+            success=True
+        )
+        
+        # Retourner le fichier en streaming
+        return StreamingResponse(
+            io.BytesIO(csv_content),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+    except ImportError as e:
+        logger.error(f"Erreur lors de l'import du script de génération: {e}", exc_info=True)
+        log_admin_access(
+            str(current_user.id),
+            current_user.username or "Unknown",
+            "/admin/templates/reception-offline.csv",
+            success=False,
+            error_message=f"import_error: {str(e)}"
+        )
+        raise HTTPException(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Erreur lors de la génération du template"
+        )
+    except Exception as e:
+        logger.error(f"Erreur lors de la génération du template: {e}", exc_info=True)
+        log_admin_access(
+            str(current_user.id),
+            current_user.username or "Unknown",
+            "/admin/templates/reception-offline.csv",
+            success=False,
+            error_message=f"generation_error: {str(e)}"
+        )
+        raise HTTPException(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Erreur lors de la génération du template"
         )
 
 

@@ -225,15 +225,19 @@ async def login(request: Request, payload: LoginRequest, db: Session = Depends(g
         )
         logger.info(f"Refresh token créé pour user_id: {user.id}")
     except Exception as exc:
+        # Capturer user_id avant d'accéder à user.id (qui peut échouer si la session DB est invalide)
+        user_id_str = str(user.id) if user and hasattr(user, 'id') else 'unknown'
         logger.error(
-            f"Erreur lors de la création du refresh token pour user_id={user.id}: {exc}",
+            f"Erreur lors de la création du refresh token pour user_id={user_id_str}: {exc}",
             exc_info=True
         )
         # Ne pas bloquer le login si la création du refresh token échoue
         refresh_token = None
-        # IMPORTANT: Ne pas faire de rollback ici car cela affecterait la session DB
-        # et pourrait causer des problèmes pour les requêtes suivantes
-        # Le rollback sera fait automatiquement par FastAPI en cas d'erreur
+        # IMPORTANT: Faire un rollback pour nettoyer la session DB en cas d'erreur
+        try:
+            db.rollback()
+        except Exception:
+            pass  # Ignorer les erreurs de rollback
 
     # Log successful login
     logger.info(f"Successful login for user_id: {user.id}")
