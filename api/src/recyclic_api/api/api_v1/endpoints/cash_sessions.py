@@ -2,6 +2,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from typing import List, Optional
 from datetime import datetime, timezone
 
@@ -15,6 +16,7 @@ from recyclic_api.core.audit import (
 )
 from recyclic_api.models.user import User, UserRole
 from recyclic_api.models.cash_session import CashSession, CashSessionStatus, CashSessionStep
+from recyclic_api.models.sale import Sale
 from recyclic_api.core.config import settings
 from recyclic_api.core.email_service import EmailAttachment, get_email_service
 from recyclic_api.services.export_service import generate_cash_session_report
@@ -50,14 +52,22 @@ def enrich_session_response(session: CashSession, service: CashSessionService) -
         service: Le service de session pour récupérer les options
         
     Returns:
-        CashSessionResponse enrichi avec register_options
+        CashSessionResponse enrichi avec register_options et total_donations
     """
     # Récupérer les options du register via la méthode publique qui valide avec Pydantic
     register_options = service.get_register_options(session)
     
+    # B50-P10: Calculer total_donations depuis les ventes de la session
+    from recyclic_api.models.sale import Sale
+    total_donations = service.db.query(func.coalesce(func.sum(Sale.donation), 0)).filter(
+        Sale.cash_session_id == session.id
+    ).scalar() or 0.0
+    total_donations = float(total_donations)
+    
     # Construire la réponse avec tous les champs
     response_data = CashSessionResponse.model_validate(session).model_dump()
     response_data['register_options'] = register_options
+    response_data['total_donations'] = total_donations  # B50-P10: Ajouter les dons calculés
     
     return CashSessionResponse(**response_data)
 
@@ -135,9 +145,14 @@ async def create_cash_session(
 ):
     service = CashSessionService(db)
     try:
-        # Vérifier les permissions si opened_at est fourni (saisie différée)
+        # B50-P4: Vérifier les permissions si opened_at est fourni (saisie différée)
+        # Les admins/super-admins ont toujours accès, mais les USER avec permission caisse.deferred.access aussi
         if session_data.opened_at is not None:
-            if current_user.role not in [UserRole.ADMIN, UserRole.SUPER_ADMIN]:
+            from recyclic_api.core.auth import user_has_permission
+            has_deferred_permission = user_has_permission(current_user, 'caisse.deferred.access', db)
+            is_admin = current_user.role in [UserRole.ADMIN, UserRole.SUPER_ADMIN]
+            
+            if not (is_admin or has_deferred_permission):
                 log_cash_session_opening(
                     user_id=str(current_user.id),
                     username=current_user.username or "Unknown",
@@ -148,7 +163,7 @@ async def create_cash_session(
                 )
                 raise HTTPException(
                     status_code=403,
-                    detail="Seuls les administrateurs peuvent créer des sessions avec une date personnalisée (saisie différée)"
+                    detail="Permission requise: caisse.deferred.access pour créer des sessions avec une date personnalisée (saisie différée)"
                 )
         
         # B44-P1: Vérifier qu'il n'y a pas déjà une session ouverte pour cet opérateur
@@ -541,31 +556,16 @@ async def get_cash_session_detail(
         for sale in session.sales:
             sales_data.append(SaleDetail.model_validate(sale))
         
-        # Story B49-P1: Charger les options du register
-        register_options = service.get_register_options(session)
+        # B50-P10: Utiliser enrich_session_response pour obtenir total_donations et register_options
+        base_response = enrich_session_response(session, service)
         
-        # Construire la réponse détaillée - éviter model_validate pour éviter l'erreur 500
-        response_data = {
-            "id": str(session.id),
-            "operator_id": str(session.operator_id),
-            "site_id": str(session.site_id),
-            "register_id": str(session.register_id) if session.register_id else None,
-            "initial_amount": session.initial_amount,
-            "current_amount": session.current_amount,
-            "status": session.status.value,
-            "opened_at": session.opened_at,
-            "closed_at": session.closed_at,
-            "total_sales": session.total_sales,
-            "total_items": session.total_items,
-            "closing_amount": session.closing_amount,
-            "actual_amount": session.actual_amount,
-            "variance": session.variance,
-            "variance_comment": session.variance_comment,
-            "register_options": register_options,  # Story B49-P1: Ajouter les options
+        # Construire la réponse détaillée avec les ventes et infos supplémentaires
+        response_data = base_response.model_dump()
+        response_data.update({
             "sales": sales_data,
             "operator_name": session.operator.username if session.operator else None,
             "site_name": session.site.name if session.site else None
-        }
+        })
         
         return CashSessionDetailResponse(**response_data)
         
@@ -737,10 +737,33 @@ async def close_cash_session(
             raise HTTPException(status_code=400, detail="La session est déjà fermée")
         
         # Valider que le commentaire est fourni si il y a un écart
-        theoretical_amount = session.initial_amount + (session.total_sales or 0)
+        # B50-P10: Calculer le montant théorique en incluant les dons
+        # Le montant théorique = fond initial + ventes + dons
+        total_donations = db.query(func.coalesce(func.sum(Sale.donation), 0)).filter(
+            Sale.cash_session_id == session_id
+        ).scalar() or 0.0
+        total_donations = float(total_donations)
+        
+        theoretical_amount = session.initial_amount + (session.total_sales or 0) + total_donations
         variance = close_data.actual_amount - theoretical_amount
         
-        if abs(variance) > 0.01 and not close_data.variance_comment:  # Tolérance de 1 centime
+        # B50-P10: Logs de debug pour diagnostiquer les problèmes de variance
+        logger.info(
+            f"[close_cash_session] Calcul de variance - "
+            f"session_id={session_id}, "
+            f"initial_amount={session.initial_amount}, "
+            f"total_sales={session.total_sales}, "
+            f"total_donations={total_donations}, "
+            f"theoretical_amount={theoretical_amount}, "
+            f"actual_amount={close_data.actual_amount}, "
+            f"variance={variance}, "
+            f"abs_variance={abs(variance)}, "
+            f"has_comment={bool(close_data.variance_comment)}"
+        )
+        
+        # B50-P10: Tolérance augmentée à 5 centimes pour gérer les problèmes d'arrondi
+        # et de précision, surtout pour les bénévoles qui utilisent le localStorage
+        if abs(variance) > 0.05 and not close_data.variance_comment:  # Tolérance de 5 centimes
             log_cash_session_closing(
                 user_id=str(current_user.id),
                 username=current_user.username or "Unknown",
@@ -749,9 +772,15 @@ async def close_cash_session(
                 success=False,
                 db=db
             )
+            # B50-P10: Message d'erreur amélioré avec les valeurs calculées
+            error_detail = (
+                f"Un commentaire est obligatoire en cas d'écart entre le montant théorique "
+                f"({theoretical_amount:.2f}€) et le montant physique ({close_data.actual_amount:.2f}€). "
+                f"Écart: {variance:+.2f}€"
+            )
             raise HTTPException(
                 status_code=400, 
-                detail="Un commentaire est obligatoire en cas d'écart entre le montant théorique et le montant physique"
+                detail=error_detail
             )
         
         # B44-P3: Fermer la session avec contrôle des montants

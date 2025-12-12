@@ -82,7 +82,6 @@ const DashboardHomePage = () => {
     weightReceived: 0,
     weightSold: 0
   });
-
   const handleNavigation = (path) => {
     navigate(path);
   };

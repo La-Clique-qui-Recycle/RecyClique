@@ -202,6 +202,16 @@ export const getReceptionByCategory = async (startDate, endDate) => {
   return response.data;
 };
 
+// Sales Statistics
+export const getSalesByCategory = async (startDate, endDate) => {
+  const params = {};
+  if (startDate) params.start_date = startDate;
+  if (endDate) params.end_date = endDate;
+
+  const response = await api.get('/v1/stats/sales/by-category', { params });
+  return response.data;
+};
+
 // Reception Reports
 export const getReceptionLignes = async (page = 1, perPage = 50, startDate, endDate, categoryId) => {
   const params = { page, per_page: perPage };

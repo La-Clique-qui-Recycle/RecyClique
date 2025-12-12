@@ -204,6 +204,9 @@ export const receptionTicketsService = {
         filtersPayload.search = filters.search
       }
       
+      // B50-P2: Log pour debug
+      console.log('Export bulk payload:', JSON.stringify({ filters: filtersPayload, format }, null, 2))
+      
       const response = await axiosClient.post(
         '/v1/admin/reports/reception-tickets/export-bulk',
         {

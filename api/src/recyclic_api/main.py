@@ -1,5 +1,7 @@
 ﻿from contextlib import asynccontextmanager, suppress
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 import asyncio
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
@@ -97,6 +99,32 @@ app = FastAPI(
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# B50-P2: Handler pour capturer les erreurs de validation Pydantic
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Handler pour logger les erreurs de validation Pydantic en détail."""
+    # Essayer de récupérer le body si disponible
+    body = None
+    try:
+        if hasattr(request, '_body'):
+            body = request._body
+        elif hasattr(request, 'body'):
+            body = await request.body()
+    except Exception:
+        pass
+    
+    logger.error(
+        f"Erreur de validation Pydantic sur {request.method} {request.url.path}. "
+        f"Erreurs: {exc.errors()}. "
+        f"Body reçu: {body}"
+    )
+    # Retourner la réponse standard FastAPI pour les erreurs de validation
+    return JSONResponse(
+        status_code=422,
+        content={"detail": exc.errors()}
+    )
+
 app.add_middleware(SlowAPIMiddleware)
 
 # Add CORS middleware

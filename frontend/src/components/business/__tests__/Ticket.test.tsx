@@ -2,7 +2,38 @@ import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { vi } from 'vitest';
 import Ticket from '../Ticket';
-import { SaleItem } from '../../../stores/cashSessionStore';
+import { SaleItem } from '../../../stores/interfaces/ICashSessionStore';
+
+// B50-P10: Mock useCashStores pour les tests
+vi.mock('../../../providers/CashStoreProvider', () => ({
+  useCashStores: () => ({
+    cashSessionStore: {
+      currentRegisterOptions: null,
+      currentSession: null,
+      currentSaleItems: [],
+      loading: false,
+      error: null
+    },
+    categoryStore: {},
+    presetStore: {},
+    isVirtualMode: false,
+    isDeferredMode: false
+  })
+}));
+
+// Mock useCashWizardStepState pour les tests
+vi.mock('../../../hooks/useCashWizardStepState', () => ({
+  useCashWizardStepState: () => ({
+    stepState: {
+      currentStep: 'category',
+      categoryState: 'active',
+      subcategoryState: 'inactive',
+      weightState: 'inactive',
+      quantityState: 'inactive',
+      priceState: 'inactive'
+    }
+  })
+}));
 
 // Mock des fonctions
 const mockOnRemoveItem = vi.fn();

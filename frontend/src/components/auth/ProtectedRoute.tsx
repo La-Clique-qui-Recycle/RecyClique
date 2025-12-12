@@ -7,6 +7,7 @@ interface ProtectedRouteProps {
   requiredRole?: 'user' | 'admin' | 'super-admin' | 'manager';
   requiredRoles?: Array<'user' | 'admin' | 'super-admin' | 'manager'>;
   requiredPermission?: string; // ex: 'caisse.access'
+  requiredPermissions?: string[]; // B50-P4: Array of permissions (OR logic - at least one required)
   adminOnly?: boolean;
   adminPathFallback?: string;
 }
@@ -16,6 +17,7 @@ export default function ProtectedRoute({
   requiredRole,
   requiredRoles,
   requiredPermission,
+  requiredPermissions, // B50-P4
   adminOnly = false,
   adminPathFallback = '/'
 }: ProtectedRouteProps): JSX.Element {
@@ -57,6 +59,17 @@ export default function ProtectedRoute({
     const isSuperAdmin = currentUser?.role === 'super-admin';
 
     if (!hasPermission && !isSuperAdmin) {
+      return <Navigate to={adminPathFallback} replace />;
+    }
+  }
+
+  // B50-P4: Vérification de permissions multiples (OR logic - au moins une requise)
+  if (requiredPermissions && requiredPermissions.length > 0) {
+    const hasAnyPermission = requiredPermissions.some(perm => userPermissions.includes(perm));
+    // Un super-admin a toujours toutes les permissions
+    const isSuperAdmin = currentUser?.role === 'super-admin';
+
+    if (!hasAnyPermission && !isSuperAdmin) {
       return <Navigate to={adminPathFallback} replace />;
     }
   }

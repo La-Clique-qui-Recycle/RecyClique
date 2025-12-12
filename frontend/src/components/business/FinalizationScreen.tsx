@@ -1,10 +1,11 @@
 import React, { useMemo, useState, useEffect, useRef } from 'react';
+import { useAuthStore } from '../../stores/authStore';
 import styled from 'styled-components';
 import { Textarea } from '@mantine/core';
 import { Heart, CreditCard, StickyNote, Coins } from 'lucide-react';
 import { useFeatureFlag } from '../../utils/features';
-import { SaleItem } from '../../stores/cashSessionStore';
-import { useCashSessionStore } from '../../stores/cashSessionStore';
+import { SaleItem } from '../../stores/interfaces/ICashSessionStore';  // B50-P10: Type centralisé
+import { useCashStores } from '../../providers/CashStoreProvider';
 
 const Backdrop = styled.div<{ $open: boolean }>`
   position: fixed;
@@ -153,10 +154,15 @@ const FinalizationScreen: React.FC<FinalizationScreenProps> = ({
   items = []
 }) => {
   const cashChequesV2Enabled = useFeatureFlag('cashChequesV2');
-  const { currentRegisterOptions } = useCashSessionStore();
+  const { cashSessionStore } = useCashStores();  // B50-P4: Utiliser le store injecté pour avoir les bonnes options selon le mode
+  const { currentRegisterOptions } = cashSessionStore;
+  const { currentUser } = useAuthStore();
   
   // Story B49-P2: Détecter si le mode prix global est activé
   const isNoItemPricingEnabled = currentRegisterOptions?.features?.no_item_pricing?.enabled === true;
+  
+  // B50-P4: Vérifier si l'utilisateur est admin
+  const isAdmin = currentUser?.role === 'admin' || currentUser?.role === 'super-admin';
   
   const [donation, setDonation] = useState<string>('0');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
@@ -194,16 +200,24 @@ const FinalizationScreen: React.FC<FinalizationScreenProps> = ({
   const shouldShowSubtotal = subtotal > 0;
   
   // Réinitialiser les champs quand la modal s'ouvre
+  // B50-P4: Utiliser useRef pour éviter de réinitialiser si la modal est déjà ouverte
+  const wasOpenRef = useRef(false);
   React.useEffect(() => {
-    if (open) {
+    // Ne réinitialiser que lors de l'ouverture de la modal (transition de false à true)
+    if (open && !wasOpenRef.current) {
       setDonation('0');
       setPaymentMethod('cash');
       setAmountReceived('');
-      setManualTotal('');  // Story B49-P2: Champ vide par défaut
+      // Story B50-P9: Toujours laisser le champ vide pour permettre la saisie manuelle
+      // Le préremplissage empêchait la saisie correcte du montant négocié
+      setManualTotal('');
       setTotalError('');
       setPendingPaymentMethod(null);  // Story B49-P5: Reset valeur en attente
+      wasOpenRef.current = true;
+    } else if (!open) {
+      wasOpenRef.current = false;
     }
-  }, [open]);
+  }, [open, isAdmin, shouldShowSubtotal, subtotal, isNoItemPricingEnabled]);
 
   // Story B49-P5: Focus auto sur "Total à payer" au chargement (séparé pour éviter dépendances)
   React.useEffect(() => {
@@ -537,7 +551,10 @@ const FinalizationScreen: React.FC<FinalizationScreenProps> = ({
                   step="0.01"
                   min="0"
                   value={manualTotal}
-                  onChange={(e) => setManualTotal(e.target.value)}
+                  onChange={(e) => {
+                    // B50-P4: S'assurer que le champ est toujours éditable
+                    setManualTotal(e.target.value);
+                  }}
                   onKeyDown={handleTotalKeyDown}
                   data-testid="manual-total-input"
                   placeholder="0.00"
@@ -545,6 +562,8 @@ const FinalizationScreen: React.FC<FinalizationScreenProps> = ({
                     borderColor: totalError ? '#dc3545' : '#ddd'
                   }}
                   required
+                  readOnly={false}
+                  disabled={false}
                 />
                 {totalError && (
                   <div style={{ color: '#dc3545', fontSize: '0.875rem', marginTop: '0.25rem' }}>
