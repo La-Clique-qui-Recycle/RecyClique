@@ -1,14 +1,54 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import Ticket from '../Ticket';
-import { useCashSessionStore } from '../../../stores/cashSessionStore';
 import { useCategoryStore } from '../../../stores/categoryStore';
 import { usePresetStore } from '../../../stores/presetStore';
 
+// B50-P10: Mock useCashStores au lieu de useCashSessionStore direct
+vi.mock('../../../providers/CashStoreProvider', () => ({
+  useCashStores: () => ({
+    cashSessionStore: {
+      currentRegisterOptions: null,
+      currentSession: null,
+      currentSaleItems: [],
+      loading: false,
+      error: null,
+      ticketScrollState: {
+        scrollTop: 0,
+        scrollHeight: 0,
+        clientHeight: 0,
+        canScrollUp: false,
+        canScrollDown: false,
+        isScrollable: false
+      },
+      setScrollPosition: vi.fn(),
+      updateScrollableState: vi.fn(),
+      resetScrollState: vi.fn()
+    },
+    categoryStore: {},
+    presetStore: {},
+    isVirtualMode: false,
+    isDeferredMode: false
+  })
+}));
+
 // Mock the stores
-vi.mock('../../../stores/cashSessionStore');
 vi.mock('../../../stores/categoryStore');
 vi.mock('../../../stores/presetStore');
+
+// Mock useCashWizardStepState pour les tests
+vi.mock('../../../hooks/useCashWizardStepState', () => ({
+  useCashWizardStepState: () => ({
+    stepState: {
+      currentStep: 'category',
+      categoryState: 'active',
+      subcategoryState: 'inactive',
+      weightState: 'inactive',
+      quantityState: 'inactive',
+      priceState: 'inactive'
+    }
+  })
+}));
 
 // Mock ResizeObserver
 global.ResizeObserver = vi.fn().mockImplementation((callback) => ({
@@ -54,21 +94,6 @@ describe('Ticket Integration - Scrollable Functionality', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-
-    // Mock store implementations
-    (useCashSessionStore as any).mockReturnValue({
-      ticketScrollState: {
-        scrollTop: 0,
-        scrollHeight: 0,
-        clientHeight: 0,
-        canScrollUp: false,
-        canScrollDown: false,
-        isScrollable: false
-      },
-      setScrollPosition: vi.fn(),
-      updateScrollableState: vi.fn(),
-      resetScrollState: vi.fn()
-    });
 
     (useCategoryStore as any).mockReturnValue({
       getCategoryById: vi.fn((id) => ({ name: `Category ${id}` })),

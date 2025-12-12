@@ -25,6 +25,8 @@ import adminService, { AdminUser } from '../../services/adminService';
 const getModuleName = (permissionName: string): string => {
   const moduleMap: { [key: string]: string } = {
     'caisse.access': 'Caisse',
+    'caisse.virtual.access': 'Caisse Virtuelle',
+    'caisse.deferred.access': 'Caisse Différée',
     'reception.access': 'Réception',
     'admin.users.manage': 'Gestion des Utilisateurs',
     'admin.groups.manage': 'Gestion des Groupes',

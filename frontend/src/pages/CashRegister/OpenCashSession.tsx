@@ -3,7 +3,7 @@ import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { Container, Paper, Title, TextInput, Button, Group, Alert, LoadingOverlay } from '@mantine/core';
 import { IconCash, IconCurrencyEuro, IconAlertCircle, IconCalendar } from '@tabler/icons-react';
 import { useCashSessionStoreInjected, useCashStores } from '../../providers/CashStoreProvider';
-import { cashSessionService } from '../../services/cashSessionService';
+import { cashSessionService, cashRegisterDashboardService } from '../../services/cashSessionService';
 import { useAuthStore } from '../../stores/authStore';
 import { getCashRegister } from '../../services/api';
 
@@ -99,37 +99,70 @@ const OpenCashSession: React.FC<OpenCashSessionProps> = ({ onSessionOpened }) =>
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isDeferredMode]); // fetchCurrentSession est mis à jour via ref pour éviter les boucles infinies
 
-  // B49-P7: Charger register_id et site_id depuis route params au montage
+  // B50-P4: Charger register_id et site_id depuis route params au montage
+  // En mode virtuel, si aucun register_id n'est fourni, charger automatiquement la première caisse avec enable_virtual=true
   useEffect(() => {
     const loadRegisterData = async () => {
-      // Si pas de register_id, rediriger vers dashboard
-      if (!registerId) {
-        const dashboardPath = isDeferredMode ? '/cash-register/deferred' : (isVirtualMode ? '/cash-register/virtual' : '/caisse');
-        navigate(dashboardPath, { replace: true });
+      let finalRegisterId = registerId;
+      
+      // B50-P4: En mode virtuel/différé, si pas de register_id, trouver automatiquement la première caisse appropriée
+      // IMPORTANT: On ne remplace PAS un register_id déjà fourni (préservation du fonctionnement normal pour les admins)
+      if (!finalRegisterId && (isVirtualMode || isDeferredMode)) {
+        try {
+          const registers = await cashRegisterDashboardService.getRegistersStatus();
+          if (isVirtualMode) {
+            const firstVirtualRegister = registers.find(r => r.enable_virtual === true);
+            if (firstVirtualRegister) {
+              finalRegisterId = firstVirtualRegister.id;
+              console.log('[OpenCashSession] Caisse virtuelle automatique sélectionnée:', firstVirtualRegister.name, firstVirtualRegister.id);
+            }
+          } else if (isDeferredMode) {
+            const firstDeferredRegister = registers.find(r => r.enable_deferred === true);
+            if (firstDeferredRegister) {
+              finalRegisterId = firstDeferredRegister.id;
+              console.log('[OpenCashSession] Caisse différée automatique sélectionnée:', firstDeferredRegister.name, firstDeferredRegister.id);
+            }
+          }
+        } catch (error) {
+          console.error('Erreur lors du chargement des caisses pour mode virtuel/différé:', error);
+        }
+      }
+      
+      // Si pas de register_id (et pas en mode virtuel), rediriger vers dashboard
+      if (!finalRegisterId && !isVirtualMode && !isDeferredMode) {
+        navigate('/caisse', { replace: true });
         return;
       }
 
-      // Charger les détails du register pour obtenir site_id
-      setLoadingRegister(true);
-      try {
-        const register = await getCashRegister(registerId);
-        if (register && register.site_id) {
-          setFormData(prev => ({
-            ...prev,
-            register_id: registerId,
-            site_id: register.site_id
-          }));
-        } else {
-          console.error('Register non trouvé ou sans site_id');
-          const dashboardPath = isDeferredMode ? '/cash-register/deferred' : (isVirtualMode ? '/cash-register/virtual' : '/caisse');
-          navigate(dashboardPath, { replace: true });
+      // Si on a un register_id, charger les détails pour obtenir site_id
+      if (finalRegisterId) {
+        setLoadingRegister(true);
+        try {
+          const register = await getCashRegister(finalRegisterId);
+          if (register && register.site_id) {
+            setFormData(prev => ({
+              ...prev,
+              register_id: finalRegisterId,
+              site_id: register.site_id
+            }));
+          } else {
+            console.error('Register non trouvé ou sans site_id');
+            // En mode virtuel, on peut continuer sans site_id
+            if (!isVirtualMode && !isDeferredMode) {
+              const dashboardPath = isDeferredMode ? '/cash-register/deferred' : (isVirtualMode ? '/cash-register/virtual' : '/caisse');
+              navigate(dashboardPath, { replace: true });
+            }
+          }
+        } catch (error) {
+          console.error('Erreur lors du chargement du register:', error);
+          // En mode virtuel, on peut continuer même si le register n'est pas trouvé
+          if (!isVirtualMode && !isDeferredMode) {
+            const dashboardPath = isDeferredMode ? '/cash-register/deferred' : (isVirtualMode ? '/cash-register/virtual' : '/caisse');
+            navigate(dashboardPath, { replace: true });
+          }
+        } finally {
+          setLoadingRegister(false);
         }
-      } catch (error) {
-        console.error('Erreur lors du chargement du register:', error);
-        const dashboardPath = isDeferredMode ? '/cash-register/deferred' : (isVirtualMode ? '/cash-register/virtual' : '/caisse');
-        navigate(dashboardPath, { replace: true });
-      } finally {
-        setLoadingRegister(false);
       }
     };
 
@@ -197,6 +230,29 @@ const OpenCashSession: React.FC<OpenCashSessionProps> = ({ onSessionOpened }) =>
     checkRegisterStatus();
   }, [formData.register_id, isVirtualMode, isDeferredMode, cashSessionStore]);
 
+  // B50-P10: Pré-remplir les champs date et fond de caisse lors de la reprise d'une session différée
+  useEffect(() => {
+    if (isDeferredMode && registerStatus.is_active && registerStatus.session_id) {
+      const { currentSession } = cashSessionStore;
+      if (currentSession && currentSession.opened_at && currentSession.initial_amount !== undefined) {
+        // Pré-remplir la date (format YYYY-MM-DD pour input type="date")
+        const openedAtDate = new Date(currentSession.opened_at);
+        const dateStr = openedAtDate.toISOString().split('T')[0];
+        if (!sessionDate) {
+          setSessionDate(dateStr);
+        }
+        
+        // Pré-remplir le fond de caisse (format français avec virgule)
+        if (!formData.initial_amount || formData.initial_amount === '') {
+          const amountStr = currentSession.initial_amount.toString().replace('.', ',');
+          setFormData(prev => ({
+            ...prev,
+            initial_amount: amountStr
+          }));
+        }
+      }
+    }
+  }, [isDeferredMode, registerStatus.is_active, registerStatus.session_id, cashSessionStore.currentSession]);
 
   const handleInputChange = (field: string, value: string | number) => {
     setFormData(prev => ({
@@ -298,9 +354,15 @@ const OpenCashSession: React.FC<OpenCashSessionProps> = ({ onSessionOpened }) =>
     }
 
     // B44-P3: Validation du montant initial (string avec virgule pour format français)
+    // B50-P10: En mode différé, le montant initial est optionnel lors de la reprise d'une session
     const initialAmountStr = formData.initial_amount.toString().trim();
+    const isResumingDeferredSession = isDeferredMode && registerStatus.is_active && registerStatus.session_id;
+    
     if (initialAmountStr === '' || initialAmountStr === ',') {
-      errors.initial_amount = 'Veuillez saisir un montant initial';
+      if (!isResumingDeferredSession) {
+        errors.initial_amount = 'Veuillez saisir un montant initial';
+      }
+      // Si on reprend une session différée, le montant est optionnel (sera pris de la session existante)
     } else {
       // Convertir virgule en point pour la validation numérique
       const initialAmountNum = parseFloat(initialAmountStr.replace(',', '.'));
@@ -314,9 +376,13 @@ const OpenCashSession: React.FC<OpenCashSessionProps> = ({ onSessionOpened }) =>
     }
 
     // B49-P7: Validation de la date de session pour saisie différée (format YYYY-MM-DD)
+    // B50-P10: En mode différé, la date est optionnelle lors de la reprise d'une session
     if (isDeferredMode) {
       if (!sessionDate) {
-        errors.sessionDate = 'Veuillez sélectionner une date de session';
+        if (!isResumingDeferredSession) {
+          errors.sessionDate = 'Veuillez sélectionner une date de session';
+        }
+        // Si on reprend une session différée, la date est optionnelle (sera prise de la session existante)
       } else {
         const now = new Date();
         now.setHours(0, 0, 0, 0);  // Comparer seulement les dates, pas les heures
@@ -353,15 +419,39 @@ const OpenCashSession: React.FC<OpenCashSessionProps> = ({ onSessionOpened }) =>
     }
 
     try {
+      // B50-P10: En mode différé, si on reprend une session, utiliser les valeurs de la session existante si les champs sont vides
+      const isResumingDeferredSession = isDeferredMode && registerStatus.is_active && registerStatus.session_id;
+      let finalInitialAmount = formData.initial_amount;
+      let finalSessionDate = sessionDate;
+      
+      if (isResumingDeferredSession) {
+        const { currentSession } = cashSessionStore;
+        if (currentSession) {
+          // Utiliser le montant de la session si le champ est vide
+          if (!finalInitialAmount || finalInitialAmount === '') {
+            finalInitialAmount = currentSession.initial_amount?.toString().replace('.', ',') || '0';
+          }
+          // Utiliser la date de la session si le champ est vide
+          if (!finalSessionDate) {
+            const openedAtDate = new Date(currentSession.opened_at);
+            finalSessionDate = openedAtDate.toISOString().split('T')[0];
+          }
+        }
+      }
+      
       // B44-P3: Convertir initial_amount de string (format français avec virgule) à number (point) AVANT toute autre opération
       // Cette conversion doit être faite en premier pour garantir que les stores virtuel/différé reçoivent toujours un number valide
-      const initialAmountStr = formData.initial_amount.toString().trim();
+      const initialAmountStr = finalInitialAmount.toString().trim();
       if (initialAmountStr === '' || initialAmountStr === ',') {
-        setValidationErrors({ initial_amount: 'Veuillez saisir un montant initial' });
-        return;
+        if (!isResumingDeferredSession) {
+          setValidationErrors({ initial_amount: 'Veuillez saisir un montant initial' });
+          return;
+        }
+        // Si on reprend une session, utiliser 0 par défaut
+        finalInitialAmount = '0';
       }
       // Convertir virgule en point pour parseFloat
-      const initialAmountNum = parseFloat(initialAmountStr.replace(',', '.'));
+      const initialAmountNum = parseFloat(finalInitialAmount.toString().replace(',', '.'));
       if (isNaN(initialAmountNum)) {
         setValidationErrors({ initial_amount: 'Montant invalide' });
         return;
@@ -435,10 +525,11 @@ const OpenCashSession: React.FC<OpenCashSessionProps> = ({ onSessionOpened }) =>
       }
       
       // B49-P7: sessionDate est maintenant une string au format YYYY-MM-DD (input type="date")
-      if (isDeferredMode && sessionDate) {
+      // B50-P10: Utiliser finalSessionDate qui peut être pré-rempli depuis la session existante
+      if (isDeferredMode && finalSessionDate) {
         // Convertir la date string (YYYY-MM-DD) en ISO 8601 avec timezone UTC
         // IMPORTANT: On doit créer une date à minuit UTC pour éviter les problèmes de timezone
-        const dateObj = new Date(sessionDate);
+        const dateObj = new Date(finalSessionDate);
         if (isNaN(dateObj.getTime())) {
           throw new Error('Date invalide');
         }
@@ -454,7 +545,7 @@ const OpenCashSession: React.FC<OpenCashSessionProps> = ({ onSessionOpened }) =>
         const dateStr = utcDate.toISOString();
         
         sessionData.opened_at = dateStr;
-        console.log('[handleSubmit] Using deferred date:', dateStr, 'from selected date:', sessionDate, 'UTC date:', utcDate);
+        console.log('[handleSubmit] Using deferred date:', dateStr, 'from selected date:', finalSessionDate, 'UTC date:', utcDate);
       }
 
       console.log('[handleSubmit] Opening session with data:', sessionData);

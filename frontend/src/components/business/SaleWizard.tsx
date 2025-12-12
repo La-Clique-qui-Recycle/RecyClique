@@ -10,7 +10,7 @@ import PriceCalculator from '../presets/PriceCalculator';
 import { useCategoryStore } from '../../stores/categoryStore';
 import { usePresetStore } from '../../stores/presetStore';
 import { PresetButtonWithCategory } from '../../services/presetService';
-import { useCashSessionStore } from '../../stores/cashSessionStore';
+import { useCashStores } from '../../providers/CashStoreProvider';  // B50-P10: Utiliser le store injecté
 import { keyboardShortcutHandler } from '../../utils/keyboardShortcuts';
 import { cashKeyboardShortcutHandler } from '../../utils/cashKeyboardShortcuts';
 import {
@@ -316,7 +316,8 @@ export interface SaleWizardProps {
 export const SaleWizard: React.FC<SaleWizardProps> = ({ onItemComplete, numpadCallbacks, currentMode, registerOptions }) => {
   const { getCategoryById, activeCategories } = useCategoryStore();
   const { selectedPreset, notes, clearSelection } = usePresetStore();
-  const { currentRegisterOptions: storeOptions, currentSaleItems } = useCashSessionStore();
+  const { cashSessionStore } = useCashStores();  // B50-P10: Utiliser le store injecté
+  const { currentRegisterOptions: storeOptions, currentSaleItems } = cashSessionStore;
   const {
     stepState,
     transitionToStep,

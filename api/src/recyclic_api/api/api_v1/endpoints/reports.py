@@ -11,6 +11,8 @@ from sqlalchemy.orm import Session
 
 from recyclic_api.utils.report_tokens import generate_download_token, verify_download_token
 from recyclic_api.utils.rate_limit import conditional_rate_limit
+from recyclic_api.utils.export_error_handler import handle_export_errors_with_logging
+from recyclic_api.utils.date_utils import parse_iso_datetime
 from recyclic_api.core.audit import log_cash_session_access, log_admin_access
 from recyclic_api.core.auth import require_role_strict
 from recyclic_api.core.config import settings
@@ -19,7 +21,7 @@ from recyclic_api.models.cash_session import CashSession
 from recyclic_api.models.user import User, UserRole
 from recyclic_api.schemas.report import ReportEntry, ReportListResponse
 from recyclic_api.schemas.cash_session import CashSessionFilters
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, Literal
 from uuid import UUID
 from datetime import datetime
@@ -310,6 +312,32 @@ class BulkReceptionExportFilters(BaseModel):
     benevole_id: Optional[str] = None
     search: Optional[str] = None
     include_empty: bool = False
+    
+    @field_validator('date_from', 'date_to', mode='before')
+    @classmethod
+    def parse_datetime(cls, v):
+        """
+        Parse string ISO en datetime en utilisant l'utilitaire standardisé.
+        
+        B50-P2: Utilise l'utilitaire date_utils pour standardiser le parsing.
+        Le frontend envoie des dates en format ISO 8601 "2025-12-10T00:00:00.000Z"
+        """
+        if v is None:
+            return None
+        if isinstance(v, str):
+            # B50-P2: Utiliser l'utilitaire standardisé pour le parsing
+            logger.debug(f"Parsing date string: {v} (type: {type(v)})")
+            try:
+                parsed = parse_iso_datetime(v)
+                logger.debug(f"Date parsed successfully: {parsed}")
+                return parsed
+            except ValueError as e:
+                logger.error(f"Erreur parsing date '{v}': {e}")
+                raise ValueError(f"Format de date invalide: {v}. Erreur: {e}")
+        # Si c'est déjà un datetime, le retourner tel quel
+        if isinstance(v, datetime):
+            return v
+        return v
 
 
 class BulkReceptionExportRequest(BaseModel):
@@ -348,7 +376,7 @@ def export_bulk_cash_sessions(
         generate_bulk_cash_sessions_excel
     )
     
-    try:
+    def _export_bulk():
         # Créer un objet CashSessionFilters avec limit=10000 pour l'export
         # On utilise model_construct pour éviter la validation Pydantic qui limite limit à 100
         filters = CashSessionFilters.model_construct(
@@ -377,13 +405,6 @@ def export_bulk_cash_sessions(
         date_str = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
         filename = f"export_sessions_caisse_{date_str}.{extension}"
         
-        log_admin_access(
-            str(current_user.id),
-            current_user.username or "Unknown",
-            "/admin/reports/cash-sessions/export-bulk",
-            success=True,
-        )
-        
         return StreamingResponse(
             iter([buffer.getvalue()]),
             media_type=media_type,
@@ -391,26 +412,16 @@ def export_bulk_cash_sessions(
                 "Content-Disposition": f'attachment; filename="{filename}"'
             }
         )
-        
-    except ValueError as e:
-        log_admin_access(
-            str(current_user.id),
-            current_user.username or "Unknown",
-            "/admin/reports/cash-sessions/export-bulk",
-            success=False,
-            error_message=str(e),
-        )
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error generating bulk export: {e}", exc_info=True)
-        log_admin_access(
-            str(current_user.id),
-            current_user.username or "Unknown",
-            "/admin/reports/cash-sessions/export-bulk",
-            success=False,
-            error_message=f"export_generation_failed: {str(e)}",
-        )
-        raise HTTPException(status_code=500, detail="Erreur lors de la génération de l'export")
+    
+    # Utilisation du gestionnaire d'erreurs standardisé avec logging admin (B50-P3: Standardisation)
+    return handle_export_errors_with_logging(
+        _export_bulk,
+        context=f"bulk sessions caisse ({request_body.format})",
+        user_id=str(current_user.id),
+        username=current_user.username or "Unknown",
+        endpoint="/admin/reports/cash-sessions/export-bulk",
+        log_access_func=log_admin_access
+    )
 
 
 @conditional_rate_limit("10/minute")
@@ -441,13 +452,22 @@ def export_bulk_reception_tickets(
         generate_bulk_reception_tickets_excel
     )
     
-    try:
+    # B50-P2: Logging amélioré pour faciliter le debug
+    logger.debug(
+        f"Export bulk réception demandé par {current_user.username} (ID: {current_user.id}). "
+        f"Format: {request_body.format}, Filtres: date_from={request_body.filters.date_from}, "
+        f"date_to={request_body.filters.date_to}, status={request_body.filters.status}, "
+        f"benevole_id={request_body.filters.benevole_id}, include_empty={request_body.filters.include_empty}"
+    )
+    
+    def _export_bulk():
         # Convertir benevole_id en UUID si fourni
         benevole_uuid = None
         if request_body.filters.benevole_id:
             try:
                 benevole_uuid = UUID(request_body.filters.benevole_id)
             except ValueError:
+                logger.warning(f"benevole_id invalide reçu: {request_body.filters.benevole_id}")
                 raise HTTPException(status_code=400, detail="benevole_id invalide")
         
         # Générer l'export selon le format
@@ -480,13 +500,6 @@ def export_bulk_reception_tickets(
         date_str = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
         filename = f"export_tickets_reception_{date_str}.{extension}"
         
-        log_admin_access(
-            str(current_user.id),
-            current_user.username or "Unknown",
-            "/admin/reports/reception-tickets/export-bulk",
-            success=True,
-        )
-        
         return StreamingResponse(
             iter([buffer.getvalue()]),
             media_type=media_type,
@@ -494,24 +507,14 @@ def export_bulk_reception_tickets(
                 "Content-Disposition": f'attachment; filename="{filename}"'
             }
         )
-        
-    except ValueError as e:
-        log_admin_access(
-            str(current_user.id),
-            current_user.username or "Unknown",
-            "/admin/reports/reception-tickets/export-bulk",
-            success=False,
-            error_message=str(e),
-        )
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error generating bulk reception export: {e}", exc_info=True)
-        log_admin_access(
-            str(current_user.id),
-            current_user.username or "Unknown",
-            "/admin/reports/reception-tickets/export-bulk",
-            success=False,
-            error_message=f"export_generation_failed: {str(e)}",
-        )
-        raise HTTPException(status_code=500, detail="Erreur lors de la génération de l'export")
+    
+    # Utilisation du gestionnaire d'erreurs standardisé avec logging admin (B50-P3: Standardisation)
+    return handle_export_errors_with_logging(
+        _export_bulk,
+        context=f"bulk tickets réception ({request_body.format})",
+        user_id=str(current_user.id),
+        username=current_user.username or "Unknown",
+        endpoint="/admin/reports/reception-tickets/export-bulk",
+        log_access_func=log_admin_access
+    )
 

@@ -12,7 +12,9 @@ COPY . .
 
 # Définir les arguments de build pour les variables d'environnement
 ARG VITE_API_URL
+ARG VITE_ENVIRONMENT
 ENV VITE_API_URL=$VITE_API_URL
+ENV VITE_ENVIRONMENT=$VITE_ENVIRONMENT
 
 # Construire l'application pour la production
 RUN echo "----> Building with API URL: $VITE_API_URL" && npm run build

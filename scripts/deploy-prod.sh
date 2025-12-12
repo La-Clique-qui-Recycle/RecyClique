@@ -6,6 +6,11 @@ command -v dos2unix >/dev/null 2>&1 && dos2unix "$0" >/dev/null 2>&1 || true
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
+# Créer le répertoire backups avec les bonnes permissions (pour le volume monté)
+mkdir -p ./backups
+chown -R 1000:1000 ./backups || sudo chown -R 1000:1000 ./backups
+chmod 755 ./backups
+
 bash ./scripts/prepare-build-meta.sh
 
 echo "🚀 Déploiement production avec docker-compose.prod.yml"

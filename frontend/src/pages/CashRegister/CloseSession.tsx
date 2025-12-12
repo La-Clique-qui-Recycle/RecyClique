@@ -144,19 +144,19 @@ const TextArea = styled.textarea`
   }
 `;
 
-const VarianceDisplay = styled.div<{ hasVariance: boolean }>`
+const VarianceDisplay = styled.div<{ $hasVariance: boolean }>`
   padding: 1rem;
   border-radius: 8px;
-  background: ${props => props.hasVariance ? '#fff3e0' : '#e8f5e8'};
-  border: 1px solid ${props => props.hasVariance ? '#ff9800' : '#4caf50'};
+  background: ${props => props.$hasVariance ? '#fff3e0' : '#e8f5e8'};
+  border: 1px solid ${props => props.$hasVariance ? '#ff9800' : '#4caf50'};
   display: flex;
   align-items: center;
   gap: 0.75rem;
   margin: 1rem 0;
 `;
 
-const VarianceIcon = styled.div<{ hasVariance: boolean }>`
-  color: ${props => props.hasVariance ? '#f57c00' : '#2e7d32'};
+const VarianceIcon = styled.div<{ $hasVariance: boolean }>`
+  color: ${props => props.$hasVariance ? '#f57c00' : '#2e7d32'};
 `;
 
 const VarianceText = styled.div`
@@ -164,10 +164,10 @@ const VarianceText = styled.div`
   color: #333;
 `;
 
-const VarianceAmount = styled.div<{ hasVariance: boolean }>`
+const VarianceAmount = styled.div<{ $hasVariance: boolean }>`
   font-size: 1.25rem;
   font-weight: bold;
-  color: ${props => props.hasVariance ? '#f57c00' : '#2e7d32'};
+  color: ${props => props.$hasVariance ? '#f57c00' : '#2e7d32'};
   margin-left: auto;
 `;
 
@@ -245,12 +245,16 @@ export default function CloseSession() {
   const [showEmptySessionWarning, setShowEmptySessionWarning] = useState(false);  // B44-P3: Avertissement session vide
 
   // Calculer les montants
-  const theoreticalAmount = currentSession ?
-    (currentSession.initial_amount || 0) + (currentSession.total_sales || 0) : 0;
+  // B50-P10: S'assurer que les valeurs sont des nombres et arrondir pour éviter les problèmes d'arrondi
+  // Le montant théorique = fond initial + ventes + dons
+  const initialAmount = currentSession ? (Number(currentSession.initial_amount) || 0) : 0;
+  const totalSales = currentSession ? (Number(currentSession.total_sales) || 0) : 0;
+  const totalDonations = currentSession ? (Number(currentSession.total_donations) || 0) : 0;
+  const theoreticalAmount = Math.round((initialAmount + totalSales + totalDonations) * 100) / 100; // Arrondir à 2 décimales
 
   const actualAmountNum = parseFloat(actualAmount) || 0;
-  const variance = actualAmountNum - theoreticalAmount;
-  const hasVariance = Math.abs(variance) > 0.01; // Tolérance de 1 centime
+  const variance = Math.round((actualAmountNum - theoreticalAmount) * 100) / 100; // Arrondir à 2 décimales
+  const hasVariance = Math.abs(variance) > 0.05; // B50-P10: Tolérance de 5 centimes (correspond au backend)
 
   useEffect(() => {
     // Charger les données actualisées de la session au montage
@@ -315,8 +319,33 @@ export default function CloseSession() {
     }
 
     // Session avec transactions : valider le montant et l'écart
-    if (hasVariance && !varianceComment.trim()) {
-      alert('Un commentaire est obligatoire en cas d\'écart entre le montant théorique et le montant physique');
+    // B50-P10: Recalculer la variance juste avant la validation pour éviter les problèmes d'arrondi
+    // S'assurer que les valeurs sont des nombres et arrondir
+    // Le montant théorique = fond initial + ventes + dons
+    const initialAmount = Number(currentSession.initial_amount) || 0;
+    const totalSales = Number(currentSession.total_sales) || 0;
+    const totalDonations = Number(currentSession.total_donations) || 0;
+    const currentTheoreticalAmount = Math.round((initialAmount + totalSales + totalDonations) * 100) / 100; // Arrondir à 2 décimales
+    const currentActualAmount = parseFloat(actualAmount) || 0;
+    const currentVariance = Math.round((currentActualAmount - currentTheoreticalAmount) * 100) / 100; // Arrondir à 2 décimales
+    const currentHasVariance = Math.abs(currentVariance) > 0.05; // B50-P10: Tolérance de 5 centimes (correspond au backend)
+    
+    // B50-P10: Logs de debug pour les bénévoles
+    console.log('[performCloseSession] Calcul de variance:', {
+      initialAmount,
+      totalSales,
+      totalDonations,
+      currentTheoreticalAmount,
+      currentActualAmount,
+      currentVariance,
+      currentHasVariance,
+      isDeferredMode,
+      sessionId: currentSession.id,
+      currentSession: currentSession
+    });
+    
+    if (currentHasVariance && !varianceComment.trim()) {
+      alert(`Un commentaire est obligatoire en cas d'écart entre le montant théorique (${currentTheoreticalAmount.toFixed(2)}€) et le montant physique (${currentActualAmount.toFixed(2)}€). Écart: ${currentVariance > 0 ? '+' : ''}${currentVariance.toFixed(2)}€`);
       return;
     }
 
@@ -332,8 +361,11 @@ export default function CloseSession() {
         // Rediriger selon le mode : toujours vers le menu principal /caisse qui gère les 3 modes
         navigate('/caisse');
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Erreur lors de la fermeture de session:', err);
+      // B50-P10: Afficher le message d'erreur du backend à l'utilisateur
+      const errorMessage = err?.message || err?.response?.data?.detail || 'Erreur lors de la fermeture de session';
+      alert(errorMessage);
     } finally {
       setIsSubmitting(false);
       setShowEmptySessionWarning(false);
@@ -463,6 +495,12 @@ export default function CloseSession() {
             <SummaryLabel>Total des Ventes</SummaryLabel>
             <SummaryValue>{currentSession.total_sales?.toFixed(2) || '0.00'} €</SummaryValue>
           </SummaryItem>
+          {totalDonations > 0 && (
+            <SummaryItem>
+              <SummaryLabel>Total des Dons</SummaryLabel>
+              <SummaryValue>{totalDonations.toFixed(2)} €</SummaryValue>
+            </SummaryItem>
+          )}
           <SummaryItem>
             <SummaryLabel>Montant Théorique</SummaryLabel>
             <SummaryValue>{theoreticalAmount.toFixed(2)} €</SummaryValue>
@@ -495,14 +533,14 @@ export default function CloseSession() {
           </FormGroup>
 
           {actualAmount && (
-            <VarianceDisplay hasVariance={hasVariance}>
-              <VarianceIcon hasVariance={hasVariance}>
+            <VarianceDisplay $hasVariance={hasVariance}>
+              <VarianceIcon $hasVariance={hasVariance}>
                 {hasVariance ? <AlertTriangle size={24} /> : <CheckCircle size={24} />}
               </VarianceIcon>
               <VarianceText>
                 {hasVariance ? 'Écart détecté' : 'Aucun écart'}
               </VarianceText>
-              <VarianceAmount hasVariance={hasVariance}>
+              <VarianceAmount $hasVariance={hasVariance}>
                 {variance > 0 ? '+' : ''}{variance.toFixed(2)} €
               </VarianceAmount>
             </VarianceDisplay>
@@ -530,7 +568,7 @@ export default function CloseSession() {
             <Button 
               type="submit" 
               variant="primary"
-              disabled={isSubmitting || !actualAmount}
+              disabled={isSubmitting || !actualAmount || (hasVariance && !varianceComment.trim())}
             >
               {isSubmitting ? (
                 <>

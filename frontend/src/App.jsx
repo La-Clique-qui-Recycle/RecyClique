@@ -44,6 +44,7 @@ const AuditLog = lazy(() => import('./pages/Admin/AuditLog.tsx'));
 const EmailLogs = lazy(() => import('./pages/Admin/EmailLogs.tsx'));
 const SitesAndRegistersPage = lazy(() => import('./pages/Admin/SitesAndRegistersPage.tsx'));
 const LegacyImport = lazy(() => import('./pages/Admin/LegacyImport.tsx'));
+const QuickAnalysis = lazy(() => import('./pages/Admin/QuickAnalysis.tsx'));
 const Login = lazy(() => import('./pages/Login.tsx'));
 const Signup = lazy(() => import('./pages/Signup.tsx'));
 const ForgotPassword = lazy(() => import('./pages/ForgotPassword.tsx'));
@@ -154,21 +155,23 @@ function App() {
             <Route path="/" element={<ProtectedRoute><UnifiedDashboard /></ProtectedRoute>} />
             <Route path="/dashboard/benevole" element={<ProtectedRoute><BenevoleDashboard /></ProtectedRoute>} />
             {/* Route /caisse : Dashboard des caisses réelles */}
-            <Route path="/caisse" element={<ProtectedRoute requiredPermission="caisse.access"><CashRegister /></ProtectedRoute>} />
+            {/* B50-P4: Accepte caisse.access, caisse.virtual.access ou caisse.deferred.access pour afficher le dashboard avec les caisses autorisées */}
+            <Route path="/caisse" element={<ProtectedRoute requiredPermissions={['caisse.access', 'caisse.virtual.access', 'caisse.deferred.access']}><CashRegister /></ProtectedRoute>} />
             {/* Routes caisse réelle */}
             <Route path="/cash-register/session/open" element={<ProtectedRoute requiredPermission="caisse.access"><OpenCashSession /></ProtectedRoute>} />
             <Route path="/cash-register/sale" element={<ProtectedRoute requiredPermission="caisse.access"><Sale /></ProtectedRoute>} />
             <Route path="/cash-register/session/close" element={<ProtectedRoute requiredPermission="caisse.access"><CloseSession /></ProtectedRoute>} />
             {/* Routes virtuelles : utilisent les mêmes composants avec le provider en mode virtuel */}
-            <Route path="/cash-register/virtual" element={<ProtectedRoute requiredPermission="caisse.access"><CashRegister /></ProtectedRoute>} />
-            <Route path="/cash-register/virtual/session/open" element={<ProtectedRoute requiredPermission="caisse.access"><OpenCashSession /></ProtectedRoute>} />
-            <Route path="/cash-register/virtual/sale" element={<ProtectedRoute requiredPermission="caisse.access"><Sale /></ProtectedRoute>} />
-            <Route path="/cash-register/virtual/session/close" element={<ProtectedRoute requiredPermission="caisse.access"><CloseSession /></ProtectedRoute>} />
-            {/* B44-P1: Routes saisie différée : utilisent les mêmes composants avec le provider en mode différé (ADMIN/SUPER_ADMIN uniquement) */}
-            <Route path="/cash-register/deferred" element={<ProtectedRoute requiredRoles={['admin', 'super-admin']}><CashRegister /></ProtectedRoute>} />
-            <Route path="/cash-register/deferred/session/open" element={<ProtectedRoute requiredRoles={['admin', 'super-admin']}><OpenCashSession /></ProtectedRoute>} />
-            <Route path="/cash-register/deferred/sale" element={<ProtectedRoute requiredRoles={['admin', 'super-admin']}><Sale /></ProtectedRoute>} />
-            <Route path="/cash-register/deferred/session/close" element={<ProtectedRoute requiredRoles={['admin', 'super-admin']}><CloseSession /></ProtectedRoute>} />
+            {/* B50-P4: Routes virtuelles requièrent la permission caisse.virtual.access */}
+            <Route path="/cash-register/virtual" element={<ProtectedRoute requiredPermission="caisse.virtual.access"><CashRegister /></ProtectedRoute>} />
+            <Route path="/cash-register/virtual/session/open" element={<ProtectedRoute requiredPermission="caisse.virtual.access"><OpenCashSession /></ProtectedRoute>} />
+            <Route path="/cash-register/virtual/sale" element={<ProtectedRoute requiredPermission="caisse.virtual.access"><Sale /></ProtectedRoute>} />
+            <Route path="/cash-register/virtual/session/close" element={<ProtectedRoute requiredPermission="caisse.virtual.access"><CloseSession /></ProtectedRoute>} />
+            {/* B50-P4: Routes saisie différée : utilisent la permission caisse.deferred.access au lieu de requiredRoles */}
+            <Route path="/cash-register/deferred" element={<ProtectedRoute requiredPermission="caisse.deferred.access"><CashRegister /></ProtectedRoute>} />
+            <Route path="/cash-register/deferred/session/open" element={<ProtectedRoute requiredPermission="caisse.deferred.access"><OpenCashSession /></ProtectedRoute>} />
+            <Route path="/cash-register/deferred/sale" element={<ProtectedRoute requiredPermission="caisse.deferred.access"><Sale /></ProtectedRoute>} />
+            <Route path="/cash-register/deferred/session/close" element={<ProtectedRoute requiredPermission="caisse.deferred.access"><CloseSession /></ProtectedRoute>} />
             <Route path="/reception" element={<ProtectedRoute requiredPermission="reception.access"><Reception /></ProtectedRoute>} />
             <Route path="/reception/dashboard" element={<ProtectedRoute requiredPermission="reception.access"><ReceptionDashboard /></ProtectedRoute>} />
             <Route path="/reception/ticket" element={<ProtectedRoute requiredPermission="reception.access"><TicketForm /></ProtectedRoute>} />
@@ -191,6 +194,7 @@ function App() {
               <Route path="reports/cash-sessions" element={<AdminReports />} />
               <Route path="users" element={<AdminUsers />} />
               <Route path="session-manager" element={<SessionManager />} />
+              <Route path="quick-analysis" element={<QuickAnalysis />} />
               <Route path="cash-registers" element={<AdminCashRegisters />} />
               <Route path="sites" element={<AdminSites />} />
               <Route path="categories" element={<ProtectedRoute requiredRoles={['admin','super-admin']}><AdminCategories /></ProtectedRoute>} />

@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import styled from 'styled-components';
 import { BarChart3, Package, DollarSign, Users, TrendingUp, Scale } from 'lucide-react';
-import api, { getCashSessionStats, getReceptionSummary } from '../services/api';
+import { BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import api, { getCashSessionStats, getReceptionSummary, getSalesByCategory } from '../services/api';
 
 const DashboardContainer = styled.div`
   display: grid;
@@ -107,9 +108,28 @@ const WelcomeText = styled.p`
   line-height: 1.6;
 `;
 
+const ChartSection = styled.div`
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 28px;
+  margin-bottom: 32px;
+  box-shadow: 0 2px 4px rgba(15, 23, 42, 0.06);
+`;
+
+const ChartTitle = styled.h2`
+  margin: 0 0 24px 0;
+  font-size: 1.3rem;
+  color: #1f2937;
+`;
+
+// Color palette for charts
+const COLORS = ['#1976d2', '#42a5f5', '#64b5f6', '#90caf9', '#bbdefb', '#e3f2fd', '#0d47a1', '#1565c0'];
+
 function Dashboard() {
   const [salesStats, setSalesStats] = useState(null);
   const [receptionStats, setReceptionStats] = useState(null);
+  const [salesByCategory, setSalesByCategory] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -119,13 +139,15 @@ function Dashboard() {
     setError(null);
     
     try {
-      const [salesData, receptionData] = await Promise.all([
+      const [salesData, receptionData, salesCategoryData] = await Promise.all([
         getCashSessionStats(), // Sans paramètres de dates
-        getReceptionSummary() // Sans paramètres de dates
+        getReceptionSummary(), // Sans paramètres de dates
+        getSalesByCategory() // Sans paramètres de dates
       ]);
       
       setSalesStats(salesData);
       setReceptionStats(receptionData);
+      setSalesByCategory(salesCategoryData || []);
     } catch (err) {
       console.error('Erreur lors du chargement des statistiques:', err);
       setError('Impossible de charger les statistiques. Vérifiez vos permissions.');
@@ -231,6 +253,60 @@ function Dashboard() {
               </StatCard>
             </StatsGrid>
           </StatsSection>
+
+          {/* Section Statistiques Sorties */}
+          {salesByCategory.length > 0 && (
+            <>
+              {/* Bar Chart - Weight by Category (Sorties) */}
+              <ChartSection>
+                <ChartTitle>Statistiques Sorties - Poids par Catégorie</ChartTitle>
+                <ResponsiveContainer width="100%" height={400}>
+                  <BarChart data={salesByCategory}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis
+                      dataKey="category_name"
+                      angle={-45}
+                      textAnchor="end"
+                      height={100}
+                    />
+                    <YAxis label={{ value: 'Poids (kg)', angle: -90, position: 'insideLeft' }} />
+                    <Tooltip
+                      formatter={(value) => {
+                        const numValue = typeof value === 'number' ? value : parseFloat(value);
+                        return [`${numValue.toFixed(1)} kg`, 'Poids'];
+                      }}
+                    />
+                    <Legend />
+                    <Bar dataKey="total_weight" fill="#42a5f5" name="Poids (kg)" />
+                  </BarChart>
+                </ResponsiveContainer>
+              </ChartSection>
+
+              {/* Pie Chart - Items by Category (Sorties) */}
+              <ChartSection>
+                <ChartTitle>Statistiques Sorties - Articles par Catégorie</ChartTitle>
+                <ResponsiveContainer width="100%" height={400}>
+                  <PieChart>
+                    <Pie
+                      data={salesByCategory}
+                      dataKey="total_items"
+                      nameKey="category_name"
+                      cx="50%"
+                      cy="50%"
+                      outerRadius={120}
+                      label
+                    >
+                      {salesByCategory.map((entry, index) => (
+                        <Cell key={`cell-sales-${index}`} fill={COLORS[index % COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip />
+                    <Legend />
+                  </PieChart>
+                </ResponsiveContainer>
+              </ChartSection>
+            </>
+          )}
         </>
       )}
     </DashboardContainer>

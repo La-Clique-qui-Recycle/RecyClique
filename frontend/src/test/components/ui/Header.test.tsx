@@ -152,5 +152,44 @@ describe('Header Component', () => {
     expect(nav).toBeInTheDocument()
     expect(logo).toBeInTheDocument()
   })
+
+  describe('Environment Badge (B50-P7)', () => {
+    beforeEach(() => {
+      // Reset environment variable before each test
+      vi.unstubEnv('VITE_ENVIRONMENT')
+    })
+
+    it('should display environment badge when VITE_ENVIRONMENT is staging', () => {
+      vi.stubEnv('VITE_ENVIRONMENT', 'staging')
+      
+      render(<Header />)
+      
+      expect(screen.getByText('Environnement de test')).toBeInTheDocument()
+    })
+
+    it('should not display environment badge when VITE_ENVIRONMENT is not staging', () => {
+      vi.stubEnv('VITE_ENVIRONMENT', 'production')
+      
+      render(<Header />)
+      
+      expect(screen.queryByText('Environnement de test')).not.toBeInTheDocument()
+    })
+
+    it('should not display environment badge when VITE_ENVIRONMENT is undefined', () => {
+      // VITE_ENVIRONMENT is already unstubbed from beforeEach
+      
+      render(<Header />)
+      
+      expect(screen.queryByText('Environnement de test')).not.toBeInTheDocument()
+    })
+
+    it('should not display environment badge when VITE_ENVIRONMENT is development', () => {
+      vi.stubEnv('VITE_ENVIRONMENT', 'development')
+      
+      render(<Header />)
+      
+      expect(screen.queryByText('Environnement de test')).not.toBeInTheDocument()
+    })
+  })
 })
 
