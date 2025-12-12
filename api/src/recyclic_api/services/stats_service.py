@@ -14,6 +14,9 @@ from fastapi import HTTPException, status
 from recyclic_api.models.ligne_depot import LigneDepot
 from recyclic_api.models.ticket_depot import TicketDepot
 from recyclic_api.models.category import Category
+from recyclic_api.models.sale_item import SaleItem
+from recyclic_api.models.sale import Sale
+from recyclic_api.models.cash_session import CashSession
 from recyclic_api.schemas.stats import ReceptionSummaryStats, CategoryStats
 
 
@@ -197,6 +200,106 @@ class StatsService:
             CategoryStats(
                 category_name=row.category_name,
                 total_weight=Decimal(str(row.total_weight)),
+                total_items=row.total_items
+            )
+            for row in results
+        ]
+
+    def get_sales_by_category(
+        self,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None
+    ) -> List[CategoryStats]:
+        """
+        Get sales statistics grouped by main category.
+
+        Story B50-P5: Cette méthode agrège les données de ventes (SaleItem) par catégorie principale.
+        Les données des catégories enfants sont agrégées vers leurs catégories parentes
+        pour n'afficher que les catégories principales dans le dashboard.
+
+        Args:
+            start_date: Optional start date filter (inclusive)
+            end_date: Optional end date filter (inclusive)
+
+        Returns:
+            List of CategoryStats, sorted by total_weight descending (uniquement catégories principales)
+
+        Raises:
+            HTTPException: If start_date is after end_date
+        """
+        # Validate date range
+        self._validate_date_range(start_date, end_date)
+        
+        # Agréger les données des catégories enfants vers leurs catégories parentes
+        # Utiliser un LEFT JOIN pour obtenir la catégorie parente si elle existe
+        from sqlalchemy.orm import aliased
+        ParentCat = aliased(Category)
+        
+        # Build base query avec agrégation vers les catégories principales
+        # Faire exactement comme get_reception_by_category :
+        # - JOIN direct sur Category.id (en castant SaleItem.category string en UUID)
+        # - LEFT JOIN sur ParentCat pour obtenir le parent
+        # - Utiliser func.coalesce(ParentCat.name, Category.name) pour le nom
+        # - Filtrer pour ne garder que les catégories principales (parent_id IS NULL)
+        from sqlalchemy.dialects.postgresql import UUID as PGUUID
+        
+        query = self.db.query(
+            func.coalesce(ParentCat.name, Category.name).label('category_name'),
+            func.coalesce(func.sum(SaleItem.weight), 0).label('total_weight'),
+            func.count(SaleItem.id).label('total_items')
+        ).select_from(
+            SaleItem
+        ).join(
+            Sale,
+            SaleItem.sale_id == Sale.id
+        ).join(
+            CashSession,
+            Sale.cash_session_id == CashSession.id
+        ).outerjoin(
+            Category,
+            func.cast(SaleItem.category, PGUUID) == Category.id
+        ).outerjoin(
+            ParentCat,
+            Category.parent_id == ParentCat.id
+        ).filter(
+            # Filtrer uniquement les catégories principales
+            # Si Category.parent_id IS NULL, c'est une catégorie principale
+            # Si Category.parent_id IS NOT NULL, c'est une sous-catégorie, on utilise ParentCat
+            # Si Category n'existe pas (LEFT JOIN), on exclut (pas de catégorie valide)
+            or_(
+                Category.parent_id.is_(None),  # Catégorie principale directe
+                ParentCat.parent_id.is_(None)  # Sous-catégorie dont le parent est principal
+            )
+        )
+
+        # Apply date filters if provided
+        filters = []
+        if start_date:
+            # Rendre la date consciente du fuseau horaire (UTC)
+            if start_date.tzinfo is None:
+                start_date = start_date.replace(tzinfo=timezone.utc)
+            filters.append(Sale.created_at >= start_date)
+        if end_date:
+            # Rendre la date consciente du fuseau horaire (UTC)
+            if end_date.tzinfo is None:
+                end_date = end_date.replace(tzinfo=timezone.utc)
+            filters.append(Sale.created_at <= end_date)
+
+        if filters:
+            query = query.filter(and_(*filters))
+
+        # Group by category principale and order by weight
+        query = query.group_by(
+            func.coalesce(ParentCat.name, Category.name)
+        ).order_by(func.sum(SaleItem.weight).desc())
+
+        # Execute query
+        results = query.all()
+
+        return [
+            CategoryStats(
+                category_name=row.category_name,
+                total_weight=Decimal(str(row.total_weight or 0)),
                 total_items=row.total_items
             )
             for row in results

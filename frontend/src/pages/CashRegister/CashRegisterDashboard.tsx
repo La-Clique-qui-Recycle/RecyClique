@@ -51,12 +51,18 @@ const CashRegisterDashboard: React.FC = () => {
   const navigate = useNavigate();
   const { cashSessionStore, isVirtualMode, isDeferredMode } = useCashStores();
   const { resumeSession } = cashSessionStore;
-  const { currentUser } = useAuthStore();  // B44-P1: Pour vérifier les permissions
+  const { currentUser, hasPermission, hasVirtualCashAccess, hasDeferredCashAccess } = useAuthStore();  // B50-P4: Pour vérifier les permissions
   const [loading, setLoading] = useState(true);
   const [registers, setRegisters] = useState<RegisterStatus[]>([]);
   
-  // B44-P1: Vérifier si l'utilisateur peut accéder à la saisie différée
-  const canAccessDeferred = currentUser?.role === 'admin' || currentUser?.role === 'super-admin';
+  // B50-P4: Vérifier si l'utilisateur peut accéder à la saisie différée (permission ou rôle admin)
+  const canAccessDeferred = hasDeferredCashAccess() || currentUser?.role === 'admin' || currentUser?.role === 'super-admin';
+  
+  // B50-P4: Vérifier si l'utilisateur peut accéder à la caisse virtuelle
+  const canAccessVirtual = hasVirtualCashAccess();
+  
+  // B50-P4: Vérifier si l'utilisateur peut accéder aux caisses réelles
+  const canAccessRealCash = hasPermission('caisse.access');
   
   // Vérifier si l'utilisateur est SuperAdmin pour afficher le menu de gestion
   const isSuperAdmin = currentUser?.role === 'super-admin';
@@ -73,26 +79,36 @@ const CashRegisterDashboard: React.FC = () => {
     }
   }, [isDeferredMode, navigate]);
 
-  // En mode virtuel, ne pas charger les caisses réelles
+  // B50-P4: Charger les caisses même en mode virtuel/différé pour trouver la première avec enable_virtual/enable_deferred=true
   useEffect(() => {
-    if (isVirtualMode) {
-      setLoading(false);
-      return;
-    }
-
     const load = async () => {
+      // En mode virtuel/différé, on charge quand même les caisses pour trouver la source
+      if (isVirtualMode || isDeferredMode) {
+        setLoading(true);
+        try {
+          const list = await cashRegisterDashboardService.getRegistersStatus();
+          setRegisters(list);
+        } catch (error) {
+          console.error('Erreur lors du chargement des caisses:', error);
+        } finally {
+          setLoading(false);
+        }
+        return;
+      }
+
+      // Mode réel : charger les caisses normalement
       setLoading(true);
       try {
-      const list = await cashRegisterDashboardService.getRegistersStatus();
-      setRegisters(list);
+        const list = await cashRegisterDashboardService.getRegistersStatus();
+        setRegisters(list);
       } catch (error) {
         console.error('Erreur lors du chargement des caisses:', error);
       } finally {
-      setLoading(false);
+        setLoading(false);
       }
     };
     load();
-  }, [isVirtualMode]);
+  }, [isVirtualMode, isDeferredMode]);
 
   // B49-P7: Passer register_id via route params au lieu de state
   const handleOpen = (registerId: string) => {
@@ -139,12 +155,37 @@ const CashRegisterDashboard: React.FC = () => {
     navigate(`${basePath}/session/open?register_id=${registerId}`);
   };
 
+  // B50-P4: Trouver la première caisse avec enable_virtual=true pour hériter des options
+  const getFirstVirtualRegister = (): string | null => {
+    const virtualRegister = registers.find(r => r.enable_virtual === true);
+    return virtualRegister?.id || null;
+  };
+
+  // B50-P4: Trouver la première caisse avec enable_deferred=true pour hériter des options
+  const getFirstDeferredRegister = (): string | null => {
+    const deferredRegister = registers.find(r => r.enable_deferred === true);
+    return deferredRegister?.id || null;
+  };
+
   const handleVirtualCashRegister = () => {
-    navigate('/cash-register/virtual');
+    // B50-P4: Passer le register_id de la première caisse virtuelle pour hériter des options
+    const firstVirtualRegisterId = getFirstVirtualRegister();
+    if (firstVirtualRegisterId) {
+      navigate(`/cash-register/virtual/session/open?register_id=${firstVirtualRegisterId}`);
+    } else {
+      // Fallback si aucune caisse virtuelle trouvée
+      navigate('/cash-register/virtual/session/open');
+    }
   };
 
   const handleOpenVirtualSession = () => {
-    navigate('/cash-register/virtual/session/open');
+    // B50-P4: Passer le register_id de la première caisse virtuelle pour hériter des options
+    const firstVirtualRegisterId = getFirstVirtualRegister();
+    if (firstVirtualRegisterId) {
+      navigate(`/cash-register/virtual/session/open?register_id=${firstVirtualRegisterId}`);
+    } else {
+      navigate('/cash-register/virtual/session/open');
+    }
   };
 
   const handleResumeVirtualSession = async () => {
@@ -158,9 +199,15 @@ const CashRegisterDashboard: React.FC = () => {
     }
   };
 
-  // B44-P1: Handler pour la saisie différée - rediriger directement vers l'ouverture de session
+  // B50-P4: Handler pour la saisie différée - passer le register_id de la première caisse différée pour hériter des options
   const handleDeferredCashRegister = () => {
-    navigate('/cash-register/deferred/session/open');
+    const firstDeferredRegisterId = getFirstDeferredRegister();
+    if (firstDeferredRegisterId) {
+      navigate(`/cash-register/deferred/session/open?register_id=${firstDeferredRegisterId}`);
+    } else {
+      // Fallback si aucune caisse différée trouvée
+      navigate('/cash-register/deferred/session/open');
+    }
   };
 
   // Interface virtuelle : afficher uniquement la carte virtuelle
@@ -256,12 +303,21 @@ const CashRegisterDashboard: React.FC = () => {
           </Menu>
         )}
       </Group>
+      {/* B50-P4: Vérifier si l'utilisateur a accès à au moins une caisse */}
+      {!canAccessRealCash && !canAccessVirtual && !canAccessDeferred && (
+        <Card shadow="sm" padding="lg" radius="md" withBorder>
+          <Text c="dimmed" ta="center">
+            Vous n'avez pas accès à aucune caisse. Contactez un administrateur pour obtenir les permissions nécessaires.
+          </Text>
+        </Card>
+      )}
       <SimpleGrid cols={3} spacing="lg" breakpoints={[{ maxWidth: 'sm', cols: 1 }]}>
-        {registers.map(reg => (
+        {/* B50-P4: Afficher seulement les caisses réelles si l'utilisateur a la permission caisse.access */}
+        {canAccessRealCash && registers.map(reg => (
           <RegisterCard key={reg.id} reg={reg} onOpen={handleOpen} onResume={handleResume} />
         ))}
-        {/* B49-P3: Carte Caisse Virtuelle - affichée uniquement si au moins une caisse a enable_virtual=true */}
-        {hasVirtualEnabled && (
+        {/* B50-P4: Carte Caisse Virtuelle - affichée si au moins une caisse a enable_virtual=true ET l'utilisateur a la permission caisse.virtual.access */}
+        {hasVirtualEnabled && canAccessVirtual && (
         <Card 
           shadow="sm" 
           padding="lg" 
@@ -300,7 +356,7 @@ const CashRegisterDashboard: React.FC = () => {
         </Card>
         )}
         
-        {/* B49-P3: Carte Saisie Différée - affichée uniquement si au moins une caisse a enable_deferred=true ET utilisateur est ADMIN/SUPER_ADMIN */}
+        {/* B50-P4: Carte Saisie Différée - affichée si au moins une caisse a enable_deferred=true ET l'utilisateur a la permission caisse.deferred.access */}
         {hasDeferredEnabled && canAccessDeferred && (
           <Card 
             shadow="sm" 

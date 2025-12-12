@@ -673,6 +673,9 @@ const ReceptionSessionManager: React.FC = () => {
         include_empty: filters.include_empty
       }
       
+      // B50-P2: Log pour debug
+      console.log('Export payload:', JSON.stringify(exportFilters, null, 2))
+      
       await receptionTicketsService.exportBulk(exportFilters, format)
     } catch (error: any) {
       console.error('Erreur lors de l\'export:', error)

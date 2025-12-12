@@ -51,6 +51,18 @@ const LogoVersion = styled.div`
   margin-left: 1.75rem;
 `;
 
+const EnvironmentBadge = styled.span`
+  background-color: #dc2626;
+  color: white;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  margin-left: 0.5rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+`;
+
 const NavLinks = styled.div`
   display: flex;
   gap: 2rem;
@@ -96,6 +108,9 @@ const AdminLayout = () => {
   const logout = useAuthStore((s) => s.logout);
   const [menuOpen, setMenuOpen] = useState(false);
   const [versionDisplay, setVersionDisplay] = useState('Version: 1.0.0');
+  
+  // Détecter l'environnement staging pour afficher le badge
+  const isStaging = import.meta.env.VITE_ENVIRONMENT === 'staging';
 
   const onLogout = () => {
     logout();
@@ -149,6 +164,9 @@ const AdminLayout = () => {
             <LogoMain>
               <Recycle size={24} />
               RecyClique
+              {isStaging && (
+                <EnvironmentBadge>Environnement de test</EnvironmentBadge>
+              )}
             </LogoMain>
             <LogoVersion>
               {versionDisplay}

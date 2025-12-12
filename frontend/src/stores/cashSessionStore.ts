@@ -13,6 +13,7 @@ export interface CashSession {
   closed_at?: string;
   total_sales?: number;
   total_items?: number;
+  total_donations?: number;  // B50-P10: Total des dons pour le calcul du montant théorique
 }
 
 export interface SaleItem {
@@ -155,13 +156,29 @@ export const useCashSessionStore = create<CashSessionState>()(
         },
 
         // Setters
-        setCurrentSession: (session) => set({ 
-          currentSession: session,
-          ticketOpenedLogged: false,  // B48-P2: Réinitialiser le flag lors d'un changement de session
-          // B49-P3: Charger les options depuis register_options de la session
-          currentRegisterOptions: (session as any)?.register_options || null
-        }),
-        setCurrentRegisterOptions: (options) => set({ currentRegisterOptions: options }),
+        setCurrentSession: (session) => {
+          // B50-P6: Logging pour tracer le chargement des options
+          const registerOptions = (session as any)?.register_options || null;
+          console.log('[Store] setCurrentSession appelé avec register_options:', registerOptions);
+          console.log('[Store] currentRegisterOptions avant set:', get().currentRegisterOptions);
+          
+          set({ 
+            currentSession: session,
+            ticketOpenedLogged: false,  // B48-P2: Réinitialiser le flag lors d'un changement de session
+            // B49-P3: Charger les options depuis register_options de la session
+            // B50-P6: Si session n'a pas register_options mais qu'on a déjà des options persistées, les conserver
+            currentRegisterOptions: registerOptions || get().currentRegisterOptions
+          });
+          
+          console.log('[Store] currentRegisterOptions après set:', get().currentRegisterOptions);
+        },
+        setCurrentRegisterOptions: (options) => {
+          // B50-P6: Logging pour tracer les changements d'options
+          console.log('[Store] setCurrentRegisterOptions appelé avec:', options);
+          console.log('[Store] currentRegisterOptions avant set:', get().currentRegisterOptions);
+          set({ currentRegisterOptions: options });
+          console.log('[Store] currentRegisterOptions après set:', get().currentRegisterOptions);
+        },
         setSessions: (sessions) => set({ sessions }),
         setLoading: (loading) => set({ loading }),
         setError: (error) => set({ error }),
@@ -459,11 +476,15 @@ export const useCashSessionStore = create<CashSessionState>()(
           set({ loading: true, error: null });
           
           try {
+            // B50-P6: Logging pour tracer l'ouverture de session
+            console.log('[Store] openSession - Début, register_id:', data.register_id);
+            
             // Pré-check 1: vérifier s'il y a déjà une session ouverte sur ce poste de caisse
             if (data.register_id) {
               const status = await cashSessionService.getRegisterSessionStatus(data.register_id);
               if (status.is_active && status.session_id) {
                 const existingByRegister = await cashSessionService.getSession(status.session_id);
+                console.log('[Store] openSession - Session existante par register, register_options:', (existingByRegister as any)?.register_options);
                 if (existingByRegister) {
                   get().setCurrentSession(existingByRegister);
                   localStorage.setItem('currentCashSession', JSON.stringify(existingByRegister));
@@ -475,6 +496,7 @@ export const useCashSessionStore = create<CashSessionState>()(
 
             // Pré-check 2: session ouverte pour l'opérateur courant (fallback)
             const existing = await cashSessionService.getCurrentSession();
+            console.log('[Store] openSession - Session existante opérateur, register_options:', (existing as any)?.register_options);
             if (existing) {
               get().setCurrentSession(existing);
               localStorage.setItem('currentCashSession', JSON.stringify(existing));
@@ -483,6 +505,7 @@ export const useCashSessionStore = create<CashSessionState>()(
             }
 
             const session = await cashSessionService.createSession(data);
+            console.log('[Store] openSession - Nouvelle session créée, register_options:', (session as any)?.register_options);
             get().setCurrentSession(session);
             
             // Sauvegarder en local pour la persistance
@@ -523,18 +546,22 @@ export const useCashSessionStore = create<CashSessionState>()(
             
             if (closeData) {
               // Fermeture avec contrôle des montants
+              console.log('[closeSession] Fermeture avec montants:', { sessionId, closeData });
               const closedSession = await cashSessionService.closeSessionWithAmounts(
                 sessionId, 
                 closeData.actual_amount, 
                 closeData.variance_comment
               );
+              console.log('[closeSession] Réponse closeSessionWithAmounts:', closedSession);
               // B44-P3: closedSession peut être null si la session était vide et a été supprimée
               // null = session supprimée (succès), CashSession = session fermée (succès)
               // Si on arrive ici sans exception, c'est toujours un succès
               success = true;
             } else {
               // Fermeture simple
+              console.log('[closeSession] Fermeture simple:', { sessionId });
               success = await cashSessionService.closeSession(sessionId);
+              console.log('[closeSession] Réponse closeSession (simple):', success);
             }
             
             if (success) {
@@ -548,8 +575,28 @@ export const useCashSessionStore = create<CashSessionState>()(
             }
             
             return success;
-          } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : 'Erreur lors de la fermeture de session';
+          } catch (error: any) {
+            // Story B50-P9 QA: Amélioration gestion d'erreurs avec détails
+            let errorMessage = 'Erreur lors de la fermeture de session';
+            
+            if (error?.response?.data?.detail) {
+              const detail = error.response.data.detail;
+              if (Array.isArray(detail)) {
+                errorMessage = detail.map((e: any) => e.msg || e.message || JSON.stringify(e)).join(', ');
+              } else if (typeof detail === 'string') {
+                errorMessage = detail;
+              }
+            } else if (error instanceof Error) {
+              errorMessage = error.message;
+            }
+            
+            console.error('[closeSession] Erreur détaillée:', {
+              message: errorMessage,
+              sessionId,
+              closeData,
+              originalError: error
+            });
+            
             set({ error: errorMessage, loading: false });
             return false;
           }
@@ -600,15 +647,34 @@ export const useCashSessionStore = create<CashSessionState>()(
           set({ loading: true, error: null });
           
           try {
+            // B50-P6: Logging pour tracer le rafraîchissement
+            console.log('[Store] fetchCurrentSession - Début');
+            console.log('[Store] fetchCurrentSession - currentRegisterOptions avant:', get().currentRegisterOptions);
+            
             // Essayer de récupérer depuis le localStorage d'abord
             const localSession = localStorage.getItem('currentCashSession');
             if (localSession) {
               const session = JSON.parse(localSession);
+              console.log('[Store] fetchCurrentSession - Session locale trouvée, register_options:', (session as any)?.register_options);
               
               // Vérifier que la session est toujours ouverte côté serveur
               const serverSession = await cashSessionService.getSession(session.id);
+              console.log('[Store] fetchCurrentSession - Session serveur, register_options:', (serverSession as any)?.register_options);
+              
               if (serverSession && serverSession.status === 'open') {
-                get().setCurrentSession(serverSession);
+                // B50-P6: Si serverSession n'a pas register_options, utiliser ceux de la session locale ou du store
+                const optionsToUse = (serverSession as any)?.register_options 
+                  || (session as any)?.register_options 
+                  || get().currentRegisterOptions;
+                
+                // Créer une session enrichie avec les options si nécessaire
+                const enrichedSession = {
+                  ...serverSession,
+                  register_options: optionsToUse || (serverSession as any)?.register_options
+                };
+                
+                console.log('[Store] fetchCurrentSession - Options à utiliser:', optionsToUse);
+                get().setCurrentSession(enrichedSession);
                 set({ loading: false });
                 return;
               } else {
@@ -618,9 +684,21 @@ export const useCashSessionStore = create<CashSessionState>()(
             }
             // Pas de session locale: interroger l'API pour la session courante de l'opérateur
             const current = await cashSessionService.getCurrentSession();
+            console.log('[Store] fetchCurrentSession - Session courante API, register_options:', (current as any)?.register_options);
+            
             if (current && current.status === 'open') {
-              get().setCurrentSession(current);
-              localStorage.setItem('currentCashSession', JSON.stringify(current));
+              // B50-P6: Si current n'a pas register_options, utiliser ceux du store si disponibles
+              const optionsToUse = (current as any)?.register_options || get().currentRegisterOptions;
+              
+              // Créer une session enrichie avec les options si nécessaire
+              const enrichedSession = {
+                ...current,
+                register_options: optionsToUse || (current as any)?.register_options
+              };
+              
+              console.log('[Store] fetchCurrentSession - Options à utiliser (session courante):', optionsToUse);
+              get().setCurrentSession(enrichedSession);
+              localStorage.setItem('currentCashSession', JSON.stringify(enrichedSession));
               set({ loading: false });
               return;
             }
@@ -629,6 +707,7 @@ export const useCashSessionStore = create<CashSessionState>()(
             set({ loading: false });
           } catch (error) {
             const errorMessage = error instanceof Error ? error.message : 'Erreur lors de la récupération de la session';
+            console.error('[Store] fetchCurrentSession - Erreur:', errorMessage);
             set({ error: errorMessage, loading: false });
           }
         },
@@ -644,10 +723,26 @@ export const useCashSessionStore = create<CashSessionState>()(
         resumeSession: async (sessionId: string): Promise<boolean> => {
           set({ loading: true, error: null });
           try {
+            // B50-P6: Logging pour tracer resumeSession
+            console.log('[Store] resumeSession - Début, sessionId:', sessionId);
+            console.log('[Store] resumeSession - currentRegisterOptions avant:', get().currentRegisterOptions);
+            
             const session = await cashSessionService.getSession(sessionId);
+            console.log('[Store] resumeSession - Session récupérée, register_options:', (session as any)?.register_options);
+            
             if (session && session.status === 'open') {
-              get().setCurrentSession(session);
-              localStorage.setItem('currentCashSession', JSON.stringify(session));
+              // B50-P6: Si session n'a pas register_options, utiliser ceux du store si disponibles
+              const optionsToUse = (session as any)?.register_options || get().currentRegisterOptions;
+              
+              // Créer une session enrichie avec les options si nécessaire
+              const enrichedSession = {
+                ...session,
+                register_options: optionsToUse || (session as any)?.register_options
+              };
+              
+              console.log('[Store] resumeSession - Options à utiliser:', optionsToUse);
+              get().setCurrentSession(enrichedSession);
+              localStorage.setItem('currentCashSession', JSON.stringify(enrichedSession));
               set({ loading: false });
               return true;
             }
@@ -655,6 +750,7 @@ export const useCashSessionStore = create<CashSessionState>()(
             return false;
           } catch (error) {
             const errorMessage = error instanceof Error ? error.message : 'Erreur lors de la reprise de session';
+            console.error('[Store] resumeSession - Erreur:', errorMessage);
             set({ error: errorMessage, loading: false });
             return false;
           }
@@ -666,7 +762,32 @@ export const useCashSessionStore = create<CashSessionState>()(
           currentSession: state.currentSession,
           currentSaleItems: state.currentSaleItems,
           currentRegisterOptions: state.currentRegisterOptions  // B49-P7: Persister les options de workflow
-        })
+        }),
+        // B50-P6: Réhydratation - restaurer currentRegisterOptions depuis currentSession.register_options si nécessaire
+        onRehydrateStorage: () => (state) => {
+          console.log('[Store] onRehydrateStorage - Début');
+          console.log('[Store] onRehydrateStorage - currentSession:', state?.currentSession);
+          console.log('[Store] onRehydrateStorage - currentRegisterOptions restauré:', state?.currentRegisterOptions);
+          
+          if (state?.currentSession) {
+            const sessionOptions = (state.currentSession as any)?.register_options;
+            console.log('[Store] onRehydrateStorage - register_options dans session:', sessionOptions);
+            
+            // Si currentRegisterOptions n'est pas restauré mais que la session a register_options, les restaurer
+            if (!state.currentRegisterOptions && sessionOptions) {
+              console.log('[Store] onRehydrateStorage - Restauration currentRegisterOptions depuis session');
+              state.setCurrentRegisterOptions(sessionOptions);
+            }
+            // Si currentRegisterOptions est restauré mais que la session a aussi register_options, 
+            // prioriser ceux de la session (plus à jour)
+            else if (state.currentRegisterOptions && sessionOptions) {
+              console.log('[Store] onRehydrateStorage - Mise à jour currentRegisterOptions depuis session (plus à jour)');
+              state.setCurrentRegisterOptions(sessionOptions);
+            }
+          }
+          
+          console.log('[Store] onRehydrateStorage - currentRegisterOptions final:', state?.currentRegisterOptions);
+        }
       }
     ),
     {

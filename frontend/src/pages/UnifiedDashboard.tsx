@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import { BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { Package, DollarSign, Scale, TrendingUp, User } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
-import { getCashSessionStats, getReceptionSummary, getReceptionByCategory } from '../services/api';
+import { getCashSessionStats, getReceptionSummary, getReceptionByCategory, getSalesByCategory } from '../services/api';
 import { getCategories } from '../services/categoriesService';
 
 const DashboardContainer = styled.div`
@@ -219,6 +219,7 @@ function UnifiedDashboard() {
   const [salesStats, setSalesStats] = useState<any>(null);
   const [receptionStats, setReceptionStats] = useState<any>(null);
   const [categoryStats, setCategoryStats] = useState<CategoryStat[]>([]);
+  const [salesByCategory, setSalesByCategory] = useState<CategoryStat[]>([]);
   const [mainCategories, setMainCategories] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -304,7 +305,11 @@ function UnifiedDashboard() {
       const promises: Promise<any>[] = [
         getCashSessionStats(start, end),
         getReceptionSummary(start, end),
-        getReceptionByCategory(start, end)
+        getReceptionByCategory(start, end),
+        getSalesByCategory(start, end).catch(err => {
+          console.error('Erreur lors du chargement des stats ventes par catégorie:', err);
+          return []; // Retourner un tableau vide en cas d'erreur
+        })
       ];
 
       const results = await Promise.all(promises);
@@ -319,6 +324,10 @@ function UnifiedDashboard() {
         : allCategoryStats; // Si pas encore chargées, afficher toutes (temporaire)
       
       setCategoryStats(filteredStats);
+      
+      // Les stats de ventes par catégorie sont déjà filtrées par le backend (catégories principales uniquement)
+      const allSalesCategoryStats = results[3] || [];
+      setSalesByCategory(allSalesCategoryStats);
     } catch (err: any) {
       console.error('Erreur lors du chargement des statistiques:', err);
 
@@ -591,6 +600,69 @@ function UnifiedDashboard() {
             <ChartSection>
               <p style={{ textAlign: 'center', color: '#6b7280' }}>
                 Aucune donnée de catégorie disponible pour la période sélectionnée
+              </p>
+            </ChartSection>
+          )}
+
+          {/* Section Statistiques Sorties */}
+          {salesByCategory.length > 0 && (
+            <>
+              {/* Bar Chart - Weight by Category (Sorties) */}
+              <ChartSection>
+                <ChartTitle>Analyse Détaillée des Sorties - Poids par Catégorie</ChartTitle>
+                <ResponsiveContainer width="100%" height={400}>
+                  <BarChart data={salesByCategory}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis
+                      dataKey="category_name"
+                      angle={-45}
+                      textAnchor="end"
+                      height={100}
+                    />
+                    <YAxis label={{ value: 'Poids (kg)', angle: -90, position: 'insideLeft' }} />
+                    <Tooltip
+                      formatter={(value: any) => {
+                        const numValue = typeof value === 'number' ? value : parseFloat(value);
+                        return [`${numValue.toFixed(1)} kg`, 'Poids'];
+                      }}
+                    />
+                    <Legend />
+                    <Bar dataKey="total_weight" fill="#42a5f5" name="Poids (kg)" />
+                  </BarChart>
+                </ResponsiveContainer>
+              </ChartSection>
+
+              {/* Pie Chart - Items by Category (Sorties) */}
+              <ChartSection>
+                <ChartTitle>Analyse Détaillée des Sorties - Articles par Catégorie</ChartTitle>
+                <ResponsiveContainer width="100%" height={400}>
+                  <PieChart>
+                    <Pie
+                      data={salesByCategory}
+                      dataKey="total_items"
+                      nameKey="category_name"
+                      cx="50%"
+                      cy="50%"
+                      outerRadius={120}
+                      label
+                    >
+                      {salesByCategory.map((entry, index) => (
+                        <Cell key={`cell-sales-${index}`} fill={COLORS[index % COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip />
+                    <Legend />
+                  </PieChart>
+                </ResponsiveContainer>
+              </ChartSection>
+            </>
+          )}
+
+          {salesByCategory.length === 0 && !loading && (
+            <ChartSection>
+              <ChartTitle>Analyse Détaillée des Sorties</ChartTitle>
+              <p style={{ textAlign: 'center', color: '#6b7280' }}>
+                Aucune donnée de vente par catégorie disponible pour la période sélectionnée
               </p>
             </ChartSection>
           )}

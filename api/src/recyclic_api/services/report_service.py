@@ -192,12 +192,15 @@ def generate_bulk_cash_sessions_excel(
     
     # Charger les relations nécessaires
     session_ids = [s.id for s in sessions]
+    from recyclic_api.models.sale import Sale
+    from recyclic_api.models.sale_item import SaleItem
     sessions_with_relations = db.query(CashSession).filter(
         CashSession.id.in_(session_ids)
     ).options(
         joinedload(CashSession.operator),
         joinedload(CashSession.site),
-        joinedload(CashSession.register)
+        joinedload(CashSession.register),
+        selectinload(CashSession.sales).selectinload(Sale.items)
     ).all()
     
     sessions_map = {s.id: s for s in sessions_with_relations}
@@ -386,6 +389,170 @@ def generate_bulk_cash_sessions_excel(
     ws_details.column_dimensions['O'].width = 12 # Statut
     ws_details.column_dimensions['P'].width = 38 # UUID
     
+    # === ONGLET DÉTAILS TICKETS ===
+    ws_tickets = wb.create_sheet("Détails Tickets")
+    
+    # En-têtes détails tickets
+    ticket_headers = [
+        'Numéro Ticket',
+        'Date Vente',
+        'Catégorie Principale',
+        'Quantité',
+        'Poids (kg)',
+        'Prix Unitaire (€)',
+        'Prix Total (€)'
+    ]
+    ws_tickets.append(ticket_headers)
+    
+    # Appliquer style aux en-têtes
+    for cell in ws_tickets[1]:
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = header_alignment
+        cell.border = border
+    
+    # Créer le mapping des catégories principales
+    # Récupérer toutes les catégories utilisées dans les SaleItem
+    from recyclic_api.models.category import Category
+    from uuid import UUID as UUIDType
+    category_values = set()
+    category_uuids = []
+    category_names = []
+    
+    for session in sessions_with_relations:
+        for sale in session.sales:
+            for item in sale.items:
+                if item.category:
+                    category_values.add(item.category)
+                    # Détecter si c'est un UUID ou un nom
+                    try:
+                        # Essayer de parser comme UUID
+                        uuid_val = UUIDType(item.category)
+                        category_uuids.append(uuid_val)
+                    except (ValueError, TypeError):
+                        # C'est un nom (ex: "EEE-1")
+                        category_names.append(item.category)
+    
+    # Charger les catégories et créer le mapping code → catégorie principale
+    category_main_mapping = {}
+    categories_by_value = {}  # Mapping value (UUID ou name) → Category
+    main_categories_set = set()  # Set des noms de catégories principales
+    
+    if category_values:
+        # Charger les catégories par UUID
+        categories_by_uuid = {}
+        if category_uuids:
+            categories_uuid = db.query(Category).filter(
+                Category.id.in_(category_uuids)
+            ).all()
+            categories_by_uuid = {str(cat.id): cat for cat in categories_uuid}
+            for cat in categories_uuid:
+                categories_by_value[str(cat.id)] = cat
+        
+        # Charger les catégories par name
+        if category_names:
+            categories_name = db.query(Category).filter(
+                Category.name.in_(category_names)
+            ).all()
+            for cat in categories_name:
+                categories_by_value[cat.name] = cat
+        
+        # Charger aussi toutes les catégories principales pour s'assurer qu'elles sont dans le set
+        all_main_categories = db.query(Category).filter(
+            Category.parent_id.is_(None)
+        ).all()
+        for main_cat in all_main_categories:
+            main_categories_set.add(main_cat.name)
+        
+        # Pour chaque catégorie, trouver la catégorie principale (parent_id IS NULL)
+        for value in category_values:
+            cat = None
+            # Chercher par UUID ou par name
+            if value in categories_by_value:
+                cat = categories_by_value[value]
+            else:
+                # Essayer de trouver par UUID si c'est un UUID
+                try:
+                    uuid_val = UUIDType(value)
+                    if str(uuid_val) in categories_by_uuid:
+                        cat = categories_by_uuid[str(uuid_val)]
+                except (ValueError, TypeError):
+                    pass
+            
+            if cat:
+                # Si la catégorie a un parent, remonter jusqu'à la catégorie principale
+                main_category = cat
+                visited = set()  # Éviter les boucles infinies
+                while main_category.parent_id is not None and main_category.id not in visited:
+                    visited.add(main_category.id)
+                    parent = db.query(Category).filter(
+                        Category.id == main_category.parent_id
+                    ).first()
+                    if parent:
+                        main_category = parent
+                    else:
+                        break
+                category_main_mapping[value] = main_category.name
+                # Stocker les catégories principales dans un set
+                if main_category.parent_id is None:
+                    main_categories_set.add(main_category.name)
+    
+    # Parcourir toutes les sessions, ventes et items pour créer les lignes
+    for session in sessions_with_relations:
+        if not session.sales:
+            continue
+        for sale in session.sales:
+            if not sale.items:
+                continue
+            sale_number = str(sale.id)[:8]  # Numéro de ticket (8 premiers caractères de l'UUID)
+            sale_date = _format_date(sale.created_at)
+            
+            for item in sale.items:
+                # Récupérer la catégorie principale (même si l'item a une sous-catégorie)
+                category_code = item.category or ''
+                if not category_code:
+                    continue
+                
+                # Si la catégorie n'est pas dans le mapping, c'est qu'elle n'existe pas en DB
+                # On l'exclut (filtrage strict sur catégories valides)
+                if category_code not in category_main_mapping:
+                    continue
+                
+                # Vérifier que la catégorie existe bien dans categories_by_value
+                if category_code not in categories_by_value:
+                    continue
+                
+                # Utiliser le mapping pour obtenir la catégorie principale
+                # Le mapping remonte automatiquement aux parents si nécessaire
+                main_category_name = category_main_mapping[category_code]
+                
+                # Vérifier que la catégorie principale finale est bien une catégorie principale
+                # (parent_id IS NULL)
+                if main_category_name not in main_categories_set:
+                    # Ce n'est pas une catégorie principale, skip
+                    continue
+                
+                # Inclure l'item avec la catégorie principale
+                row = [
+                    sale_number,
+                    sale_date,
+                    main_category_name,
+                    str(item.quantity),
+                    _format_weight(item.weight),
+                    _format_amount(item.unit_price),
+                    _format_amount(item.total_price)
+                ]
+                ws_tickets.append(row)
+    
+    # Largeurs colonnes détails tickets
+    ws_tickets.column_dimensions['A'].width = 20  # Numéro Ticket
+    ws_tickets.column_dimensions['B'].width = 20  # Date Vente
+    ws_tickets.column_dimensions['C'].width = 30  # Catégorie Principale
+    ws_tickets.column_dimensions['D'].width = 12  # Quantité
+    ws_tickets.column_dimensions['E'].width = 15  # Poids
+    ws_tickets.column_dimensions['F'].width = 18  # Prix Unitaire
+    ws_tickets.column_dimensions['G'].width = 18  # Prix Total
+    
     # Sauvegarder dans le buffer
     wb.save(buffer)
     buffer.seek(0)
@@ -481,7 +648,8 @@ def generate_bulk_reception_tickets_csv(
     
     # Écrire les données - une ligne par ligne de dépôt
     for ticket in tickets_with_details:
-        total_lignes, total_poids = service._calculate_ticket_totals(ticket)
+        # B50-P2: _calculate_ticket_totals retourne 5 valeurs (total_lignes, total_poids, poids_entree, poids_direct, poids_sortie)
+        total_lignes, total_poids, _, _, _ = service._calculate_ticket_totals(ticket)
         
         benevole_name = ''
         if ticket.benevole:
@@ -632,7 +800,8 @@ def generate_bulk_reception_tickets_excel(
     total_poids = 0.0
     
     for ticket in tickets:
-        nb_lignes, poids = service._calculate_ticket_totals(ticket)
+        # B50-P2: _calculate_ticket_totals retourne 5 valeurs (total_lignes, total_poids, poids_entree, poids_direct, poids_sortie)
+        nb_lignes, poids, _, _, _ = service._calculate_ticket_totals(ticket)
         
         benevole_name = ''
         if ticket.benevole:
@@ -723,7 +892,8 @@ def generate_bulk_reception_tickets_excel(
     
     # Données détails - une ligne par ligne de dépôt
     for ticket in tickets_with_details:
-        total_lignes, total_poids = service._calculate_ticket_totals(ticket)
+        # B50-P2: _calculate_ticket_totals retourne 5 valeurs (total_lignes, total_poids, poids_entree, poids_direct, poids_sortie)
+        total_lignes, total_poids, _, _, _ = service._calculate_ticket_totals(ticket)
         
         benevole_name = ''
         if ticket.benevole:

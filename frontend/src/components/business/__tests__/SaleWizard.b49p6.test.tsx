@@ -6,13 +6,30 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { act } from 'react';
 import SaleWizard from '../SaleWizard';
 import { useCashWizardStepState } from '../../../hooks/useCashWizardStepState';
-import { useCashSessionStore } from '../../../stores/cashSessionStore';
 import { useCategoryStore } from '../../../stores/categoryStore';
 import { usePresetStore } from '../../../stores/presetStore';
 
+// B50-P10: Mock configurable pour useCashStores
+let mockCashSessionStoreState = {
+  currentRegisterOptions: null as Record<string, any> | null,
+  currentSaleItems: [] as any[],
+  currentSession: null,
+  loading: false,
+  error: null
+};
+
+vi.mock('../../../providers/CashStoreProvider', () => ({
+  useCashStores: () => ({
+    cashSessionStore: mockCashSessionStoreState,
+    categoryStore: {},
+    presetStore: {},
+    isVirtualMode: false,
+    isDeferredMode: false
+  })
+}));
+
 // Mocks
 vi.mock('../../../hooks/useCashWizardStepState');
-vi.mock('../../../stores/cashSessionStore');
 vi.mock('../../../stores/categoryStore');
 vi.mock('../../../stores/presetStore');
 vi.mock('../../../utils/features', () => ({
@@ -20,7 +37,6 @@ vi.mock('../../../utils/features', () => ({
 }));
 
 const mockUseCashWizardStepState = vi.mocked(useCashWizardStepState);
-const mockUseCashSessionStore = vi.mocked(useCashSessionStore);
 const mockUseCategoryStore = vi.mocked(useCategoryStore);
 const mockUsePresetStore = vi.mocked(usePresetStore);
 
@@ -46,6 +62,15 @@ describe('SaleWizard - B49-P6 Logique Presets Recyclage/Déchèterie', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    
+    // Reset mock state
+    mockCashSessionStoreState = {
+      currentRegisterOptions: null,
+      currentSaleItems: [],
+      currentSession: null,
+      loading: false,
+      error: null
+    };
     
     mockUseCashWizardStepState.mockReturnValue({
       stepState: {
@@ -79,20 +104,17 @@ describe('SaleWizard - B49-P6 Logique Presets Recyclage/Déchèterie', () => {
       notes: '',
       clearSelection: vi.fn(),
       setNotes: vi.fn(),
-      presets: []
+      presets: [],
+      activePresets: [],
+      loading: false,
+      error: null,
+      fetchPresets: vi.fn(),
+      selectPreset: vi.fn()
     });
-
-    mockUseCashSessionStore.mockReturnValue({
-      currentRegisterOptions: null,
-      currentSaleItems: [] // Par défaut, aucun item
-    } as any);
   });
 
   it('affiche tous les presets sur le premier article (currentSaleItems.length === 0)', async () => {
-    mockUseCashSessionStore.mockReturnValue({
-      currentRegisterOptions: null,
-      currentSaleItems: [] // Premier article
-    } as any);
+    mockCashSessionStoreState.currentSaleItems = []; // Premier article
 
     await act(async () => {
       render(
@@ -115,12 +137,9 @@ describe('SaleWizard - B49-P6 Logique Presets Recyclage/Déchèterie', () => {
   });
 
   it('affiche les presets filtrés (Don/Don-18) à partir du 2ème article si premier article normal', async () => {
-    mockUseCashSessionStore.mockReturnValue({
-      currentRegisterOptions: null,
-      currentSaleItems: [
-        { id: '1', category: 'cat1', quantity: 1, weight: 2.5, price: 10, total: 10, presetId: undefined }
-      ] // Au moins un item déjà ajouté, sans preset recyclage/déchèterie
-    } as any);
+    mockCashSessionStoreState.currentSaleItems = [
+      { id: '1', category: 'cat1', quantity: 1, weight: 2.5, price: 10, total: 10, presetId: undefined }
+    ]; // Au moins un item déjà ajouté, sans preset recyclage/déchèterie
 
     await act(async () => {
       render(
@@ -137,12 +156,9 @@ describe('SaleWizard - B49-P6 Logique Presets Recyclage/Déchèterie', () => {
   });
 
   it('affiche les presets filtrés (Recyclage/Déchèterie) à partir du 2ème article si premier article recyclage', async () => {
-    mockUseCashSessionStore.mockReturnValue({
-      currentRegisterOptions: null,
-      currentSaleItems: [
-        { id: '1', category: 'cat1', quantity: 1, weight: 2.5, price: 0, total: 0, presetId: 'recyclage' }
-      ] // Au moins un item déjà ajouté, avec preset recyclage
-    } as any);
+    mockCashSessionStoreState.currentSaleItems = [
+      { id: '1', category: 'cat1', quantity: 1, weight: 2.5, price: 0, total: 0, presetId: 'recyclage' }
+    ]; // Au moins un item déjà ajouté, avec preset recyclage
 
     await act(async () => {
       render(
@@ -159,12 +175,9 @@ describe('SaleWizard - B49-P6 Logique Presets Recyclage/Déchèterie', () => {
   });
 
   it('détecte correctement le type de ticket recyclage/déchèterie', async () => {
-    mockUseCashSessionStore.mockReturnValue({
-      currentRegisterOptions: null,
-      currentSaleItems: [
-        { id: '1', category: 'cat1', quantity: 1, weight: 2.5, price: 0, total: 0, presetId: 'recyclage' }
-      ]
-    } as any);
+    mockCashSessionStoreState.currentSaleItems = [
+      { id: '1', category: 'cat1', quantity: 1, weight: 2.5, price: 0, total: 0, presetId: 'recyclage' }
+    ];
 
     await act(async () => {
       render(
@@ -181,12 +194,9 @@ describe('SaleWizard - B49-P6 Logique Presets Recyclage/Déchèterie', () => {
   });
 
   it('détecte correctement le type de ticket normal (non recyclage)', async () => {
-    mockUseCashSessionStore.mockReturnValue({
-      currentRegisterOptions: null,
-      currentSaleItems: [
-        { id: '1', category: 'cat1', quantity: 1, weight: 2.5, price: 10, total: 10, presetId: undefined }
-      ]
-    } as any);
+    mockCashSessionStoreState.currentSaleItems = [
+      { id: '1', category: 'cat1', quantity: 1, weight: 2.5, price: 10, total: 10, presetId: undefined }
+    ];
 
     await act(async () => {
       render(
@@ -201,4 +211,3 @@ describe('SaleWizard - B49-P6 Logique Presets Recyclage/Déchèterie', () => {
     // isRecyclingTicket devrait être false
   });
 });
-

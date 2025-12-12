@@ -175,10 +175,22 @@ class CashSession(Base):
         self.status = CashSessionStatus.CLOSED
         self.closed_at = datetime.now(timezone.utc)
 
-    def close_with_amounts(self, actual_amount: float, variance_comment: str = None):
-        """Ferme la session avec contrôle des montants."""
-        # Calculer le montant théorique (fond initial + ventes)
-        self.closing_amount = self.initial_amount + (self.total_sales or 0)
+    def close_with_amounts(self, actual_amount: float, variance_comment: str = None, theoretical_amount: float = None):
+        """Ferme la session avec contrôle des montants.
+        
+        Args:
+            actual_amount: Montant physique compté
+            variance_comment: Commentaire sur l'écart (optionnel)
+            theoretical_amount: Montant théorique calculé (optionnel, sinon calculé automatiquement)
+        """
+        # B50-P10: Utiliser le montant théorique fourni, sinon calculer (fond initial + ventes)
+        # Note: Le montant théorique devrait inclure les dons, mais on ne peut pas les calculer ici
+        # car on n'a pas accès à la base de données. Le service doit fournir theoretical_amount.
+        if theoretical_amount is not None:
+            self.closing_amount = theoretical_amount
+        else:
+            # Fallback: calculer sans les dons (pour compatibilité)
+            self.closing_amount = self.initial_amount + (self.total_sales or 0)
         
         # Enregistrer le montant physique compté
         self.actual_amount = actual_amount

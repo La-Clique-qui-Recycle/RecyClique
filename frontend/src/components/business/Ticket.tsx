@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import styled from 'styled-components';
 import { Edit, Trash2, StickyNote } from 'lucide-react';
-import { SaleItem, useCashSessionStore } from '../../stores/cashSessionStore';
+import { SaleItem } from '../../stores/interfaces/ICashSessionStore';
+import { useCashStores } from '../../providers/CashStoreProvider';
 import { useCategoryStore } from '../../stores/categoryStore';
 import { usePresetStore } from '../../stores/presetStore';
 import PresetButtonGrid from '../presets/PresetButtonGrid';
@@ -281,7 +282,8 @@ const Ticket: React.FC<TicketProps> = ({
 }) => {
   const { getCategoryById, fetchCategories } = useCategoryStore();
   const { selectedPreset, notes, setNotes, presets } = usePresetStore();
-  const { currentRegisterOptions } = useCashSessionStore();
+  const { cashSessionStore } = useCashStores();  // B50-P10: Utiliser le store injecté
+  const { currentRegisterOptions } = cashSessionStore;
   const { stepState } = useCashWizardStepState();  // Story B49-P2: Pour détecter l'onglet Catégorie actif
   
   // Story B49-P2: Détecter si le mode prix global est activé
