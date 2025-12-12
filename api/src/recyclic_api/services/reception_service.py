@@ -398,8 +398,27 @@ class ReceptionService:
         """
         Calculer le nombre de lignes et les poids par flux d'un ticket.
         
+        B50-P2: Cette fonction retourne TOUJOURS 5 valeurs. Tous les appels doivent déballer
+        les 5 valeurs correctement pour éviter les erreurs "ValueError: too many values to unpack".
+        
+        Args:
+            ticket: TicketDepot pour lequel calculer les totaux
+            
         Returns:
-            (total_lignes, total_poids, poids_entree, poids_direct, poids_sortie)
+            Tuple de 5 valeurs :
+            - total_lignes (int): Nombre total de lignes de dépôt
+            - total_poids (Decimal): Poids total de toutes les lignes (kg)
+            - poids_entree (Decimal): Poids des lignes avec destination=MAGASIN et is_exit=False (kg)
+            - poids_direct (Decimal): Poids des lignes avec destination IN (RECYCLAGE, DECHETERIE) et is_exit=False (kg)
+            - poids_sortie (Decimal): Poids des lignes avec is_exit=True (kg)
+            
+        Note:
+            total_poids = poids_entree + poids_direct + poids_sortie
+            
+        Example:
+            >>> service = ReceptionService(db)
+            >>> totals = service._calculate_ticket_totals(ticket)
+            >>> total_lignes, total_poids, poids_entree, poids_direct, poids_sortie = totals
         """
         total_lignes = len(ticket.lignes)
         total_poids = Decimal(0)

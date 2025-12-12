@@ -15,6 +15,7 @@ export interface CashSession {
   closed_at?: string;
   total_sales?: number;
   total_items?: number;
+  total_donations?: number;  // B50-P10: Total des dons pour le calcul du montant théorique
 }
 
 export interface SaleItem {
@@ -96,7 +97,7 @@ interface DeferredCashSessionState {
   updateSaleItem: (itemId: string, newQuantity: number, newWeight: number, newPrice: number, presetId?: string, notes?: string) => void;
   setCurrentSaleNote: (note: string | null) => void;
   clearCurrentSale: () => void;
-  submitSale: (items: SaleItem[], finalization?: { donation: number; paymentMethod: 'cash'|'card'|'check'; cashGiven?: number; change?: number; note?: string; }) => Promise<boolean>;
+  submitSale: (items: SaleItem[], finalization?: { donation: number; paymentMethod: 'cash'|'card'|'check'; cashGiven?: number; change?: number; note?: string; overrideTotalAmount?: number; }) => Promise<boolean>;
 
   // Scroll actions
   setScrollPosition: (scrollTop: number) => void;
@@ -239,7 +240,7 @@ export const useDeferredCashSessionStore = create<DeferredCashSessionState>()(
           });
         },
 
-        submitSale: async (items: SaleItem[], finalization?: { donation: number; paymentMethod: 'cash'|'card'|'check'; cashGiven?: number; change?: number; note?: string; }): Promise<boolean> => {
+        submitSale: async (items: SaleItem[], finalization?: { donation: number; paymentMethod: 'cash'|'card'|'check'; cashGiven?: number; change?: number; note?: string; overrideTotalAmount?: number; }): Promise<boolean> => {
           const { currentSession } = get();
 
           if (!currentSession) {
@@ -257,6 +258,12 @@ export const useDeferredCashSessionStore = create<DeferredCashSessionState>()(
               const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
               return uuidRegex.test(str);
             };
+
+            // Story B50-P9: Utiliser overrideTotalAmount si fourni, sinon calcul automatique
+            const calculatedTotal = items.reduce((sum, item) => sum + item.total, 0);
+            const finalTotalAmount = finalization?.overrideTotalAmount !== undefined 
+              ? finalization.overrideTotalAmount 
+              : calculatedTotal;
 
             const saleData: SaleCreate = {
               cash_session_id: currentSession.id,
@@ -279,7 +286,7 @@ export const useDeferredCashSessionStore = create<DeferredCashSessionState>()(
                   notes: notes
                 };
               }),
-              total_amount: items.reduce((sum, item) => sum + item.total, 0)
+              total_amount: finalTotalAmount  // Story B50-P9: Utiliser overrideTotalAmount si fourni
             };
 
             const { currentSaleNote } = get();
@@ -293,12 +300,64 @@ export const useDeferredCashSessionStore = create<DeferredCashSessionState>()(
             // Call API to create sale using axiosClient (handles auth automatically)
             const response = await axiosClient.post('/v1/sales/', extendedPayload);
 
-            // Clear current sale on success
-            set({
-              currentSaleItems: [],
-              currentSaleNote: null,
-              loading: false
-            });
+            // B50-P10: Mettre à jour la session locale avec les nouvelles stats
+            // IMPORTANT: Le serveur calcule total_sales via SUM(Sale.total_amount) depuis toutes les ventes
+            // Pour les bénévoles qui ne peuvent pas récupérer la session (403), on met à jour localement
+            // mais les valeurs peuvent diverger si overrideTotalAmount a été utilisé ou s'il y a des arrondis
+            const { currentSession: updatedSession } = get();
+            if (updatedSession) {
+              // B50-P10: S'assurer que les valeurs sont des nombres et arrondir à 2 décimales
+              const currentTotalSales = Number(updatedSession.total_sales) || 0;
+              const currentTotalItems = Number(updatedSession.total_items) || 0;
+              const currentAmount = Number(updatedSession.current_amount) || Number(updatedSession.initial_amount) || 0;
+              
+              // B50-P10: Utiliser le total_amount de la vente créée (peut être différent de finalTotalAmount si overrideTotalAmount)
+              // Le serveur utilise ce montant pour calculer total_sales, donc on doit l'utiliser aussi
+              const saleTotalAmount = response.data?.total_amount || finalTotalAmount;
+              const saleDonation = response.data?.donation || finalization?.donation || 0;
+              
+              const newTotalSales = Math.round((currentTotalSales + saleTotalAmount) * 100) / 100;
+              const newTotalItems = currentTotalItems + items.reduce((sum, item) => sum + item.quantity, 0);
+              const newCurrentAmount = Math.round((currentAmount + saleTotalAmount) * 100) / 100;
+              
+              // B50-P10: Calculer le total des dons (pour le calcul du montant théorique)
+              const currentTotalDonations = Number(updatedSession.total_donations) || 0;
+              const newTotalDonations = Math.round((currentTotalDonations + saleDonation) * 100) / 100;
+              
+              // B50-P10: Logs de debug pour diagnostiquer les divergences
+              if (Math.abs(saleTotalAmount - finalTotalAmount) > 0.01) {
+                console.warn('[submitSale] Écart entre finalTotalAmount et saleTotalAmount:', {
+                  finalTotalAmount,
+                  saleTotalAmount,
+                  difference: saleTotalAmount - finalTotalAmount
+                });
+              }
+              
+              const updatedSessionData = {
+                ...updatedSession,
+                total_sales: newTotalSales,
+                total_items: newTotalItems,
+                current_amount: newCurrentAmount,
+                total_donations: newTotalDonations  // B50-P10: Stocker les dons pour le calcul du montant théorique
+              };
+              
+              set({
+                currentSession: updatedSessionData,
+                currentSaleItems: [],
+                currentSaleNote: null,
+                loading: false
+              });
+              
+              // Mettre à jour le localStorage pour que fetchCurrentSession récupère les bonnes valeurs
+              localStorage.setItem('deferredCashSession', JSON.stringify(updatedSessionData));
+            } else {
+              // Clear current sale on success
+              set({
+                currentSaleItems: [],
+                currentSaleNote: null,
+                loading: false
+              });
+            }
 
             return true;
           } catch (error: any) {
@@ -424,14 +483,20 @@ export const useDeferredCashSessionStore = create<DeferredCashSessionState>()(
 
             console.log('[openSession] Session created:', session);
             
+            // B50-P10: S'assurer que total_donations est initialisé à 0 pour une nouvelle session
+            const sessionWithDonations = {
+              ...session,
+              total_donations: 0
+            };
+            
             set({ 
-              currentSession: session,
+              currentSession: sessionWithDonations,
               currentRegisterOptions: registerOptions,  // B49-P3: Stocker les options héritées
               loading: false 
             });
             
             // B44-P1: Utiliser une clé localStorage différente pour éviter le mélange avec les sessions normales
-            localStorage.setItem('deferredCashSession', JSON.stringify(session));
+            localStorage.setItem('deferredCashSession', JSON.stringify(sessionWithDonations));
             
             return session;
           } catch (error: any) {
@@ -484,8 +549,28 @@ export const useDeferredCashSessionStore = create<DeferredCashSessionState>()(
             }
             
             return success;
-          } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : 'Erreur lors de la fermeture de session';
+          } catch (error: any) {
+            // Story B50-P9 QA: Amélioration gestion d'erreurs avec détails
+            let errorMessage = 'Erreur lors de la fermeture de session';
+            
+            if (error?.response?.data?.detail) {
+              const detail = error.response.data.detail;
+              if (Array.isArray(detail)) {
+                errorMessage = detail.map((e: any) => e.msg || e.message || JSON.stringify(e)).join(', ');
+              } else if (typeof detail === 'string') {
+                errorMessage = detail;
+              }
+            } else if (error instanceof Error) {
+              errorMessage = error.message;
+            }
+            
+            console.error('[closeSession] Erreur détaillée:', {
+              message: errorMessage,
+              sessionId,
+              closeData,
+              originalError: error
+            });
+            
             set({ error: errorMessage, loading: false });
             return false;
           }
@@ -501,13 +586,20 @@ export const useDeferredCashSessionStore = create<DeferredCashSessionState>()(
               const { currentSession } = get();
               
               if (currentSession && currentSession.id === sessionId) {
+                // B50-P10: Préserver total_donations du localStorage si la session serveur ne l'a pas
+                const localTotalDonations = currentSession.total_donations || 0;
+                const updatedSessionWithDonations = {
+                  ...updatedSession,
+                  total_donations: localTotalDonations  // Préserver les dons du localStorage
+                };
+                
                 set({ 
-                  currentSession: updatedSession, 
+                  currentSession: updatedSessionWithDonations, 
                   loading: false 
                 });
                 
                 // B44-P1: Utiliser la clé localStorage spécifique au mode différé
-                localStorage.setItem('deferredCashSession', JSON.stringify(updatedSession));
+                localStorage.setItem('deferredCashSession', JSON.stringify(updatedSessionWithDonations));
               }
             }
             
@@ -548,23 +640,108 @@ export const useDeferredCashSessionStore = create<DeferredCashSessionState>()(
                 return;
               }
               
-              const serverSession = await cashSessionService.getSession(session.id);
-              if (serverSession && serverSession.status === 'open') {
-                // B44-P1: Vérifier que c'est bien une session différée (opened_at dans le passé)
-                const openedAtDate = new Date(serverSession.opened_at);
-                const now = new Date();
-                if (openedAtDate < now) {
-                  set({ currentSession: serverSession, loading: false, openedAt: serverSession.opened_at });
+              try {
+                const serverSession = await cashSessionService.getSession(session.id);
+                if (serverSession && serverSession.status === 'open') {
+                  // B44-P1: Vérifier que c'est bien une session différée (opened_at dans le passé)
+                  const openedAtDate = new Date(serverSession.opened_at);
+                  const now = new Date();
+                  if (openedAtDate < now) {
+                    // B50-P10: Charger les options de workflow depuis la caisse source
+                    let registerOptions: Record<string, any> | null = null;
+                    if (serverSession.register_id) {
+                      try {
+                        const register = await getCashRegister(serverSession.register_id);
+                        if (register?.workflow_options) {
+                          registerOptions = register.workflow_options;
+                          console.log('[fetchCurrentSession] Options héritées de la caisse source:', registerOptions);
+                        }
+                      } catch (error) {
+                        console.warn('[fetchCurrentSession] Impossible de charger les options de la caisse source:', error);
+                      }
+                    }
+                    
+                    // B50-P10: Préserver total_donations du localStorage si la session serveur ne l'a pas
+                    const localTotalDonations = session.total_donations || 0;
+                    const serverSessionWithDonations = {
+                      ...serverSession,
+                      total_donations: localTotalDonations  // Préserver les dons du localStorage
+                    };
+                    
+                    set({ 
+                      currentSession: serverSessionWithDonations, 
+                      loading: false, 
+                      openedAt: serverSession.opened_at,
+                      currentRegisterOptions: registerOptions  // B50-P10: Charger les options de workflow
+                    });
+                    // Mettre à jour le localStorage avec la session serveur (en préservant total_donations)
+                    localStorage.setItem('deferredCashSession', JSON.stringify(serverSessionWithDonations));
+                    return;
+                  } else {
+                    // Session normale trouvée, ne pas l'utiliser en mode différé
+                    console.warn('[fetchCurrentSession] Session normale trouvée, nettoyage localStorage');
+                    localStorage.removeItem('deferredCashSession');
+                  }
+                }
+                // B50-P10: Si l'appel API retourne null (erreur 403/404) ou session fermée, utiliser la session locale
+                // Cela permet aux bénévoles de fermer leur session même sans permission API
+                console.log('[fetchCurrentSession] Appel API échoué ou session non trouvée, utilisation de la session locale');
+                if (session.status === 'open') {
+                  // B50-P10: Charger les options de workflow depuis la caisse source (peut échouer pour bénévoles)
+                  let registerOptions: Record<string, any> | null = null;
+                  if (session.register_id) {
+                    try {
+                      const register = await getCashRegister(session.register_id);
+                      if (register?.workflow_options) {
+                        registerOptions = register.workflow_options;
+                        console.log('[fetchCurrentSession] Options héritées de la caisse source (fallback):', registerOptions);
+                      }
+                    } catch (error) {
+                      console.warn('[fetchCurrentSession] Impossible de charger les options de la caisse source (fallback):', error);
+                    }
+                  }
+                  
+                  set({ 
+                    currentSession: session, 
+                    loading: false, 
+                    openedAt: session.opened_at,
+                    currentRegisterOptions: registerOptions  // B50-P10: Charger les options de workflow
+                  });
                   return;
                 } else {
-                  // Session normale trouvée, ne pas l'utiliser en mode différé
-                  console.warn('[fetchCurrentSession] Session normale trouvée, nettoyage localStorage');
+                  console.warn('[fetchCurrentSession] Session locale fermée, nettoyage localStorage');
                   localStorage.removeItem('deferredCashSession');
                 }
-              } else {
-                // Session fermée sur le serveur ou inexistante
-                console.warn('[fetchCurrentSession] Session fermée ou inexistante sur le serveur, nettoyage localStorage');
-                localStorage.removeItem('deferredCashSession');
+              } catch (apiError: any) {
+                // B50-P10: Si l'appel API échoue (403 Forbidden pour bénévoles), utiliser la session locale
+                console.warn('[fetchCurrentSession] Erreur API (probablement 403 pour bénévoles), utilisation de la session locale:', apiError?.response?.status || apiError?.message);
+                if (session.status === 'open') {
+                  // B50-P10: Charger les options de workflow depuis la caisse source (peut échouer pour bénévoles)
+                  let registerOptions: Record<string, any> | null = null;
+                  if (session.register_id) {
+                    try {
+                      const register = await getCashRegister(session.register_id);
+                      if (register?.workflow_options) {
+                        registerOptions = register.workflow_options;
+                        console.log('[fetchCurrentSession] Options héritées de la caisse source (fallback après erreur):', registerOptions);
+                      }
+                    } catch (error) {
+                      console.warn('[fetchCurrentSession] Impossible de charger les options de la caisse source (fallback après erreur):', error);
+                    }
+                  }
+                  
+                  console.log('[fetchCurrentSession] Utilisation de la session locale en fallback après erreur API');
+                  set({ 
+                    currentSession: session, 
+                    loading: false, 
+                    openedAt: session.opened_at,
+                    currentRegisterOptions: registerOptions  // B50-P10: Charger les options de workflow
+                  });
+                  return;
+                } else {
+                  console.warn('[fetchCurrentSession] Session locale fermée après erreur API, nettoyage localStorage');
+                  localStorage.removeItem('deferredCashSession');
+                }
               }
             }
             
@@ -578,23 +755,59 @@ export const useDeferredCashSessionStore = create<DeferredCashSessionState>()(
         },
 
         refreshSession: async (): Promise<void> => {
-          const { currentSession } = get();
-          if (currentSession) {
+          // Story B50-P9: Toujours appeler fetchCurrentSession, même si currentSession est null
+          // Sinon l'écran de fermeture ne peut pas charger la session différée
+          try {
             await get().fetchCurrentSession();
+          } catch (error) {
+            // Story B50-P9 QA: Amélioration gestion d'erreurs
+            const errorMessage = error instanceof Error ? error.message : 'Erreur lors du rafraîchissement de la session';
+            console.error('[refreshSession] Erreur:', errorMessage);
+            set({ error: errorMessage, loading: false });
           }
         },
 
         resumeSession: async (sessionId: string): Promise<boolean> => {
           set({ loading: true, error: null });
           try {
+            // B50-P10: Vérifier d'abord si on a une session locale avec total_donations
+            const localSessionStr = localStorage.getItem('deferredCashSession');
+            const localSession = localSessionStr ? JSON.parse(localSessionStr) : null;
+            const localTotalDonations = localSession?.total_donations || 0;
+            
             const session = await cashSessionService.getSession(sessionId);
             if (session && session.status === 'open') {
               // B44-P1: Vérifier que c'est bien une session différée (opened_at dans le passé)
               const openedAtDate = new Date(session.opened_at);
               const now = new Date();
               if (openedAtDate < now) {
-                set({ currentSession: session, loading: false, openedAt: session.opened_at });
-                localStorage.setItem('deferredCashSession', JSON.stringify(session));
+                // B50-P10: Charger les options de workflow depuis la caisse source
+                let registerOptions: Record<string, any> | null = null;
+                if (session.register_id) {
+                  try {
+                    const register = await getCashRegister(session.register_id);
+                    if (register?.workflow_options) {
+                      registerOptions = register.workflow_options;
+                      console.log('[DeferredCashStore] Options héritées de la caisse source lors de la reprise:', registerOptions);
+                    }
+                  } catch (error) {
+                    console.warn('[DeferredCashStore] Impossible de charger les options de la caisse source lors de la reprise:', error);
+                  }
+                }
+                
+                // B50-P10: Préserver total_donations du localStorage si la session serveur ne l'a pas
+                const sessionWithDonations = {
+                  ...session,
+                  total_donations: localTotalDonations  // Préserver les dons du localStorage
+                };
+                
+                set({ 
+                  currentSession: sessionWithDonations, 
+                  loading: false, 
+                  openedAt: session.opened_at,
+                  currentRegisterOptions: registerOptions  // B50-P10: Charger les options de workflow
+                });
+                localStorage.setItem('deferredCashSession', JSON.stringify(sessionWithDonations));
                 return true;
               } else {
                 // Session normale, ne pas l'utiliser en mode différé

@@ -6,13 +6,30 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { act } from 'react';
 import SaleWizard from '../SaleWizard';
 import { useCashWizardStepState } from '../../../hooks/useCashWizardStepState';
-import { useCashSessionStore } from '../../../stores/cashSessionStore';
 import { useCategoryStore } from '../../../stores/categoryStore';
 import { usePresetStore } from '../../../stores/presetStore';
 
+// B50-P10: Mock configurable pour useCashStores
+let mockCashSessionStoreState = {
+  currentRegisterOptions: null as Record<string, any> | null,
+  currentSaleItems: [] as any[],
+  currentSession: null,
+  loading: false,
+  error: null
+};
+
+vi.mock('../../../providers/CashStoreProvider', () => ({
+  useCashStores: () => ({
+    cashSessionStore: mockCashSessionStoreState,
+    categoryStore: {},
+    presetStore: {},
+    isVirtualMode: false,
+    isDeferredMode: false
+  })
+}));
+
 // Mocks
 vi.mock('../../../hooks/useCashWizardStepState');
-vi.mock('../../../stores/cashSessionStore');
 vi.mock('../../../stores/categoryStore');
 vi.mock('../../../stores/presetStore');
 vi.mock('../../../utils/features', () => ({
@@ -20,7 +37,6 @@ vi.mock('../../../utils/features', () => ({
 }));
 
 const mockUseCashWizardStepState = vi.mocked(useCashWizardStepState);
-const mockUseCashSessionStore = vi.mocked(useCashSessionStore);
 const mockUseCategoryStore = vi.mocked(useCategoryStore);
 const mockUsePresetStore = vi.mocked(usePresetStore);
 
@@ -46,6 +62,15 @@ describe('SaleWizard - B49-P2 Mode Prix Global', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    
+    // Reset mock state
+    mockCashSessionStoreState = {
+      currentRegisterOptions: null,
+      currentSaleItems: [],
+      currentSession: null,
+      loading: false,
+      error: null
+    };
     
     mockUseCashWizardStepState.mockReturnValue({
       stepState: {
@@ -79,18 +104,21 @@ describe('SaleWizard - B49-P2 Mode Prix Global', () => {
       notes: '',
       clearSelection: vi.fn(),
       setNotes: vi.fn(),
-      presets: []
+      presets: [],
+      activePresets: [],
+      loading: false,
+      error: null,
+      fetchPresets: vi.fn(),
+      selectPreset: vi.fn()
     });
   });
 
   it('masque l\'onglet Quantité quand mode prix global activé', () => {
-    mockUseCashSessionStore.mockReturnValue({
-      currentRegisterOptions: {
-        features: {
-          no_item_pricing: { enabled: true }
-        }
+    mockCashSessionStoreState.currentRegisterOptions = {
+      features: {
+        no_item_pricing: { enabled: true }
       }
-    } as any);
+    };
 
     render(
       <SaleWizard
@@ -106,11 +134,9 @@ describe('SaleWizard - B49-P2 Mode Prix Global', () => {
   });
 
   it('affiche l\'onglet Quantité quand mode prix global désactivé', () => {
-    mockUseCashSessionStore.mockReturnValue({
-      currentRegisterOptions: {
-        features: {}
-      }
-    } as any);
+    mockCashSessionStoreState.currentRegisterOptions = {
+      features: {}
+    };
 
     render(
       <SaleWizard
@@ -126,13 +152,11 @@ describe('SaleWizard - B49-P2 Mode Prix Global', () => {
   });
 
   it('accepte prix 0€ en mode prix global', () => {
-    mockUseCashSessionStore.mockReturnValue({
-      currentRegisterOptions: {
-        features: {
-          no_item_pricing: { enabled: true }
-        }
+    mockCashSessionStoreState.currentRegisterOptions = {
+      features: {
+        no_item_pricing: { enabled: true }
       }
-    } as any);
+    };
 
     mockUseCashWizardStepState.mockReturnValue({
       stepState: {
@@ -174,13 +198,11 @@ describe('SaleWizard - B49-P2 Mode Prix Global', () => {
   });
 
   it('comportement prix dynamique: saute quantité et va directement au prix en mode prix global', () => {
-    mockUseCashSessionStore.mockReturnValue({
-      currentRegisterOptions: {
-        features: {
-          no_item_pricing: { enabled: true }
-        }
+    mockCashSessionStoreState.currentRegisterOptions = {
+      features: {
+        no_item_pricing: { enabled: true }
       }
-    } as any);
+    };
 
     const mockTransitionToStep = vi.fn();
     mockUseCashWizardStepState.mockReturnValue({
@@ -224,13 +246,11 @@ describe('SaleWizard - B49-P2 Mode Prix Global', () => {
   });
 
   it('comportement prix dynamique: prix peut être modifié librement en mode prix global', () => {
-    mockUseCashSessionStore.mockReturnValue({
-      currentRegisterOptions: {
-        features: {
-          no_item_pricing: { enabled: true }
-        }
+    mockCashSessionStoreState.currentRegisterOptions = {
+      features: {
+        no_item_pricing: { enabled: true }
       }
-    } as any);
+    };
 
     const mockSetPriceValue = vi.fn();
     const numpadWithPriceCallback = {
@@ -273,5 +293,3 @@ describe('SaleWizard - B49-P2 Mode Prix Global', () => {
     expect(numpadWithPriceCallback.priceValue).toBe('15.50');
   });
 });
-
-

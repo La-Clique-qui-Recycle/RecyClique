@@ -5,16 +5,32 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { act } from 'react';
 import FinalizationScreen from '../FinalizationScreen';
-import { useCashSessionStore } from '../../../stores/cashSessionStore';
 import { useFeatureFlag } from '../../../utils/features';
 
+// B50-P10: Mock configurable pour useCashStores
+let mockCashSessionStoreState = {
+  currentRegisterOptions: null as Record<string, any> | null,
+  currentSaleItems: [] as any[],
+  currentSession: null,
+  loading: false,
+  error: null
+};
+
+vi.mock('../../../providers/CashStoreProvider', () => ({
+  useCashStores: () => ({
+    cashSessionStore: mockCashSessionStoreState,
+    categoryStore: {},
+    presetStore: {},
+    isVirtualMode: false,
+    isDeferredMode: false
+  })
+}));
+
 // Mocks
-vi.mock('../../../stores/cashSessionStore');
 vi.mock('../../../utils/features', () => ({
   useFeatureFlag: vi.fn(() => false)
 }));
 
-const mockUseCashSessionStore = vi.mocked(useCashSessionStore);
 const mockUseFeatureFlag = vi.mocked(useFeatureFlag);
 
 describe('FinalizationScreen - B49-P2 Mode Prix Global', () => {
@@ -29,16 +45,23 @@ describe('FinalizationScreen - B49-P2 Mode Prix Global', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockUseFeatureFlag.mockReturnValue(false);
+    
+    // Reset mock state
+    mockCashSessionStoreState = {
+      currentRegisterOptions: null,
+      currentSaleItems: [],
+      currentSession: null,
+      loading: false,
+      error: null
+    };
   });
 
   it('affiche le champ "Total à payer" en mode prix global', () => {
-    mockUseCashSessionStore.mockReturnValue({
-      currentRegisterOptions: {
-        features: {
-          no_item_pricing: { enabled: true }
-        }
+    mockCashSessionStoreState.currentRegisterOptions = {
+      features: {
+        no_item_pricing: { enabled: true }
       }
-    } as any);
+    };
 
     render(
       <FinalizationScreen
@@ -55,13 +78,11 @@ describe('FinalizationScreen - B49-P2 Mode Prix Global', () => {
   });
 
   it('affiche le sous-total si au moins un item a un prix >0', () => {
-    mockUseCashSessionStore.mockReturnValue({
-      currentRegisterOptions: {
-        features: {
-          no_item_pricing: { enabled: true }
-        }
+    mockCashSessionStoreState.currentRegisterOptions = {
+      features: {
+        no_item_pricing: { enabled: true }
       }
-    } as any);
+    };
 
     render(
       <FinalizationScreen
@@ -79,13 +100,11 @@ describe('FinalizationScreen - B49-P2 Mode Prix Global', () => {
   });
 
   it('valide que le total ne peut pas être inférieur au sous-total', async () => {
-    mockUseCashSessionStore.mockReturnValue({
-      currentRegisterOptions: {
-        features: {
-          no_item_pricing: { enabled: true }
-        }
+    mockCashSessionStoreState.currentRegisterOptions = {
+      features: {
+        no_item_pricing: { enabled: true }
       }
-    } as any);
+    };
 
     render(
       <FinalizationScreen
@@ -109,13 +128,11 @@ describe('FinalizationScreen - B49-P2 Mode Prix Global', () => {
   });
 
   it('ferme la popup avec Escape', async () => {
-    mockUseCashSessionStore.mockReturnValue({
-      currentRegisterOptions: {
-        features: {
-          no_item_pricing: { enabled: true }
-        }
+    mockCashSessionStoreState.currentRegisterOptions = {
+      features: {
+        no_item_pricing: { enabled: true }
       }
-    } as any);
+    };
 
     render(
       <FinalizationScreen
@@ -135,13 +152,11 @@ describe('FinalizationScreen - B49-P2 Mode Prix Global', () => {
   });
 
   it('valide que le total peut être 0€ si pas de sous-total (tous items à 0€)', async () => {
-    mockUseCashSessionStore.mockReturnValue({
-      currentRegisterOptions: {
-        features: {
-          no_item_pricing: { enabled: true }
-        }
+    mockCashSessionStoreState.currentRegisterOptions = {
+      features: {
+        no_item_pricing: { enabled: true }
       }
-    } as any);
+    };
 
     const itemsAllZero = [
       { id: '1', category: 'cat1', quantity: 1, weight: 2.5, price: 0, total: 0 },
@@ -176,13 +191,11 @@ describe('FinalizationScreen - B49-P2 Mode Prix Global', () => {
   });
 
   it('valide que le total = 0€ est accepté quand pas de sous-total', async () => {
-    mockUseCashSessionStore.mockReturnValue({
-      currentRegisterOptions: {
-        features: {
-          no_item_pricing: { enabled: true }
-        }
+    mockCashSessionStoreState.currentRegisterOptions = {
+      features: {
+        no_item_pricing: { enabled: true }
       }
-    } as any);
+    };
 
     const itemsAllZero = [
       { id: '1', category: 'cat1', quantity: 1, weight: 2.5, price: 0, total: 0 }
@@ -209,4 +222,3 @@ describe('FinalizationScreen - B49-P2 Mode Prix Global', () => {
     expect(confirmButton).not.toBeDisabled();
   });
 });
-

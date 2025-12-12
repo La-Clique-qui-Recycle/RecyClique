@@ -544,8 +544,17 @@ class CashSessionService:
             return None
         
         # Session avec transactions : fermer normalement
-        # Utiliser la nouvelle méthode du modèle
-        session.close_with_amounts(actual_amount, variance_comment)
+        # B50-P10: Calculer le montant théorique en incluant les dons
+        total_donations = self.db.query(func.coalesce(func.sum(Sale.donation), 0)).filter(
+            Sale.cash_session_id == session_id
+        ).scalar() or 0.0
+        total_donations = float(total_donations)
+        
+        # Calculer le montant théorique (fond initial + ventes + dons)
+        theoretical_amount = session.initial_amount + (session.total_sales or 0) + total_donations
+        
+        # Utiliser la nouvelle méthode du modèle avec le montant théorique calculé
+        session.close_with_amounts(actual_amount, variance_comment, theoretical_amount)
         
         self.db.commit()
         self.db.refresh(session)

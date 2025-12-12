@@ -13,6 +13,7 @@ export interface CashSession {
   closed_at?: string;
   total_sales?: number;
   total_items?: number;
+  total_donations?: number;  // B50-P10: Total des dons pour le calcul du montant théorique
 }
 
 export interface SaleItem {
@@ -103,7 +104,7 @@ interface VirtualCashSessionState {
   updateSaleItem: (itemId: string, newQuantity: number, newWeight: number, newPrice: number, presetId?: string, notes?: string) => void;
   setCurrentSaleNote: (note: string | null) => void;
   clearCurrentSale: () => void;
-  submitSale: (items: SaleItem[], finalization?: { donation: number; paymentMethod: 'cash'|'card'|'check'; cashGiven?: number; change?: number; }) => Promise<boolean>;
+  submitSale: (items: SaleItem[], finalization?: { donation: number; paymentMethod: 'cash'|'card'|'check'; cashGiven?: number; change?: number; overrideTotalAmount?: number; }) => Promise<boolean>;
 
   // Scroll actions
   setScrollPosition: (scrollTop: number) => void;
@@ -294,7 +295,7 @@ export const useVirtualCashSessionStore = create<VirtualCashSessionState>()(
         }
       },
 
-      submitSale: async (items: SaleItem[], finalization?: { donation: number; paymentMethod: 'cash'|'card'|'check'; cashGiven?: number; change?: number; }): Promise<boolean> => {
+      submitSale: async (items: SaleItem[], finalization?: { donation: number; paymentMethod: 'cash'|'card'|'check'; cashGiven?: number; change?: number; overrideTotalAmount?: number; }): Promise<boolean> => {
         console.warn('[VirtualCashStore] VIRTUAL MODE: Sale data will not be persisted to database');
 
         const { currentSession } = get();
@@ -318,12 +319,18 @@ export const useVirtualCashSessionStore = create<VirtualCashSessionState>()(
           // Simulate API delay
           await new Promise(resolve => setTimeout(resolve, 500));
 
+          // Story B50-P9: Utiliser overrideTotalAmount si fourni, sinon calcul automatique
+          const calculatedTotal = items.reduce((sum, item) => sum + item.total, 0);
+          const finalTotalAmount = finalization?.overrideTotalAmount !== undefined 
+            ? finalization.overrideTotalAmount 
+            : calculatedTotal;
+
           // Create virtual sale record
           const virtualSale = {
             id: generateVirtualId('sale'),
             cash_session_id: currentSession.id,
             items: items,
-            total_amount: items.reduce((sum, item) => sum + item.total, 0),
+            total_amount: finalTotalAmount,
             donation: finalization?.donation ?? 0,
             payment_method: finalization?.paymentMethod ?? 'cash',
             note: get().currentSaleNote || null,
@@ -336,10 +343,14 @@ export const useVirtualCashSessionStore = create<VirtualCashSessionState>()(
           saveToStorage(VIRTUAL_STORAGE_KEYS.SALES, updatedSales);
 
           // Update session totals
+          // B50-P10: Inclure total_donations dans le calcul
+          const currentTotalDonations = currentSession.total_donations || 0;
+          const saleDonation = finalization?.donation || 0;
           const updatedSession = {
             ...currentSession,
             total_sales: (currentSession.total_sales || 0) + virtualSale.total_amount,
-            total_items: (currentSession.total_items || 0) + items.length
+            total_items: (currentSession.total_items || 0) + items.length,
+            total_donations: currentTotalDonations + saleDonation  // B50-P10: Ajouter les dons
           };
 
           set({ currentSession: updatedSession });

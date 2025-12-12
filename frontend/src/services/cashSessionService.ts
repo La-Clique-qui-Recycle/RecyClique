@@ -10,6 +10,7 @@ export interface CashSession {
   closed_at?: string;
   total_sales?: number;
   total_items?: number;
+  total_donations?: number;  // B50-P10: Total des dons pour le calcul du montant théorique
   register_options?: Record<string, any>;  // Story B49-P1: Options de workflow du register
 }
 
@@ -167,7 +168,24 @@ export const cashSessionService = {
         status: 'closed'
       });
       
-      return response.data.success || false;
+      // Story B50-P9: Améliorer la vérification du succès
+      // L'API peut retourner soit {success: true}, soit directement l'objet session
+      console.log('[closeSession] Réponse API:', response.data);
+      
+      // Vérifier les différents formats de réponse possibles
+      if (response.data?.success === true) {
+        return true;
+      }
+      // Si l'API retourne directement la session avec status 'closed'
+      if (response.data?.id && response.data?.status === 'closed') {
+        return true;
+      }
+      // Si on a un status HTTP 200, considérer comme succès
+      if (response.status === 200) {
+        return true;
+      }
+      
+      return false;
     } catch (error: any) {
       console.error('Erreur lors de la fermeture de la session:', error);
       

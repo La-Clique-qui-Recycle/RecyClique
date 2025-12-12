@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import styled from 'styled-components'
-import { Calendar, Users, Scale, ShoppingCart, Euro, Search, ChevronUp, ChevronDown, ChevronsUpDown, Download, FileSpreadsheet, FileText } from 'lucide-react'
+import { Calendar, Users, Scale, ShoppingCart, Euro, Search, ChevronUp, ChevronDown, ChevronsUpDown, Download, FileSpreadsheet, FileText, BarChart3 } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import { cashSessionsService, CashSessionFilters, CashSessionKPIs, CashSessionListItem, cashSessionFiltersUrl } from '../../services/cashSessionsService'
 import { UsersApi, SitesApi } from '../../generated/api'
 import axiosClient from '../../api/axiosClient'
@@ -261,6 +262,7 @@ function formatCurrency(value: number): string {
 }
 
 const SessionManager: React.FC = () => {
+  const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const [filters, setFilters] = useState<CashSessionFilters>(() => {
     // B45-P2: Charger les filtres depuis l'URL au montage
@@ -613,6 +615,10 @@ const SessionManager: React.FC = () => {
           <Input placeholder="Recherche (opérateur ou ID session)" value={filters.search || ''} onChange={e => onFilterChange({ search: e.target.value || undefined })} onKeyDown={e => e.key === 'Enter' && onApplyFilters()} />
         </div>
         <Button onClick={onApplyFilters} $variant="primary">Appliquer les filtres</Button>
+        <Button onClick={() => navigate('/admin/quick-analysis')} $variant="ghost">
+          <BarChart3 size={16} />
+          Analyse Rapide
+        </Button>
         <Toolbar ref={exportMenuRef}>
           <ExportButton 
             onClick={() => setExportMenuOpen(!exportMenuOpen)}

@@ -30,6 +30,18 @@ const Logo = styled.div`
   font-weight: bold;
 `;
 
+const EnvironmentBadge = styled.span`
+  background-color: #dc2626;
+  color: white;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  margin-left: 0.5rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+`;
+
 const NavLinks = styled.div`
   display: flex;
   gap: 2rem;
@@ -65,6 +77,9 @@ export default function Header() {
   const hasReceptionAccess = useAuthStore((s) => s.hasReceptionAccess());
   const isUserRole = currentUser?.role === 'user';
   const [menuOpen, setMenuOpen] = React.useState(false);
+  
+  // Détecter l'environnement staging pour afficher le badge
+  const isStaging = import.meta.env.VITE_ENVIRONMENT === 'staging';
 
   const onLogout = () => {
     logout();
@@ -99,6 +114,9 @@ export default function Header() {
         <Logo>
           <Recycle size={24} />
           RecyClique
+          {isStaging && (
+            <EnvironmentBadge>Environnement de test</EnvironmentBadge>
+          )}
         </Logo>
         <NavLinks>
           {navItems.map(({ path, label, icon: Icon }) => (

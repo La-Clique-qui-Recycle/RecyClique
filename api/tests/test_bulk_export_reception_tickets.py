@@ -467,4 +467,180 @@ class TestBulkExportReceptionTicketsValidation:
         content = response.text
         lines = [l for l in content.split('\n') if l.strip()]
         assert len(lines) == 1  # Seulement headers
+    
+    def test_export_bulk_reception_400_date_format_frontend(self, admin_client, test_tickets):
+        """
+        Test de reproduction du bug B50-P2 : dates en format string ISO avec 'Z' suffix.
+        Le frontend envoie : "2025-12-10T00:00:00.000Z"
+        """
+        # Format exact envoyé par le frontend (ReceptionSessionManager.tsx ligne 668-669)
+        payload = {
+            "filters": {
+                "date_from": "2025-12-10T00:00:00.000Z",
+                "date_to": "2025-12-10T23:59:59.999Z",
+                "status": "closed"
+            },
+            "format": "csv"
+        }
+        
+        response = admin_client.post(
+            "/api/v1/admin/reports/reception-tickets/export-bulk",
+            json=payload
+        )
+        
+        # Avant correction : devrait échouer avec 400 ou 422
+        # Après correction : devrait réussir avec 200
+        if response.status_code != 200:
+            # Capturer le message d'erreur exact pour debug
+            error_detail = response.json() if response.content else {}
+            pytest.fail(
+                f"Export échoué avec status {response.status_code}. "
+                f"Détails: {error_detail}. "
+                f"Ce test reproduit le bug B50-P2."
+            )
+        
+        # Si on arrive ici, le bug est corrigé
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "text/csv; charset=utf-8"
+    
+    def test_export_bulk_reception_with_undefined_dates(self, admin_client, test_tickets):
+        """Test export avec dates undefined/null (B50-P2: régression)."""
+        payload = {
+            "filters": {
+                "status": "closed",
+                "include_empty": False
+                # Pas de date_from ni date_to
+            },
+            "format": "csv"
+        }
+        
+        response = admin_client.post(
+            "/api/v1/admin/reports/reception-tickets/export-bulk",
+            json=payload
+        )
+        
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "text/csv; charset=utf-8"
+    
+    def test_export_bulk_reception_with_date_only_format(self, admin_client, test_tickets):
+        """Test export avec format date seule YYYY-MM-DD (B50-P2: régression)."""
+        payload = {
+            "filters": {
+                "date_from": "2025-12-10",
+                "date_to": "2025-12-10",
+                "status": "closed"
+            },
+            "format": "csv"
+        }
+        
+        response = admin_client.post(
+            "/api/v1/admin/reports/reception-tickets/export-bulk",
+            json=payload
+        )
+        
+        # Le validator devrait parser ce format aussi
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "text/csv; charset=utf-8"
+    
+    def test_export_bulk_reception_with_isoformat_no_z(self, admin_client, test_tickets):
+        """Test export avec format ISO sans 'Z' (B50-P2: régression)."""
+        payload = {
+            "filters": {
+                "date_from": "2025-12-10T00:00:00+00:00",
+                "date_to": "2025-12-10T23:59:59+00:00",
+                "status": "closed"
+            },
+            "format": "csv"
+        }
+        
+        response = admin_client.post(
+            "/api/v1/admin/reports/reception-tickets/export-bulk",
+            json=payload
+        )
+        
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "text/csv; charset=utf-8"
+
+
+class TestCalculateTicketTotalsSignature:
+    """
+    Tests de régression pour vérifier la signature de _calculate_ticket_totals.
+    
+    B50-P2: Vérifie que la fonction retourne toujours 5 valeurs (total_lignes, total_poids, 
+    poids_entree, poids_direct, poids_sortie) pour prévenir les bugs de déballage.
+    """
+    
+    def test_calculate_ticket_totals_signature(self, db_session: Session, test_tickets):
+        """
+        Test que _calculate_ticket_totals retourne exactement 5 valeurs.
+        
+        Ce test de régression prévient les bugs de type "ValueError: too many values to unpack"
+        en vérifiant que la signature de la fonction reste stable.
+        """
+        from recyclic_api.services.reception_service import ReceptionService
+        from decimal import Decimal
+        
+        service = ReceptionService(db_session)
+        ticket = test_tickets[0]  # Utiliser le premier ticket de test
+        
+        # Appeler la fonction et vérifier le nombre de valeurs retournées
+        result = service._calculate_ticket_totals(ticket)
+        
+        # Vérifier que c'est un tuple de 5 éléments
+        assert isinstance(result, tuple), f"Expected tuple, got {type(result)}"
+        assert len(result) == 5, f"Expected 5 values, got {len(result)}: {result}"
+        
+        # Déballer les valeurs pour vérifier qu'elles sont du bon type
+        total_lignes, total_poids, poids_entree, poids_direct, poids_sortie = result
+        
+        # Vérifier les types
+        assert isinstance(total_lignes, int), f"total_lignes should be int, got {type(total_lignes)}"
+        assert isinstance(total_poids, (int, float, Decimal)), f"total_poids should be numeric, got {type(total_poids)}"
+        assert isinstance(poids_entree, (int, float, Decimal)), f"poids_entree should be numeric, got {type(poids_entree)}"
+        assert isinstance(poids_direct, (int, float, Decimal)), f"poids_direct should be numeric, got {type(poids_direct)}"
+        assert isinstance(poids_sortie, (int, float, Decimal)), f"poids_sortie should be numeric, got {type(poids_sortie)}"
+        
+        # Vérifier que les valeurs sont cohérentes
+        assert total_lignes >= 0, "total_lignes should be >= 0"
+        assert float(total_poids) >= 0, "total_poids should be >= 0"
+        assert float(poids_entree) >= 0, "poids_entree should be >= 0"
+        assert float(poids_direct) >= 0, "poids_direct should be >= 0"
+        assert float(poids_sortie) >= 0, "poids_sortie should be >= 0"
+        
+        # Vérifier que le poids total est la somme des poids par flux
+        # (avec une petite tolérance pour les erreurs d'arrondi)
+        total_expected = float(poids_entree) + float(poids_direct) + float(poids_sortie)
+        total_actual = float(total_poids)
+        assert abs(total_expected - total_actual) < 0.01, \
+            f"total_poids ({total_actual}) should equal sum of poids_entree + poids_direct + poids_sortie ({total_expected})"
+    
+    def test_calculate_ticket_totals_empty_ticket(self, db_session: Session, test_poste, test_benevole):
+        """
+        Test que _calculate_ticket_totals fonctionne avec un ticket vide.
+        """
+        from recyclic_api.services.reception_service import ReceptionService
+        
+        # Créer un ticket sans lignes
+        empty_ticket = TicketDepot(
+            id=uuid4(),
+            poste_id=test_poste.id,
+            benevole_user_id=test_benevole.id,
+            status=TicketDepotStatus.OPENED.value
+        )
+        db_session.add(empty_ticket)
+        db_session.commit()
+        
+        service = ReceptionService(db_session)
+        result = service._calculate_ticket_totals(empty_ticket)
+        
+        # Vérifier la signature
+        assert len(result) == 5, f"Expected 5 values, got {len(result)}"
+        total_lignes, total_poids, poids_entree, poids_direct, poids_sortie = result
+        
+        # Pour un ticket vide, tout devrait être 0
+        assert total_lignes == 0
+        assert float(total_poids) == 0.0
+        assert float(poids_entree) == 0.0
+        assert float(poids_direct) == 0.0
+        assert float(poids_sortie) == 0.0
 

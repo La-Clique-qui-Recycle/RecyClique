@@ -4,16 +4,32 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import FinalizationScreen from '../FinalizationScreen';
-import { useCashSessionStore } from '../../../stores/cashSessionStore';
 import { useFeatureFlag } from '../../../utils/features';
 
+// B50-P10: Mock configurable pour useCashStores
+let mockCashSessionStoreState = {
+  currentRegisterOptions: null as Record<string, any> | null,
+  currentSaleItems: [] as any[],
+  currentSession: null,
+  loading: false,
+  error: null
+};
+
+vi.mock('../../../providers/CashStoreProvider', () => ({
+  useCashStores: () => ({
+    cashSessionStore: mockCashSessionStoreState,
+    categoryStore: {},
+    presetStore: {},
+    isVirtualMode: false,
+    isDeferredMode: false
+  })
+}));
+
 // Mocks
-vi.mock('../../../stores/cashSessionStore');
 vi.mock('../../../utils/features', () => ({
   useFeatureFlag: vi.fn(() => false)
 }));
 
-const mockUseCashSessionStore = vi.mocked(useCashSessionStore);
 const mockUseFeatureFlag = vi.mocked(useFeatureFlag);
 
 describe('FinalizationScreen - B49-P6 Condition Écran Spécial', () => {
@@ -23,9 +39,15 @@ describe('FinalizationScreen - B49-P6 Condition Écran Spécial', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockUseFeatureFlag.mockReturnValue(false);
-    mockUseCashSessionStore.mockReturnValue({
-      currentRegisterOptions: null
-    } as any);
+    
+    // Reset mock state
+    mockCashSessionStoreState = {
+      currentRegisterOptions: null,
+      currentSaleItems: [],
+      currentSession: null,
+      loading: false,
+      error: null
+    };
   });
 
   it('affiche l\'écran spécial si un item a presetId recyclage', () => {
@@ -177,13 +199,11 @@ describe('FinalizationScreen - B49-P6 Condition Écran Spécial', () => {
   });
 
   it('permet la validation en mode prix global sans total manuel pour transaction spéciale', () => {
-    mockUseCashSessionStore.mockReturnValue({
-      currentRegisterOptions: {
-        features: {
-          no_item_pricing: { enabled: true }
-        }
+    mockCashSessionStoreState.currentRegisterOptions = {
+      features: {
+        no_item_pricing: { enabled: true }
       }
-    } as any);
+    };
 
     const items = [
       { id: '1', category: 'cat1', quantity: 1, weight: 2.5, price: 0, total: 0, presetId: 'recyclage' }
@@ -203,4 +223,3 @@ describe('FinalizationScreen - B49-P6 Condition Écran Spécial', () => {
     expect(confirmButton).not.toBeDisabled(); // Bouton activé même sans total manuel pour transaction spéciale
   });
 });
-

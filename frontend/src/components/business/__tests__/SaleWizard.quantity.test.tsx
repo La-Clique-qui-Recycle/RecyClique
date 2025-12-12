@@ -1,26 +1,57 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@test/test-utils';
-import { useCashSessionStore } from '../../../stores/cashSessionStore';
 import { useAuthStore } from '../../../stores/authStore';
 import { useCategoryStore } from '../../../stores/categoryStore';
 import { usePresetStore } from '../../../stores/presetStore';
+import { useCashWizardStepState } from '../../../hooks/useCashWizardStepState';
 import SaleWizard from '../SaleWizard';
 
+// B50-P10: Mock configurable pour useCashStores
+let mockCashSessionStoreState = {
+  currentSession: {
+    id: 'session-1',
+    operator_id: 'user-1',
+    initial_amount: 100,
+    current_amount: 100,
+    status: 'open' as const,
+    opened_at: '2024-01-01T00:00:00Z'
+  },
+  currentSaleItems: [] as any[],
+  currentRegisterOptions: null as Record<string, any> | null,
+  loading: false,
+  error: null,
+  addSaleItem: vi.fn(),
+  removeSaleItem: vi.fn(),
+  updateSaleItem: vi.fn(),
+  clearCurrentSale: vi.fn(),
+  submitSale: vi.fn(),
+  clearError: vi.fn()
+};
+
+vi.mock('../../../providers/CashStoreProvider', () => ({
+  useCashStores: () => ({
+    cashSessionStore: mockCashSessionStoreState,
+    categoryStore: {},
+    presetStore: {},
+    isVirtualMode: false,
+    isDeferredMode: false
+  })
+}));
+
 // Mock the stores
-vi.mock('../../../stores/cashSessionStore');
 vi.mock('../../../stores/authStore');
 vi.mock('../../../stores/categoryStore');
 vi.mock('../../../stores/presetStore');
 vi.mock('../../../hooks/useCashWizardStepState');
-vi.mock('../../../utils/features');
+vi.mock('../../../utils/features', () => ({
+  useFeatureFlag: vi.fn(() => false)
+}));
 
-const mockUseCashSessionStore = useCashSessionStore as any;
 const mockUseAuthStore = useAuthStore as any;
 const mockUseCategoryStore = useCategoryStore as any;
 const mockUsePresetStore = usePresetStore as any;
-const mockUseCashWizardStepState = vi.fn();
-const mockUseFeatureFlag = vi.fn();
+const mockUseCashWizardStepState = vi.mocked(useCashWizardStepState);
 
 describe('SaleWizard - Quantity Validation (B39-P5)', () => {
   const mockNumpadCallbacks = {
@@ -37,26 +68,6 @@ describe('SaleWizard - Quantity Validation (B39-P5)', () => {
     setWeightValue: vi.fn(),
     setWeightError: vi.fn(),
     setMode: vi.fn()
-  };
-
-  const mockStore = {
-    currentSession: {
-      id: 'session-1',
-      operator_id: 'user-1',
-      initial_amount: 100,
-      current_amount: 100,
-      status: 'open' as const,
-      opened_at: '2024-01-01T00:00:00Z'
-    },
-    currentSaleItems: [],
-    loading: false,
-    error: null,
-    addSaleItem: vi.fn(),
-    removeSaleItem: vi.fn(),
-    updateSaleItem: vi.fn(),
-    clearCurrentSale: vi.fn(),
-    submitSale: vi.fn(),
-    clearError: vi.fn()
   };
 
   const mockCategoryStore = {
@@ -115,8 +126,29 @@ describe('SaleWizard - Quantity Validation (B39-P5)', () => {
     // Reset all mocks
     vi.clearAllMocks();
 
+    // Reset mock state
+    mockCashSessionStoreState = {
+      currentSession: {
+        id: 'session-1',
+        operator_id: 'user-1',
+        initial_amount: 100,
+        current_amount: 100,
+        status: 'open' as const,
+        opened_at: '2024-01-01T00:00:00Z'
+      },
+      currentSaleItems: [],
+      currentRegisterOptions: null,
+      loading: false,
+      error: null,
+      addSaleItem: vi.fn(),
+      removeSaleItem: vi.fn(),
+      updateSaleItem: vi.fn(),
+      clearCurrentSale: vi.fn(),
+      submitSale: vi.fn(),
+      clearError: vi.fn()
+    };
+
     // Setup default mocks
-    mockUseCashSessionStore.mockReturnValue(mockStore);
     mockUseAuthStore.mockReturnValue({ currentUser: { id: 'user-1', username: 'test' } });
     mockUseCategoryStore.mockReturnValue(mockCategoryStore);
     mockUsePresetStore.mockReturnValue(mockPresetStore);
@@ -126,20 +158,22 @@ describe('SaleWizard - Quantity Validation (B39-P5)', () => {
       stepState: {
         currentStep: 'quantity',
         categoryState: 'completed',
+        subcategoryState: 'completed',
         weightState: 'completed',
         quantityState: 'active',
-        priceState: 'inactive'
+        priceState: 'inactive',
+        stepStartTime: new Date(),
+        lastActivity: new Date()
       },
       transitionToStep: vi.fn(),
       handleCategorySelected: vi.fn(),
+      handleSubcategorySelected: vi.fn(),
       handleWeightInputStarted: vi.fn(),
       handleWeightInputCompleted: vi.fn(),
       handleQuantityInputCompleted: vi.fn(),
-      handlePriceInputCompleted: vi.fn()
+      handlePriceInputCompleted: vi.fn(),
+      handleTicketClosed: vi.fn()
     });
-
-    // Mock useFeatureFlag
-    mockUseFeatureFlag.mockReturnValue(false);
   });
 
   describe('Quantity Field Pre-filling', () => {
@@ -264,12 +298,3 @@ describe('SaleWizard - Quantity Validation (B39-P5)', () => {
     });
   });
 });
-
-
-
-
-
-
-
-
-

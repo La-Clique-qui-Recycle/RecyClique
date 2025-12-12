@@ -62,6 +62,8 @@ interface AuthState {
   isAdmin: () => boolean;
   hasPermission: (permission: string) => boolean; // NEW: Vérifier une permission
   hasCashAccess: () => boolean;
+  hasVirtualCashAccess: () => boolean; // B50-P4: Vérifier accès caisse virtuelle
+  hasDeferredCashAccess: () => boolean; // B50-P4: Vérifier accès caisse différée
   hasReceptionAccess: () => boolean;
 }
 
@@ -292,8 +294,26 @@ export const useAuthStore = create<AuthState>()(
           const { permissions, currentUser } = get();
           // Admins and Super-admins always have access
           if (currentUser?.role === 'admin' || currentUser?.role === 'super-admin') return true;
+          // Volunteers need at least one of the cash permissions
+          return permissions.includes('caisse.access') || 
+                 permissions.includes('caisse.virtual.access') || 
+                 permissions.includes('caisse.deferred.access');
+        },
+
+        hasVirtualCashAccess: () => {
+          const { permissions, currentUser } = get();
+          // Admins and Super-admins always have access
+          if (currentUser?.role === 'admin' || currentUser?.role === 'super-admin') return true;
           // Volunteers need the permission
-          return permissions.includes('caisse.access');
+          return permissions.includes('caisse.virtual.access');
+        },
+
+        hasDeferredCashAccess: () => {
+          const { permissions, currentUser } = get();
+          // Admins and Super-admins always have access
+          if (currentUser?.role === 'admin' || currentUser?.role === 'super-admin') return true;
+          // Volunteers need the permission
+          return permissions.includes('caisse.deferred.access');
         },
 
         hasReceptionAccess: () => {
