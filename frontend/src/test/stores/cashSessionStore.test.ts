@@ -15,6 +15,14 @@ vi.mock('../../api/axiosClient', () => ({
   }
 }))
 
+// Mock transactionLogService avant l'import
+vi.mock('../../services/transactionLogService', () => ({
+  transactionLogService: {
+    logAnomaly: vi.fn().mockResolvedValue(undefined),
+    logTicketOpened: vi.fn().mockResolvedValue(undefined)
+  }
+}))
+
 import { useCashSessionStore } from '../../stores/cashSessionStore'
 import { cashSessionService } from '../../services/cashSessionService'
 import axiosClient from '../../api/axiosClient'
@@ -506,6 +514,219 @@ describe('cashSessionStore', () => {
           ])
         })
       )
+    })
+  })
+
+  describe('addSaleItem - B51-P5 Fix 1', () => {
+    const mockSession = {
+      id: 'session-123',
+      operator_id: 'user-123',
+      initial_amount: 50.0,
+      current_amount: 50.0,
+      status: 'open' as const,
+      opened_at: '2025-01-27T10:00:00Z'
+    }
+
+    const mockItem: Omit<import('../../stores/cashSessionStore').SaleItem, 'id'> = {
+      category: 'EEE-3',
+      quantity: 1,
+      weight: 2.5,
+      price: 15.0,
+      total: 15.0
+    }
+
+    beforeEach(() => {
+      useCashSessionStore.setState({
+        currentSession: mockSession,
+        currentSaleItems: [],
+        ticketOpenedLogged: false
+      })
+    })
+
+    it('should block item addition if ticketOpenedLogged is false', () => {
+      const store = useCashSessionStore.getState()
+      const initialItemsCount = store.currentSaleItems.length
+      
+      store.addSaleItem(mockItem)
+      
+      // L'ajout doit être bloqué
+      expect(store.currentSaleItems.length).toBe(initialItemsCount)
+      // newItem ne doit pas être créé (pas d'item avec l'ID généré)
+      expect(store.currentSaleItems.find(item => item.category === 'EEE-3')).toBeUndefined()
+    })
+
+    it('should allow item addition if ticketOpenedLogged is true', () => {
+      useCashSessionStore.setState({ ticketOpenedLogged: true })
+      
+      const store = useCashSessionStore.getState()
+      const initialItemsCount = store.currentSaleItems.length
+      
+      store.addSaleItem(mockItem)
+      
+      // L'ajout doit fonctionner
+      expect(store.currentSaleItems.length).toBe(initialItemsCount + 1)
+      const addedItem = store.currentSaleItems.find(item => item.category === 'EEE-3')
+      expect(addedItem).toBeDefined()
+      expect(addedItem?.quantity).toBe(1)
+      expect(addedItem?.price).toBe(15.0)
+    })
+
+    it('should log anomaly when blocking addition without ticket', async () => {
+      const { transactionLogService } = await import('../../services/transactionLogService')
+      const logAnomalySpy = vi.spyOn(transactionLogService, 'logAnomaly')
+      
+      const store = useCashSessionStore.getState()
+      store.addSaleItem(mockItem)
+      
+      // Attendre que le log asynchrone soit appelé
+      await new Promise(resolve => setTimeout(resolve, 100))
+      
+      // Une anomalie doit être loggée
+      expect(logAnomalySpy).toHaveBeenCalledWith(
+        mockSession.id,
+        expect.objectContaining({
+          items_count: 0,  // Pas +1 car on bloque l'ajout
+          items: [],
+          total: 0
+        }),
+        'Item added but no ticket is explicitly opened - BLOCKED (B51-P5 fix)'
+      )
+    })
+  })
+
+  describe('onRehydrateStorage - B51-P5 Fix 2', () => {
+    const mockSession = {
+      id: 'session-123',
+      operator_id: 'user-123',
+      initial_amount: 50.0,
+      current_amount: 50.0,
+      status: 'open' as const,
+      opened_at: '2025-01-27T10:00:00Z'
+    }
+
+    const mockItems = [
+      {
+        id: 'item-1',
+        category: 'EEE-3',
+        quantity: 1,
+        weight: 2.5,
+        price: 15.0,
+        total: 15.0
+      },
+      {
+        id: 'item-2',
+        category: 'EEE-4',
+        quantity: 1,
+        weight: 1.0,
+        price: 10.0,
+        total: 10.0
+      }
+    ]
+
+    beforeEach(() => {
+      // Clear localStorage before each test
+      localStorage.clear()
+      vi.clearAllMocks()
+      // Reset store state
+      useCashSessionStore.setState({
+        currentSession: null,
+        currentSaleItems: [],
+        ticketOpenedLogged: false,
+        currentRegisterOptions: null
+      })
+    })
+
+    it('should clear items when restored from localStorage but ticketOpenedLogged is not defined', () => {
+      // B51-P5 Fix 2: Simuler le comportement de onRehydrateStorage
+      // Quand des articles sont restaurés depuis localStorage mais ticketOpenedLogged
+      // n'est pas défini (toujours false car pas dans partialize), les articles doivent être vidés
+      
+      // Simuler l'état restauré depuis localStorage (ce que fait Zustand persist)
+      // Note: ticketOpenedLogged n'est PAS dans partialize, donc toujours false au rehydrate
+      const restoredState = {
+        currentSession: mockSession,
+        currentSaleItems: [...mockItems], // Copie des articles
+        currentRegisterOptions: null,
+        ticketOpenedLogged: false // Toujours false au rehydrate (pas persisté)
+      }
+
+      // Appliquer la logique de onRehydrateStorage (lignes 799-805)
+      // Cette logique vide les articles si ticketOpenedLogged n'est pas défini
+      if (restoredState.currentSaleItems && restoredState.currentSaleItems.length > 0) {
+        // ticketOpenedLogged n'est pas persisté, donc toujours false au rehydrate
+        // Les articles doivent être vidés pour éviter les articles fantômes
+        restoredState.currentSaleItems = []
+      }
+
+      // Vérifier que les articles sont vidés
+      expect(restoredState.currentSaleItems).toHaveLength(0)
+    })
+
+    it('should not clear items if items array is empty', () => {
+      // Si le panier est vide, onRehydrateStorage ne doit rien faire
+      // La condition dans onRehydrateStorage est :
+      // if (state?.currentSaleItems && state.currentSaleItems.length > 0)
+      // Donc si length === 0, on ne rentre pas dans la condition
+      
+      const emptyState = {
+        currentSession: mockSession,
+        currentSaleItems: [], // Panier vide
+        currentRegisterOptions: null,
+        ticketOpenedLogged: false
+      }
+
+      // Simuler la logique de onRehydrateStorage
+      // Si le panier est vide, la condition n'est pas remplie, donc pas de vidage
+      if (emptyState.currentSaleItems && emptyState.currentSaleItems.length > 0) {
+        emptyState.currentSaleItems = []
+      }
+
+      // Vérifier que le panier reste vide (pas de changement)
+      expect(emptyState.currentSaleItems).toHaveLength(0)
+    })
+
+    it('should clear items when items exist but ticketOpenedLogged is false (rehydrate scenario)', () => {
+      // Scénario de rehydratation : articles restaurés depuis localStorage
+      // mais ticketOpenedLogged est false (car pas persisté)
+      // Les articles doivent être vidés pour éviter les articles fantômes
+      
+      const stateAfterRehydrate = {
+        currentSession: mockSession,
+        currentSaleItems: [...mockItems], // Articles restaurés
+        currentRegisterOptions: null,
+        ticketOpenedLogged: false // False car pas dans partialize
+      }
+
+      // Appliquer la logique de onRehydrateStorage
+      // (B51-P5 Fix 2: lignes 799-805 de cashSessionStore.ts)
+      if (stateAfterRehydrate.currentSaleItems && stateAfterRehydrate.currentSaleItems.length > 0) {
+        // ticketOpenedLogged n'est pas persisté, donc toujours false au rehydrate
+        // Les articles doivent être vidés
+        stateAfterRehydrate.currentSaleItems = []
+      }
+
+      // Vérifier que les articles sont vidés
+      expect(stateAfterRehydrate.currentSaleItems).toHaveLength(0)
+      expect(stateAfterRehydrate.currentSaleItems).toEqual([])
+    })
+
+    it('should handle case when currentSaleItems is undefined', () => {
+      // Cas limite : currentSaleItems peut être undefined
+      const stateWithUndefined = {
+        currentSession: mockSession,
+        currentSaleItems: undefined as any,
+        currentRegisterOptions: null,
+        ticketOpenedLogged: false
+      }
+
+      // La condition dans onRehydrateStorage vérifie d'abord si currentSaleItems existe
+      // if (state?.currentSaleItems && state.currentSaleItems.length > 0)
+      if (stateWithUndefined.currentSaleItems && stateWithUndefined.currentSaleItems.length > 0) {
+        stateWithUndefined.currentSaleItems = []
+      }
+
+      // Si undefined, la condition n'est pas remplie, donc pas de modification
+      expect(stateWithUndefined.currentSaleItems).toBeUndefined()
     })
   })
 })

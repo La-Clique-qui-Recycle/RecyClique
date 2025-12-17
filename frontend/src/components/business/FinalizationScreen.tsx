@@ -198,6 +198,17 @@ const FinalizationScreen: React.FC<FinalizationScreenProps> = ({
   
   // Story B49-P2: Afficher sous-total uniquement si au moins un item a un prix >0
   const shouldShowSubtotal = subtotal > 0;
+
+  // B51-P1: Détecter un ticket "don seul" (ex: preset Don 0€, Don -18 ans) sans autre ligne payante
+  const isDonationOnlyTransaction = useMemo(() => {
+    if (!items || items.length === 0) return false;
+    const hasDonationPreset = items.some(
+      (item) => item.presetId === 'don-0' || item.presetId === 'don-18'
+    );
+    if (!hasDonationPreset) return false;
+    const hasPaidItem = items.some((item) => item.price && item.price > 0);
+    return !hasPaidItem;
+  }, [items]);
   
   // Réinitialiser les champs quand la modal s'ouvre
   // B50-P4: Utiliser useRef pour éviter de réinitialiser si la modal est déjà ouverte
@@ -206,18 +217,24 @@ const FinalizationScreen: React.FC<FinalizationScreenProps> = ({
     // Ne réinitialiser que lors de l'ouverture de la modal (transition de false à true)
     if (open && !wasOpenRef.current) {
       setDonation('0');
-      setPaymentMethod('cash');
+      // B51-P1: Pour un ticket contenant uniquement un don, sélectionner automatiquement "Gratuit / Don"
+      const defaultPaymentMethod: PaymentMethod = isDonationOnlyTransaction ? 'free' : 'cash';
+      setPaymentMethod(defaultPaymentMethod);
       setAmountReceived('');
-      // Story B50-P9: Toujours laisser le champ vide pour permettre la saisie manuelle
-      // Le préremplissage empêchait la saisie correcte du montant négocié
-      setManualTotal('');
+      // B51-P1: Pour un ticket "don seul" en mode prix global, pré-remplir avec "0" pour éviter l'erreur de validation HTML5
+      // Story B50-P9: Sinon, laisser le champ vide pour permettre la saisie manuelle
+      if (isNoItemPricingEnabled && isDonationOnlyTransaction) {
+        setManualTotal('0');
+      } else {
+        setManualTotal('');
+      }
       setTotalError('');
       setPendingPaymentMethod(null);  // Story B49-P5: Reset valeur en attente
       wasOpenRef.current = true;
     } else if (!open) {
       wasOpenRef.current = false;
     }
-  }, [open, isAdmin, shouldShowSubtotal, subtotal, isNoItemPricingEnabled]);
+  }, [open, isAdmin, shouldShowSubtotal, subtotal, isNoItemPricingEnabled, isDonationOnlyTransaction]);
 
   // Story B49-P5: Focus auto sur "Total à payer" au chargement (séparé pour éviter dépendances)
   React.useEffect(() => {
@@ -561,7 +578,7 @@ const FinalizationScreen: React.FC<FinalizationScreenProps> = ({
                   style={{
                     borderColor: totalError ? '#dc3545' : '#ddd'
                   }}
-                  required
+                  required={!isFreePayment && !isSpecialTransaction && !isDonationOnlyTransaction}
                   readOnly={false}
                   disabled={false}
                 />

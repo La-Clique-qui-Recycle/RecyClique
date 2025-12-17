@@ -627,7 +627,200 @@ Aucun refactoring nécessaire. Le code est propre et bien structuré. Les correc
 
 ---
 
-## 11. Notes Futures
+## 11. État Actuel du Système de Logs (2025-01-27)
+
+### 11.1. Vérification en Production
+
+**Statut :** ✅ **Logs actifs et fonctionnels**
+
+- **Fichier de logs :** `/app/logs/transactions.log` existe et contient **126 lignes** (59KB)
+- **Dernière mise à jour :** 2025-12-13 16:32:57
+- **Endpoint API :** `/v1/admin/transaction-logs` fonctionne (retourne 200 OK)
+- **Volume Docker :** Monté correctement (`./logs:/app/logs`)
+
+**Commande de vérification :**
+```bash
+docker exec recyclic-prod-api ls -lh /app/logs/transactions.log
+# Résultat : -rw-r--r-- 1 recyclic recyclic 59K Dec 13 16:32 /app/logs/transactions.log
+```
+
+### 11.2. Vérification en Développement Local
+
+**Statut :** ✅ **Logs actifs et fonctionnels**
+
+- **Fichier de logs :** `/app/logs/transactions.log` existe et contient **67KB**
+- **Dernière mise à jour :** 2025-12-16 14:04
+- **Volume Docker :** Monté correctement dans `docker-compose.yml`
+
+**Commande de vérification :**
+```bash
+docker exec recyclic-api-1 ls -lh /app/logs/transactions.log
+# Résultat : -rw-r--r-- 1 recyclic recyclic 67K Dec 16 14:04 /app/logs/transactions.log
+```
+
+### 11.3. Anomalies Détectées en Production
+
+**Nombre d'anomalies détectées :** **8 anomalies** entre le 12/12/2025 et le 13/12/2025
+
+**Type d'anomalie :** Toutes les anomalies sont du type `ITEM_ADDED_WITHOUT_TICKET`
+
+**Message d'anomalie :** `"Item added but no ticket is explicitly opened"`
+
+#### Analyse Détaillée des Anomalies
+
+**1. Anomalie #1 - 2025-12-12 13:16:35**
+```json
+{
+  "timestamp": "2025-12-12T13:16:35.571825+00:00Z",
+  "event": "TICKET_OPENED",
+  "user_id": "b89f8c0b-e90a-413c-bce7-6f23d2ccbd19",
+  "session_id": "ef9b2b0c-de8d-4d2f-a300-cd163e331870",
+  "cart_state": {
+    "items_count": 1,
+    "items": [{
+      "id": "item-1765545350500-e7yf5jp23",
+      "category": "6cd19374-44ef-44cb-806a-6171090d30d5",
+      "weight": 0.55,
+      "price": 6
+    }],
+    "total": 6
+  },
+  "anomaly": true
+}
+```
+**Suivi immédiatement par :**
+```json
+{
+  "event": "ANOMALY_DETECTED",
+  "anomaly_type": "ITEM_ADDED_WITHOUT_TICKET",
+  "details": "Item added but no ticket is explicitly opened"
+}
+```
+
+**2. Anomalie #2 - 2025-12-12 14:23:24**
+- Item ajouté : catégorie `74080c7b-0d6b-4630-97ad-ac45bd8e1ad5`, poids 0.32kg, prix 0€
+- Même pattern : `ANOMALY_DETECTED` puis `TICKET_OPENED` avec `anomaly: true`
+
+**3. Anomalie #3 - 2025-12-13 09:40:01**
+- Item ajouté : catégorie `66835c04-b7a8-4301-af4f-354c08b13679`, poids 0.81kg, prix 0€
+- Pattern identique
+
+**4. Anomalie #4 - 2025-12-13 15:38:43**
+- Item ajouté : catégorie `fb7a972a-3234-4f3d-8225-f493dc01fc20`, poids 3.4kg, prix 0€
+- Pattern identique
+
+**5. Anomalie #5 - 2025-12-13 16:31:10**
+- Item ajouté : catégorie `55c4cb33-c818-4b13-b947-d8902037b47d`, poids 0.5kg, prix 0€
+- Pattern identique
+
+#### Pattern Commun des Anomalies
+
+**Séquence d'événements observée :**
+1. Un item est ajouté au panier (`addSaleItem()` appelé)
+2. Le système détecte que `ticketOpenedLogged === false`
+3. Le système logge `ANOMALY_DETECTED` avec type `ITEM_ADDED_WITHOUT_TICKET`
+4. Le système logge immédiatement `TICKET_OPENED` avec `anomaly: true`
+5. Le flag `ticketOpenedLogged` est mis à `true`
+
+**Interprétation :**
+- **C'est exactement le bug des "articles fantômes" signalé par les utilisateurs**
+- Un item apparaît dans un nouveau ticket alors qu'aucun ticket n'a été explicitement ouvert
+- Le système détecte correctement l'anomalie mais ne la prévient pas
+- L'item reste dans le panier et peut être validé normalement
+
+**Causes probables :**
+1. **Panier non vidé après validation** : Le panier n'a pas été correctement vidé après `PAYMENT_VALIDATED`, donc `ticketOpenedLogged` reste à `false` mais le panier contient encore des items
+2. **Race condition** : Un item est ajouté avant que le système ne détecte qu'un nouveau ticket doit être ouvert
+3. **État du store non synchronisé** : Le flag `ticketOpenedLogged` n'est pas correctement réinitialisé lors du reset du panier
+
+### 11.4. Problème d'Affichage dans l'Interface Admin
+
+**Symptôme :** L'onglet "Logs Transactionnels" dans `/admin/audit-log` apparaît vide alors que les logs existent et contiennent des données.
+
+**Vérifications effectuées :**
+- ✅ Les logs existent dans le conteneur (126 lignes en prod, 183 entrées en dev)
+- ✅ L'endpoint API `/v1/admin/transaction-logs` retourne 200 OK (visible dans les logs Docker)
+- ✅ Le fichier est trouvé par l'endpoint : `"Log file exists: True"` et `"Found main log file: /app/logs/transactions.log"`
+- ❌ **PROBLÈME IDENTIFIÉ** : L'API retourne `{"entries": [], "pagination": {"total_count": 0}}` alors que le parsing manuel fonctionne (183 entrées parsées)
+
+**Tests effectués :**
+1. **Parsing manuel** : Script Python de test parse correctement **183 entrées** depuis `/app/logs/transactions.log`
+2. **Format JSON** : Les logs sont bien formatés en JSON valide (une ligne = un événement)
+3. **Endpoint API** : L'endpoint trouve le fichier mais retourne `entries: []`
+
+**Diagnostic :**
+- Le problème est **côté backend** : l'endpoint lit le fichier mais ne retourne pas les entrées
+- Le parsing fonctionne (testé manuellement)
+- L'endpoint retourne 200 OK mais avec `total_count: 0`
+- **Hypothèse principale** : Exception silencieuse dans le parsing ou problème de filtrage qui élimine toutes les entrées
+
+**Actions effectuées (2025-12-17) :**
+- [x] Vérifier que les logs existent (✅ 183 entrées en dev, 126 en prod)
+- [x] Vérifier le format JSON (✅ Format valide)
+- [x] Tester le parsing manuel (✅ Fonctionne)
+- [x] Vérifier la console du navigateur (✅ Pas d'erreurs JavaScript)
+- [x] Ajouter des logs de debug dans l'endpoint
+- [x] **Corriger le parsing des timestamps** : Format `+00:00Z` mal géré (double timezone)
+- [x] **Corriger le formatage frontend** : Gestion du format ISO 8601 avec `Z`
+
+**Résolution (2025-12-17) :**
+✅ **PROBLÈME RÉSOLU** - Les logs transactionnels s'affichent correctement :
+- Dates formatées (ex: 17/12/2025 01:46:02)
+- Événements visibles (Session ouverte, Ticket ouvert, Paiement validé)
+- Anomalies identifiées (`ITEM_ADDED_WITHOUT_TICKET`)
+
+**Cause racine :**
+Le format de timestamp `2025-12-10T23:52:54.686286+00:00Z` contenait à la fois `+00:00` et `Z`, causant un double parsing de timezone (`+00:00+00:00`) qui échouait.
+
+### 11.5. Commandes de Diagnostic
+
+**Vérifier les logs en production :**
+```bash
+# Voir les derniers logs
+docker exec recyclic-prod-api tail -n 20 /app/logs/transactions.log
+
+# Compter les anomalies
+docker exec recyclic-prod-api grep -c "ANOMALY_DETECTED" /app/logs/transactions.log
+
+# Voir toutes les anomalies
+docker exec recyclic-prod-api grep "ANOMALY_DETECTED" /app/logs/transactions.log
+```
+
+**Vérifier les logs en développement :**
+```bash
+# Voir les derniers logs
+docker exec recyclic-api-1 tail -n 20 /app/logs/transactions.log
+
+# Compter les anomalies
+docker exec recyclic-api-1 grep -c "ANOMALY_DETECTED" /app/logs/transactions.log
+```
+
+**Tester l'endpoint API :**
+```bash
+# Depuis le conteneur (ne fonctionne pas - 404 car chemin incorrect)
+docker exec recyclic-prod-api curl -s "http://localhost:8000/api/v1/admin/transaction-logs?page=1&page_size=10" -H "Authorization: Bearer TOKEN"
+
+# Depuis l'extérieur (fonctionne - 200 OK)
+curl -s "https://votre-domaine.com/api/v1/admin/transaction-logs?page=1&page_size=10" -H "Authorization: Bearer TOKEN"
+```
+
+### 11.6. Recommandations
+
+**Pour le bug des articles fantômes :**
+1. **Créer une story de debug** pour investiguer pourquoi `ticketOpenedLogged` n'est pas correctement réinitialisé
+2. **Vérifier la logique de `clearCurrentSale()`** pour s'assurer que le panier est bien vidé et le flag réinitialisé
+3. **Ajouter des logs supplémentaires** pour tracer l'état du panier avant/après chaque opération critique
+4. **Implémenter une vérification préventive** : Avant d'ajouter un item, vérifier que le panier est vide ou qu'un ticket est ouvert
+
+**Pour le problème d'affichage :**
+1. **Investigation frontend** : Vérifier la console du navigateur et l'onglet Network
+2. **Tester l'endpoint directement** pour voir la structure de la réponse
+3. **Vérifier le code `TransactionLogsTab`** pour identifier le problème d'affichage
+4. **Ajouter des logs de debug** dans le frontend pour tracer le flux de données
+
+---
+
+## 12. Notes Futures
 
 **Script de Détection d'Anomalies (hors scope v1.3.2)** :
 - Créer un script séparé (cron) qui scanne les logs

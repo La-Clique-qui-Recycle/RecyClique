@@ -5,6 +5,12 @@ Ce guide est spécifique au frontend. Pour les principes généraux de test (Moc
 
 -> [Consulter la Charte de Stratégie de Test](../../docs/testing-strategy.md)
 
+Pour tout problème de tests frontend (Vitest, React Testing Library, jsdom, intégration avec Docker, etc.), il existe également une série de documents d’historique dans `docs/` :
+
+- `docs/tests-problemes-*.md` (par exemple : `tests-problemes-brief.md`, `tests-problemes-guide-action.md`, `tests-problemes-QUICK-FIX.md`, `tests-problemes-ANALYSE-P6-SM.md`, etc.).
+
+Ces fichiers décrivent les problèmes de tests rencontrés (frontend et backend), les patterns d’analyse et les correctifs appliqués. Avant de diagnostiquer un nouveau problème de tests frontend, vérifier s’il existe déjà un `tests-problemes-*` pertinent.
+
 Objectif: fournir un cadre clair, stable et reproductible pour écrire des tests frontend sans flaky, compatible React 18, Mantine, Zustand, jsdom, et nos conventions de projet.
 
 ## 1. Environnement & Configuration

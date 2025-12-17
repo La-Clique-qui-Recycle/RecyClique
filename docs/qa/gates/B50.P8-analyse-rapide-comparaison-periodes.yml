@@ -41,3 +41,6 @@ recommendations:
     - action: "Implémenter la fonctionnalité d'export (actuellement placeholder) pour permettre l'export CSV/Excel des comparaisons"
       refs: ["docs/stories/story-b50-p8-analyse-rapide-comparaison-periodes.md:273-278"]
 
+
+
+

@@ -536,7 +536,36 @@ const TransactionLogsTab: React.FC = () => {
   };
 
   const formatTimestamp = (timestamp: string) => {
-    return new Date(timestamp).toLocaleString('fr-FR');
+    if (!timestamp) return '-';
+    try {
+      // Gérer le format avec 'Z' à la fin (ISO 8601)
+      // Format attendu: "2025-12-10T23:52:54.686286+00:00Z" ou "2025-12-10T23:52:54.686286Z"
+      let dateStr = timestamp;
+      if (dateStr.endsWith('Z')) {
+        // Remplacer 'Z' par '+00:00' seulement si pas déjà de timezone
+        if (!dateStr.includes('+') && !dateStr.slice(0, -1).includes('-', dateStr.lastIndexOf('T'))) {
+          dateStr = dateStr.slice(0, -1) + '+00:00';
+        } else if (dateStr.includes('+00:00Z')) {
+          // Cas: "+00:00Z" -> remplacer par "+00:00"
+          dateStr = dateStr.replace('+00:00Z', '+00:00');
+        } else {
+          // Cas simple: "Z" à la fin sans timezone -> remplacer par "+00:00"
+          dateStr = dateStr.slice(0, -1) + '+00:00';
+        }
+      }
+      const date = new Date(dateStr);
+      if (isNaN(date.getTime())) {
+        // Si le parsing échoue, essayer sans modification
+        const date2 = new Date(timestamp);
+        if (isNaN(date2.getTime())) {
+          return timestamp; // Retourner la chaîne originale si le parsing échoue
+        }
+        return date2.toLocaleString('fr-FR');
+      }
+      return date.toLocaleString('fr-FR');
+    } catch (error) {
+      return timestamp; // Retourner la chaîne originale en cas d'erreur
+    }
   };
 
   const formatEventType = (eventType: string) => {

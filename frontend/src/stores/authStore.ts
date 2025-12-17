@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { devtools, persist } from 'zustand/middleware';
-import { AuthApi, LoginRequest, LoginResponse, AuthUser } from '../generated/api';
+import { AuthApi } from '../generated/api';
+import { LoginRequest, LoginResponse, AuthUser } from '../generated/types';
 import axiosClient from '../api/axiosClient';
 import { getTokenExpiration } from '../utils/jwt';
 
@@ -26,7 +27,7 @@ interface AuthState {
   currentUser: User | null;
   isAuthenticated: boolean;
   token: string | null; // OPTIMIZATION: Cache token in memory to avoid repeated localStorage reads
-  refreshToken: string | null; // B42-P6: Store refresh token for rotation
+  refreshTokenValue: string | null; // B42-P6: Store refresh token for rotation
   permissions: string[]; // NEW: Stocker les permissions de l'utilisateur
   loading: boolean;
   error: string | null;
@@ -75,7 +76,7 @@ export const useAuthStore = create<AuthState>()(
         currentUser: null,
         isAuthenticated: false,
         token: null, // OPTIMIZATION: Cached token in memory
-        refreshToken: null, // B42-P6
+        refreshTokenValue: null, // B42-P6
         permissions: [], // NEW
         loading: false,
         error: null,
@@ -91,7 +92,9 @@ export const useAuthStore = create<AuthState>()(
           set({ loading: true, error: null });
           try {
             const loginData: LoginRequest = { username, password };
-            const response: LoginResponse = await AuthApi.apiv1authloginpost(loginData);
+            const response = await AuthApi.apiv1authloginpost(loginData) as LoginResponse & {
+              refresh_token?: string | null;
+            };
             
             // OPTIMIZATION: Store token in both localStorage (persistence) and memory (cache)
             localStorage.setItem('token', response.access_token);
@@ -137,7 +140,7 @@ export const useAuthStore = create<AuthState>()(
               currentUser: user,
               isAuthenticated: true,
               token: response.access_token, // OPTIMIZATION: Cache token in memory
-              refreshToken: response.refresh_token || null, // B42-P6
+              refreshTokenValue: response.refresh_token || null, // B42-P6
               permissions: userPermissions, // NEW
               tokenExpiration: expiration,
               csrfToken: csrfToken,
@@ -240,7 +243,7 @@ export const useAuthStore = create<AuthState>()(
               currentUser: null, 
               isAuthenticated: false, 
               token: null, 
-              refreshToken: null, // B42-P6
+              refreshTokenValue: null, // B42-P6
               permissions: [], 
               error: null,
               tokenExpiration: null,
@@ -256,7 +259,7 @@ export const useAuthStore = create<AuthState>()(
           const token = localStorage.getItem('token');
           const refreshToken = localStorage.getItem('refreshToken'); // B42-P6
           if (!token) {
-            set({ currentUser: null, isAuthenticated: false, token: null, refreshToken: null, permissions: [], loading: false });
+            set({ currentUser: null, isAuthenticated: false, token: null, refreshTokenValue: null, permissions: [], loading: false });
             return;
           }
           if (axiosClient.defaults?.headers?.common) {
@@ -269,7 +272,7 @@ export const useAuthStore = create<AuthState>()(
           set({ 
             isAuthenticated: true, 
             token,
-            refreshToken, // B42-P6
+            refreshTokenValue: refreshToken, // B42-P6
             tokenExpiration: expiration,
             csrfToken: csrfToken,
             loading: false 
@@ -326,7 +329,7 @@ export const useAuthStore = create<AuthState>()(
         
         // B42-P3: Refresh token actions
         refreshToken: async () => {
-          const { refreshPending, lastRefreshAttempt, csrfToken, refreshToken } = get();
+          const { refreshPending, lastRefreshAttempt, csrfToken, refreshTokenValue } = get();
           
           // Prevent concurrent refresh attempts
           if (refreshPending) {
@@ -335,7 +338,7 @@ export const useAuthStore = create<AuthState>()(
           }
           
           // Check if we have a refresh token
-          if (!refreshToken) {
+          if (!refreshTokenValue) {
             console.error('No refresh token available');
             return false;
           }
@@ -355,7 +358,7 @@ export const useAuthStore = create<AuthState>()(
             
             const response = await axiosClient.post(
               '/v1/auth/refresh',
-              { refresh_token: refreshToken }, // B42-P6: Send refresh token in body
+              { refresh_token: refreshTokenValue }, // B42-P6: Send refresh token in body
               {
                 headers: currentCsrfToken ? {
                   'X-CSRF-Token': currentCsrfToken
@@ -380,7 +383,7 @@ export const useAuthStore = create<AuthState>()(
             
             set({
               token: newToken,
-              refreshToken: newRefreshToken || refreshToken, // Update with new one or keep old one
+              refreshTokenValue: newRefreshToken || refreshTokenValue, // Update with new one or keep old one
               tokenExpiration: newExpiration,
               csrfToken: newCsrfToken,
               refreshPending: false,

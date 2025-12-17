@@ -10,7 +10,7 @@ from typing import Optional
 from recyclic_api.core.security import verify_token
 from recyclic_api.models.sale import Sale
 from recyclic_api.models.sale_item import SaleItem
-from recyclic_api.models.cash_session import CashSession
+from recyclic_api.models.cash_session import CashSession, CashSessionStatus
 from recyclic_api.models.user import User, UserRole
 from recyclic_api.schemas.sale import SaleResponse, SaleCreate, SaleUpdate
 from recyclic_api.core.logging import log_transaction_event
@@ -121,6 +121,15 @@ async def create_sale(
     if not cash_session:
         raise HTTPException(status_code=404, detail="Session de caisse non trouvée")
     
+    # B51-P5 FIX 3: Validation supplémentaire (sécurité backend)
+    # Note: Le problème principal est résolu côté frontend, mais cette validation
+    # empêche toute création de vente si le frontend est contourné
+    if cash_session.status != CashSessionStatus.OPEN:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Impossible de créer une vente pour une session fermée (statut: {cash_session.status.value})"
+        )
+    
     # Story B49-P2: Validation métier pour mode prix global
     # Calculer le sous-total (somme des total_price des items avec prix >0)
     subtotal = sum(item.total_price for item in sale_data.items if item.total_price > 0)
@@ -133,7 +142,8 @@ async def create_sale(
         )
     
     # Déterminer la date de création de la vente (B44-P1)
-    # Si la session est différée (opened_at < now()), utiliser opened_at de la session
+    # Si la session est différée (opened_at significativement dans le passé), utiliser opened_at de la session
+    # Story B51-P2: Fix - Ne pas utiliser opened_at pour les sessions normales (même si opened_at < now de quelques secondes)
     sale_created_at = None
     if cash_session.opened_at:
         now = datetime.now(timezone.utc)
@@ -141,8 +151,10 @@ async def create_sale(
         session_opened_at = cash_session.opened_at
         if session_opened_at.tzinfo is None:
             session_opened_at = session_opened_at.replace(tzinfo=timezone.utc)
-        # Si opened_at est dans le passé, c'est une session différée
-        if session_opened_at < now:
+        # Story B51-P2: Une session est différée si opened_at est à plus de 2 minutes dans le passé
+        # Cela évite d'utiliser opened_at pour les sessions normales où opened_at < now de quelques secondes
+        time_diff = (now - session_opened_at).total_seconds()
+        if time_diff > 120:  # Plus de 2 minutes dans le passé = session différée
             sale_created_at = session_opened_at
     
     # Create the sale with operator_id for traceability

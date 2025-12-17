@@ -9,6 +9,12 @@ Avant de contribuer, il est impératif de lire la **Charte de Stratégie de Test
 
 -> [Consulter la Charte de Stratégie de Test](../../docs/testing-strategy.md)
 
+En complément, pour tout problème de tests backend (erreurs pytest, configuration Docker, DB, JWT, etc.), consulter la série de documents d’historique des problèmes de tests dans `docs/` :
+
+- `docs/tests-problemes-*.md` (par exemple : `tests-problemes-brief.md`, `tests-problemes-guide-action.md`, `tests-problemes-QUICK-FIX.md`, `tests-problemes-DB-CONFIG.md`, `tests-problemes-API-ENDOFSTREAM.md`).
+
+Ces fichiers décrivent des problèmes déjà rencontrés, leurs diagnostics et les corrections appliquées. Toujours vérifier s’il existe un `tests-problemes-*` pertinent avant de réinventer une solution.
+
 ---
 
 ## 1. Comment Lancer les Tests (Méthode Recommandée)

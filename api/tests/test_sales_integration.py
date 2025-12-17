@@ -5,14 +5,15 @@ Story 5.2 - Interface Vente Multi-Modes
 
 import pytest
 import uuid
+import time
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
-from datetime import datetime
+from datetime import datetime, timezone
 
 from recyclic_api.main import app
 from recyclic_api.models.user import User, UserRole, UserStatus
 from recyclic_api.models.site import Site
-from recyclic_api.models.cash_session import CashSession
+from recyclic_api.models.cash_session import CashSession, CashSessionStatus
 from recyclic_api.models.cash_register import CashRegister
 from recyclic_api.core.security import create_access_token
 
@@ -748,3 +749,139 @@ class TestSalesIntegration:
         # Vérifier en base de données
         db_sale = db_session.query(Sale).filter(Sale.id == sale.id).first()
         assert db_sale.note == "Note mise à jour par super admin"
+
+    def test_sales_have_distinct_timestamps(self, client: TestClient, test_cashier, test_site, test_cash_register, test_cash_session, cashier_token, db_session):
+        """
+        Test Story B51-P2: Vérifie que les ventes créées successivement ont des timestamps distincts.
+        
+        Valide que le backend génère des timestamps précis (avec secondes) pour distinguer
+        les encaissements créés dans la même minute.
+        """
+        # Créer les données de test en base
+        user = User(**test_cashier)
+        site = Site(**test_site)
+        cash_register = CashRegister(**test_cash_register)
+        cash_session = CashSession(**test_cash_session)
+
+        db_session.add(user)
+        db_session.add(site)
+        db_session.add(cash_register)
+        db_session.add(cash_session)
+        db_session.commit()
+
+        # Créer plusieurs ventes successivement avec un petit délai
+        sale_ids = []
+        sale_timestamps = []
+        
+        for i in range(3):
+            response = client.post(
+                "/api/v1/sales/",
+                json={
+                    "cash_session_id": str(test_cash_session["id"]),
+                    "items": [
+                        {
+                            "category": "EEE-3",
+                            "quantity": 1,
+                            "weight": 2.5,
+                            "unit_price": 10.0 + i,
+                            "total_price": 10.0 + i
+                        }
+                    ],
+                    "total_amount": 10.0 + i,
+                    "donation": 0.0,
+                    "payment_method": "cash"
+                },
+                headers={"Authorization": f"Bearer {cashier_token}"}
+            )
+            
+            assert response.status_code == 200
+            sale_data = response.json()
+            sale_ids.append(sale_data["id"])
+            
+            # Parser le timestamp
+            created_at_str = sale_data["created_at"]
+            # Gérer les formats avec ou sans 'Z'
+            if created_at_str.endswith('Z'):
+                created_at_str = created_at_str.replace('Z', '+00:00')
+            sale_timestamp = datetime.fromisoformat(created_at_str)
+            sale_timestamps.append(sale_timestamp)
+            
+            # Petit délai pour s'assurer que les timestamps sont distincts
+            time.sleep(0.1)
+        
+        # Vérifier que tous les timestamps sont distincts
+        assert len(set(sale_timestamps)) == 3, "Tous les timestamps doivent être distincts"
+        
+        # Vérifier que les timestamps sont dans l'ordre chronologique
+        for i in range(len(sale_timestamps) - 1):
+            assert sale_timestamps[i] < sale_timestamps[i + 1], \
+                f"Le timestamp {i} doit être antérieur au timestamp {i + 1}"
+        
+        # Vérifier que les timestamps ont une précision au moins à la seconde
+        # (les différences doivent être d'au moins 0.1 seconde à cause du sleep)
+        for i in range(len(sale_timestamps) - 1):
+            diff_seconds = (sale_timestamps[i + 1] - sale_timestamps[i]).total_seconds()
+            assert diff_seconds >= 0.1, \
+                f"La différence entre les timestamps doit être d'au moins 0.1 seconde, mais était {diff_seconds}"
+
+    def test_create_sale_blocked_when_session_closed(self, client: TestClient, test_cashier, test_site, test_cash_register, cashier_token, db_session):
+        """
+        Test B51-P5 Fix 3: La création d'une vente doit être bloquée si la session est fermée.
+        
+        Valide que :
+        1. POST /sales/ retourne 422 si la session associée est fermée
+        2. Le message d'erreur indique clairement que la session est fermée
+        """
+        # Créer les données de test en base
+        user = User(**test_cashier)
+        site = Site(**test_site)
+        cash_register = CashRegister(**test_cash_register)
+        
+        # Créer une session FERMÉE
+        closed_session_data = {
+            "id": uuid.uuid4(),
+            "operator_id": str(test_cashier["id"]),
+            "site_id": str(test_site["id"]),
+            "register_id": str(test_cash_register["id"]),
+            "initial_amount": 100.0,
+            "current_amount": 100.0,
+            "status": CashSessionStatus.CLOSED,  # Session fermée
+            "opened_at": datetime.utcnow(),
+            "closed_at": datetime.utcnow()
+        }
+        closed_session = CashSession(**closed_session_data)
+        
+        db_session.add(user)
+        db_session.add(site)
+        db_session.add(cash_register)
+        db_session.add(closed_session)
+        db_session.commit()
+        
+        # Données de vente
+        sale_data = {
+            "cash_session_id": str(closed_session.id),
+            "items": [
+                {
+                    "category": "EEE-3",
+                    "quantity": 1,
+                    "weight": 2.5,
+                    "unit_price": 10.0,
+                    "total_price": 15.0
+                }
+            ],
+            "total_amount": 15.0,
+            "donation": 0.0,
+            "payment_method": "cash"
+        }
+        
+        # Tenter de créer une vente pour une session fermée
+        response = client.post(
+            "/api/v1/sales/",
+            json=sale_data,
+            headers={"Authorization": f"Bearer {cashier_token}"}
+        )
+        
+        # Vérifier que la requête est rejetée avec 422
+        assert response.status_code == 422, f"Expected 422, got {response.status_code}: {response.text}"
+        assert "fermée" in response.json()["detail"].lower() or "closed" in response.json()["detail"].lower(), \
+            f"Le message d'erreur doit mentionner que la session est fermée: {response.json()['detail']}"

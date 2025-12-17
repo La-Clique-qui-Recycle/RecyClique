@@ -21,10 +21,45 @@ interface CategoryState {
   updateDisplayOrder: (categoryId: string, displayOrder: number) => Promise<void>;
   updateDisplayOrderEntry: (categoryId: string, displayOrderEntry: number) => Promise<void>; // Story B48-P4
   clearError: () => void;
+  loadFromLocalStorage: () => void;
 }
 
-// Cache duration: 5 minutes
+// Cache duration: 5 minutes (in-memory)
 const CACHE_DURATION = 5 * 60 * 1000;
+
+// LocalStorage keys for persistent cache
+const STORAGE_KEY_CATEGORIES = 'recyclic_categories_cache';
+const STORAGE_KEY_VISIBLE = 'recyclic_visible_categories_cache';
+const STORAGE_KEY_TIMESTAMP = 'recyclic_categories_cache_timestamp';
+
+// Helper: Save to localStorage
+const saveToLocalStorage = (categories: Category[], visibleCategories: Category[]) => {
+  try {
+    localStorage.setItem(STORAGE_KEY_CATEGORIES, JSON.stringify(categories));
+    localStorage.setItem(STORAGE_KEY_VISIBLE, JSON.stringify(visibleCategories));
+    localStorage.setItem(STORAGE_KEY_TIMESTAMP, Date.now().toString());
+  } catch (e) {
+    console.warn('Failed to save categories to localStorage', e);
+  }
+};
+
+// Helper: Load from localStorage
+const loadFromLocalStorageHelper = (): { categories: Category[]; visibleCategories: Category[]; timestamp: number | null } => {
+  try {
+    const categoriesStr = localStorage.getItem(STORAGE_KEY_CATEGORIES);
+    const visibleStr = localStorage.getItem(STORAGE_KEY_VISIBLE);
+    const timestampStr = localStorage.getItem(STORAGE_KEY_TIMESTAMP);
+    
+    return {
+      categories: categoriesStr ? JSON.parse(categoriesStr) : [],
+      visibleCategories: visibleStr ? JSON.parse(visibleStr) : [],
+      timestamp: timestampStr ? parseInt(timestampStr, 10) : null,
+    };
+  } catch (e) {
+    console.warn('Failed to load categories from localStorage', e);
+    return { categories: [], visibleCategories: [], timestamp: null };
+  }
+};
 
 export const useCategoryStore = create<CategoryState>()(
   devtools(
@@ -37,12 +72,26 @@ export const useCategoryStore = create<CategoryState>()(
       error: null,
       lastFetchTime: null,
 
-      // Fetch categories with caching
+      // Load categories from localStorage (called on init)
+      loadFromLocalStorage: () => {
+        const cached = loadFromLocalStorageHelper();
+        if (cached.categories.length > 0) {
+          const active = cached.categories.filter((cat) => cat.is_active);
+          set({
+            categories: cached.categories,
+            activeCategories: active,
+            visibleCategories: cached.visibleCategories.length > 0 ? cached.visibleCategories : active.filter((cat) => cat.is_visible !== false),
+            lastFetchTime: cached.timestamp,
+          });
+        }
+      },
+
+      // Fetch categories with caching (stale-while-revalidate)
       fetchCategories: async (forceRefresh = false) => {
         const state = get();
         const now = Date.now();
 
-        // Check if we have cached data and it's still fresh
+        // Check if we have cached data and it's still fresh (in-memory)
         if (
           !forceRefresh &&
           state.lastFetchTime &&
@@ -53,7 +102,11 @@ export const useCategoryStore = create<CategoryState>()(
           return;
         }
 
-        set({ loading: true, error: null });
+        // If we have cached data, don't show loading (stale-while-revalidate)
+        const hasCache = state.categories.length > 0;
+        if (!hasCache) {
+          set({ loading: true, error: null });
+        }
 
         try {
           const allCategories = await categoryService.getCategories();
@@ -66,7 +119,17 @@ export const useCategoryStore = create<CategoryState>()(
             error: null,
             lastFetchTime: now,
           });
+
+          // Save to localStorage for next time
+          saveToLocalStorage(allCategories, state.visibleCategories.length > 0 ? state.visibleCategories : active.filter((cat) => cat.is_visible !== false));
         } catch (error: any) {
+          // If we have cache, silently fail (stale-while-revalidate)
+          if (hasCache) {
+            console.warn('Failed to refresh categories, using cache', error);
+            set({ loading: false });
+            return;
+          }
+          // No cache, show error
           set({
             loading: false,
             error: error.response?.data?.detail || 'Erreur lors du chargement des catégories',
@@ -79,7 +142,7 @@ export const useCategoryStore = create<CategoryState>()(
         return get().activeCategories;
       },
 
-      // Fetch visible categories for ENTRY tickets
+      // Fetch visible categories for ENTRY tickets (stale-while-revalidate)
       fetchVisibleCategories: async (forceRefresh = false) => {
         const state = get();
         const now = Date.now();
@@ -94,7 +157,11 @@ export const useCategoryStore = create<CategoryState>()(
           return;
         }
 
-        set({ loading: true, error: null });
+        // If we have cached data, don't show loading (stale-while-revalidate)
+        const hasCache = state.visibleCategories.length > 0;
+        if (!hasCache) {
+          set({ loading: true, error: null });
+        }
 
         try {
           const visibleCategories = await categoryService.getCategoriesForEntryTickets(true);
@@ -104,6 +171,8 @@ export const useCategoryStore = create<CategoryState>()(
             error: null,
             lastFetchTime: now,
           });
+          // Save to localStorage
+          saveToLocalStorage(state.categories, visibleCategories);
         } catch (error: any) {
           // Fallback: if endpoint fails (e.g., migration not run), use all active categories
           console.warn('Failed to fetch visible categories, falling back to active categories', error);
@@ -111,13 +180,23 @@ export const useCategoryStore = create<CategoryState>()(
             // Try to fetch all categories and filter visible ones
             const allCategories = await categoryService.getCategories(true);
             const visible = allCategories.filter((cat) => cat.is_visible !== false);
+            const result = visible.length > 0 ? visible : allCategories;
             set({
-              visibleCategories: visible.length > 0 ? visible : allCategories, // Fallback to all if none visible
+              visibleCategories: result,
               loading: false,
               error: null,
               lastFetchTime: now,
             });
+            // Save to localStorage
+            saveToLocalStorage(allCategories, result);
           } catch (fallbackError: any) {
+            // If we have cache, silently fail (stale-while-revalidate)
+            if (hasCache) {
+              console.warn('Failed to refresh visible categories, using cache', fallbackError);
+              set({ loading: false });
+              return;
+            }
+            // No cache, show error
             set({
               loading: false,
               error: error.response?.data?.detail || 'Erreur lors du chargement des catégories visibles',
@@ -246,5 +325,8 @@ export const useCategoryStore = create<CategoryState>()(
     { name: 'categoryStore' }
   )
 );
+
+// Auto-load from localStorage on store creation
+useCategoryStore.getState().loadFromLocalStorage();
 
 export default useCategoryStore;
