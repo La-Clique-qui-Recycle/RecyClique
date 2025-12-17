@@ -375,9 +375,11 @@ const formatCurrency = (value: number | null | undefined) => {
 
 
 /**
- * Formate une date ISO en format français localisé
+ * Formate une date ISO en format français localisé avec secondes
  * @param dateString - Chaîne de date ISO
- * @returns Date formatée ou "N/A" si invalide
+ * @returns Date formatée (DD/MM/YYYY HH:mm:ss) ou "N/A" si invalide
+ * 
+ * Story B51-P2: Inclut les secondes pour distinguer les encaissements créés dans la même minute
  */
 const formatDate = (dateString: string) => {
   if (!dateString) {
@@ -391,7 +393,16 @@ const formatDate = (dateString: string) => {
     return 'N/A'
   }
   
-  return date.toLocaleString('fr-FR')
+  // Format explicite avec secondes pour distinguer les encaissements
+  // Format: DD/MM/YYYY HH:mm:ss
+  const day = date.getDate().toString().padStart(2, '0')
+  const month = (date.getMonth() + 1).toString().padStart(2, '0')
+  const year = date.getFullYear()
+  const hours = date.getHours().toString().padStart(2, '0')
+  const minutes = date.getMinutes().toString().padStart(2, '0')
+  const seconds = date.getSeconds().toString().padStart(2, '0')
+  
+  return `${day}/${month}/${year} ${hours}:${minutes}:${seconds}`
 }
 
 /**

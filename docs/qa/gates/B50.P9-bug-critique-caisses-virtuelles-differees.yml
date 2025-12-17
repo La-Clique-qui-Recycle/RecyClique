@@ -41,3 +41,6 @@ recommendations:
     - action: "Vérifier manuellement en production que le workflow clavier (B49-P5) fonctionne toujours correctement avec le champ vide"
       refs: ["docs/stories/VALIDATION-PO-B50-P9-P10.md:29-57"]
 
+
+
+

@@ -75,6 +75,7 @@ interface DeferredCashSessionState {
   loading: boolean;
   error: string | null;
   openedAt: string | null;  // B44-P1: Date de session différée
+  ticketOpenedLogged: boolean;  // B51-P5: Flag pour détecter anomalies (ITEM_ADDED_WITHOUT_TICKET)
 
   // Scroll state for ticket display
   ticketScrollState: ScrollState;
@@ -126,6 +127,7 @@ export const useDeferredCashSessionStore = create<DeferredCashSessionState>()(
         loading: false,
         error: null,
         openedAt: null,  // B44-P1: Date de session différée
+        ticketOpenedLogged: false,  // B51-P5: Flag pour détecter anomalies (ITEM_ADDED_WITHOUT_TICKET)
         currentRegisterOptions: null,  // B49-P3: Options de workflow héritées de la caisse source
         ticketScrollState: {
           scrollTop: 0,
@@ -147,6 +149,49 @@ export const useDeferredCashSessionStore = create<DeferredCashSessionState>()(
 
         // Sale actions (identique au store normal)
         addSaleItem: (item: Omit<SaleItem, 'id'>) => {
+          const state = get();
+          
+          const wasEmpty = state.currentSaleItems.length === 0;
+          
+          // Si le panier était vide, c'est l'ouverture d'un nouveau ticket
+          // On marque ticketOpenedLogged à true IMMÉDIATEMENT pour permettre les ajouts
+          if (wasEmpty && !state.ticketOpenedLogged) {
+            set({ ticketOpenedLogged: true });
+          }
+          
+          // B51-P5 FIX 1: Validation CRITIQUE - Bloquer l'ajout si aucun ticket n'est explicitement ouvert
+          // IMPORTANT: Vérifier AVANT de créer newItem et AVANT d'ajouter au panier
+          // Mais permettre l'ajout si le panier était vide (ouverture normale d'un ticket)
+          const currentState = get(); // Obtenir l'état à jour après le set()
+          if (!currentState.ticketOpenedLogged && !wasEmpty) {
+            console.warn('[addSaleItem] Tentative d\'ajout d\'article sans ticket ouvert - BLOQUÉ');
+            
+            // Logger l'anomalie
+            if (state.currentSession) {
+              import('../services/transactionLogService').then(({ transactionLogService }) => {
+                const cartState = {
+                  items_count: state.currentSaleItems.length,  // Pas +1 car on bloque l'ajout
+                  items: state.currentSaleItems.map(item => ({
+                    id: item.id,
+                    category: item.category,
+                    weight: item.weight,
+                    price: item.total
+                  })),
+                  total: state.currentSaleItems.reduce((sum, item) => sum + item.total, 0)
+                };
+                transactionLogService.logAnomaly(
+                  state.currentSession!.id,
+                  cartState,
+                  'Item added but no ticket is explicitly opened - BLOCKED (B51-P5 fix)'
+                ).catch(err => console.error('[TransactionLog] Erreur:', err));
+              }).catch(err => console.error('[TransactionLog] Erreur lors de l\'import:', err));
+            }
+            
+            // B51-P5 FIX 1: BLOQUER l'ajout - ne pas créer newItem ni l'ajouter au panier
+            return; // Sortir immédiatement, ne pas ajouter l'item
+          }
+          
+          // Si ticketOpenedLogged = true, continuer normalement
           const newItem: SaleItem = {
             ...item,
             id: `item-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
@@ -191,6 +236,7 @@ export const useDeferredCashSessionStore = create<DeferredCashSessionState>()(
           set({
             currentSaleItems: [],
             currentSaleNote: null,
+            ticketOpenedLogged: false,  // B51-P5: Réinitialiser le flag lors du reset
             ticketScrollState: {
               scrollTop: 0,
               scrollHeight: 0,

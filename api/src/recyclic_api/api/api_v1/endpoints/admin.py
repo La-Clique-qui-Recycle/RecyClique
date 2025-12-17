@@ -1507,14 +1507,26 @@ async def get_transaction_logs(
                             logger.warning(f"Ligne invalide dans {log_file}:{line_num}: {line[:100]}")
                             continue
             except Exception as e:
-                logger.error(f"Erreur lors de la lecture de {log_file}: {e}")
+                logger.error(f"Erreur lors de la lecture de {log_file}: {e}", exc_info=True)
                 continue
         
+        logger.info(f"Total entries parsed: {len(all_entries)}")
+        
         # Trier par timestamp (plus récent en premier)
-        all_entries.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+        # Utiliser une clé de tri sécurisée qui gère les timestamps manquants
+        def get_sort_key(entry):
+            timestamp = entry.get('timestamp', '')
+            if not timestamp:
+                return '0000-00-00T00:00:00'  # Mettre les entrées sans timestamp à la fin
+            return timestamp
+        
+        all_entries.sort(key=get_sort_key, reverse=True)
+        logger.info(f"Entries sorted, first entry event: {all_entries[0].get('event') if all_entries else 'None'}")
         
         # Appliquer les filtres
         filtered_entries = []
+        logger.info(f"Applying filters: event_type={event_type}, user_id={user_id}, session_id={session_id}, start_date={start_date}, end_date={end_date}")
+        
         for entry in all_entries:
             # Filtrer par event_type
             if event_type and entry.get('event') != event_type:
@@ -1532,16 +1544,26 @@ async def get_transaction_logs(
             entry_timestamp = entry.get('timestamp')
             if entry_timestamp:
                 try:
-                    entry_dt = datetime.fromisoformat(entry_timestamp.replace('Z', '+00:00'))
+                    # Gérer le format avec 'Z' à la fin (ISO 8601)
+                    # Format attendu: "2025-12-10T23:52:54.686286+00:00Z" ou "2025-12-10T23:52:54.686286Z"
+                    timestamp_str = entry_timestamp
+                    if timestamp_str.endswith('Z'):
+                        # Remplacer 'Z' par '+00:00' seulement si pas déjà de timezone
+                        if '+00:00' not in timestamp_str and '-00:00' not in timestamp_str:
+                            timestamp_str = timestamp_str[:-1] + '+00:00'
+                    entry_dt = datetime.fromisoformat(timestamp_str)
                     if start_date and entry_dt < start_date:
                         continue
                     if end_date and entry_dt > end_date:
                         continue
-                except (ValueError, AttributeError):
-                    # Ignorer les entrées avec timestamp invalide
-                    continue
+                except (ValueError, AttributeError) as e:
+                    # Logger l'erreur mais continuer (ne pas ignorer l'entrée)
+                    logger.warning(f"Erreur de parsing timestamp '{entry_timestamp}': {e}")
+                    # Ne pas continuer ici - inclure l'entrée même si le timestamp est invalide
             
             filtered_entries.append(entry)
+        
+        logger.info(f"Filtered entries count: {len(filtered_entries)}")
         
         # Appliquer la pagination
         total_count = len(filtered_entries)
@@ -1552,6 +1574,8 @@ async def get_transaction_logs(
         total_pages = (total_count + page_size - 1) // page_size if total_count > 0 else 0
         has_next = page < total_pages
         has_prev = page > 1
+        
+        logger.info(f"Returning {len(paginated_entries)} entries (page {page}/{total_pages}, total: {total_count})")
         
         return {
             "entries": paginated_entries,

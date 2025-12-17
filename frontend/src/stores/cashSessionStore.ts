@@ -186,15 +186,55 @@ export const useCashSessionStore = create<CashSessionState>()(
 
         // Sale actions
         addSaleItem: (item: Omit<SaleItem, 'id'>) => {
+          const state = get();
+          
+          const wasEmpty = state.currentSaleItems.length === 0;
+          
+          // Si le panier était vide, c'est l'ouverture d'un nouveau ticket
+          // On marque ticketOpenedLogged à true IMMÉDIATEMENT pour permettre les ajouts
+          if (wasEmpty && !state.ticketOpenedLogged) {
+            set({ ticketOpenedLogged: true });
+          }
+          
+          // B51-P5 FIX 1: Validation CRITIQUE - Bloquer l'ajout si aucun ticket n'est explicitement ouvert
+          // IMPORTANT: Vérifier AVANT de créer newItem et AVANT d'ajouter au panier
+          // Mais permettre l'ajout si le panier était vide (ouverture normale d'un ticket)
+          const currentState = get(); // Obtenir l'état à jour après le set()
+          if (!currentState.ticketOpenedLogged && !wasEmpty) {
+            console.warn('[addSaleItem] Tentative d\'ajout d\'article sans ticket ouvert - BLOQUÉ');
+            
+            // Logger l'anomalie
+            if (currentState.currentSession) {
+              import('../services/transactionLogService').then(({ transactionLogService }) => {
+                const cartState = {
+                  items_count: currentState.currentSaleItems.length,  // Pas +1 car on bloque l'ajout
+                  items: currentState.currentSaleItems.map(item => ({
+                    id: item.id,
+                    category: item.category,
+                    weight: item.weight,
+                    price: item.total
+                  })),
+                  total: currentState.currentSaleItems.reduce((sum, item) => sum + item.total, 0)
+                };
+                transactionLogService.logAnomaly(
+                  currentState.currentSession!.id,
+                  cartState,
+                  'Item added but no ticket is explicitly opened - BLOCKED (B51-P5 fix)'
+                ).catch(err => console.error('[TransactionLog] Erreur:', err));
+              }).catch(err => console.error('[TransactionLog] Erreur lors de l\'import:', err));
+            }
+            
+            // B51-P5 FIX 1: BLOQUER l'ajout - ne pas créer newItem ni l'ajouter au panier
+            return; // Sortir immédiatement, ne pas ajouter l'item
+          }
+          
+          // Si ticketOpenedLogged = true, continuer normalement
           const newItem: SaleItem = {
             ...item,
             id: `item-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
             presetId: item.presetId,
             notes: item.notes
           };
-
-          const state = get();
-          const wasEmpty = state.currentSaleItems.length === 0;
           
           set({
             currentSaleItems: [...state.currentSaleItems, newItem]
@@ -215,41 +255,14 @@ export const useCashSessionStore = create<CashSessionState>()(
                 total: [...state.currentSaleItems, newItem].reduce((sum, item) => sum + item.total, 0)
               };
 
-              // Détecter anomalie: si un item est ajouté alors qu'aucun TICKET_OPENED n'a été loggé
-              // pour cette session (AC #3: "Si une action 'Ajout Item' arrive alors qu'aucun ticket n'est explicitement 'ouvert'")
-              if (!state.ticketOpenedLogged) {
-                // Anomalie détectée: ITEM_ADDED_WITHOUT_TICKET
-                transactionLogService.logAnomaly(
-                  state.currentSession!.id,
-                  cartState,
-                  "Item added but no ticket is explicitly opened"
-                ).catch((err) => {
-                  console.error('[TransactionLog] Erreur lors du log ANOMALY_DETECTED:', err);
-                });
-
-                // Logger aussi TICKET_OPENED pour marquer l'ouverture du ticket (même si c'est une anomalie)
-                // Cela permet de suivre l'état du ticket même en cas d'anomalie
-                transactionLogService.logTicketOpened(
-                  state.currentSession!.id,
-                  cartState,
-                  true // Anomalie: ticket ouvert implicitement
-                ).then(() => {
-                  // Marquer que TICKET_OPENED a été loggé
-                  set({ ticketOpenedLogged: true });
-                }).catch((err) => {
-                  console.error('[TransactionLog] Erreur lors du log TICKET_OPENED:', err);
-                });
-              } else if (wasEmpty) {
-                // Cas normal: panier était vide, on ouvre un nouveau ticket
-                // (TICKET_OPENED a déjà été loggé précédemment, donc pas d'anomalie)
+              // Cas normal: panier était vide, on ouvre un nouveau ticket
+              // (TICKET_OPENED a déjà été loggé précédemment, donc pas d'anomalie)
+              if (wasEmpty) {
                 transactionLogService.logTicketOpened(
                   state.currentSession!.id,
                   cartState,
                   false // Pas d'anomalie
-                ).then(() => {
-                  // Marquer que TICKET_OPENED a été loggé
-                  set({ ticketOpenedLogged: true });
-                }).catch((err) => {
+                ).catch((err) => {
                   console.error('[TransactionLog] Erreur lors du log TICKET_OPENED:', err);
                 });
               }
@@ -786,7 +799,18 @@ export const useCashSessionStore = create<CashSessionState>()(
             }
           }
           
+          // B51-P5 FIX 2: Si des articles sont restaurés depuis localStorage mais ticketOpenedLogged n'est pas défini,
+          // vider les articles pour éviter les articles fantômes
+          if (state?.currentSaleItems && state.currentSaleItems.length > 0) {
+            // Si ticketOpenedLogged n'est pas persisté (toujours false au rechargement),
+            // et qu'on a des articles, c'est suspect - les vider pour sécurité
+            // Note: ticketOpenedLogged n'est pas dans partialize, donc toujours false au rehydrate
+            console.warn('[Store] onRehydrateStorage - Articles restaurés mais ticketOpenedLogged non défini, vidage du panier');
+            state.currentSaleItems = [];
+          }
+          
           console.log('[Store] onRehydrateStorage - currentRegisterOptions final:', state?.currentRegisterOptions);
+          return state;
         }
       }
     ),

@@ -5,6 +5,31 @@
 - **Isolation** : Les tests ne doivent pas dépendre les uns des autres.
 - **Reproductibilité** : Un test doit toujours produire le même résultat dans le même environnement.
 
+### 1.1. Historique des Problèmes de Tests & Runbooks
+
+Pour tous les agents DEV (backend et frontend), il existe une série de documents de référence dans `docs/` qui capturent :
+
+- les problèmes de tests rencontrés (backend, frontend, infra),  
+- leur diagnostic détaillé,  
+- les solutions appliquées et les bonnes pratiques en découlant.
+
+Ces documents suivent tous le pattern de nommage :
+
+- `docs/tests-problemes-*.md`
+
+Exemples typiques :
+
+- `docs/tests-problemes-brief.md`  
+- `docs/tests-problemes-guide-action.md`  
+- `docs/tests-problemes-QUICK-FIX.md`  
+- `docs/tests-problemes-DB-CONFIG.md`  
+- `docs/tests-problemes-API-ENDOFSTREAM.md`
+
+**Règle pour les agents DEV :**
+
+- Avant d’investiguer un nouveau problème de tests ou de configuration, vérifier s’il existe déjà un document `tests-problemes-*` correspondant (ou proche) dans `docs/`.  
+- Lorsqu’un nouveau problème significatif est résolu, ajouter un nouveau fichier `tests-problemes-NOM_DU_PROBLEME.md` en suivant les patterns déjà présents.
+
 ## 2. Matrice de Décision des Patterns de Test
 | Type de Test / Objectif | Pattern Recommandé | Quand l'utiliser | Modules Exemples |
 |---|---|---|---|
