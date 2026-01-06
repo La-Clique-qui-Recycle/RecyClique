@@ -168,6 +168,7 @@ def generate_ecologic_csv(
         totals[code]["deposit_weight_kg"] += float(total_weight or 0.0)
 
     # Aggregate sales
+    # Story B52-P3: Utiliser sale_date pour les analyses par période (date réelle du ticket)
     sale_query = (
         db.query(
             SaleItem.category,
@@ -176,8 +177,8 @@ def generate_ecologic_csv(
         )
         .join(Sale, SaleItem.sale_id == Sale.id)
         .filter(
-            Sale.created_at >= start_dt,
-            Sale.created_at <= end_dt,
+            func.coalesce(Sale.sale_date, Sale.created_at) >= start_dt,
+            func.coalesce(Sale.sale_date, Sale.created_at) <= end_dt,
         )
         .group_by(SaleItem.category)
     )
@@ -379,7 +380,8 @@ def generate_cash_session_report(
         total_tickets = len(sales)
         
         for sale_idx, sale in enumerate(sales, start=1):
-            sale_created_at = _format_date(sale.created_at)
+            # Story B52-P3: Utiliser sale_date pour la date réelle du ticket
+            sale_created_at = _format_date(sale.sale_date or sale.created_at)
             if sale.items:
                 for item in sale.items:
                     # Récupérer le nom du preset si présent et nettoyer
@@ -493,6 +495,7 @@ def preview_ecologic_export(
         totals[code]["deposit_count"] += int(count or 0)
         totals[code]["deposit_weight_kg"] += float(total_weight or 0.0)
 
+    # Story B52-P3: Utiliser sale_date pour les analyses par période (date réelle du ticket)
     sale_query = (
         db.query(
             SaleItem.category,
@@ -501,8 +504,8 @@ def preview_ecologic_export(
         )
         .join(Sale, SaleItem.sale_id == Sale.id)
         .filter(
-            Sale.created_at >= start_dt,
-            Sale.created_at <= end_dt,
+            func.coalesce(Sale.sale_date, Sale.created_at) >= start_dt,
+            func.coalesce(Sale.sale_date, Sale.created_at) <= end_dt,
         )
         .group_by(SaleItem.category)
     )

@@ -1,6 +1,6 @@
 {
   "name": "recyclique-frontend",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "description": "Interface web pour la plateforme RecyClique",
   "private": true,
   "type": "module",

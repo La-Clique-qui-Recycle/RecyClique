@@ -28,6 +28,7 @@ class Sale(Base):
     payment_method = Column(SQLEnum(PaymentMethod, name="payment_method", native_enum=False), nullable=True, default=PaymentMethod.CASH)
     note = Column(Text, nullable=True)  # Story B40-P5: Notes sur les tickets de caisse
     # Story 1.1.2: preset_id et notes déplacés vers sale_items (par item individuel)
+    sale_date = Column(DateTime(timezone=True), nullable=True)  # Story B52-P3: Date réelle du ticket (date du cahier)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -36,6 +37,8 @@ class Sale(Base):
     operator = relationship("User")
     # Story 1.1.2: Relation preset_button supprimée - presets maintenant sur sale_items
     items = relationship("SaleItem", back_populates="sale", cascade="all, delete-orphan")
+    # Story B52-P1: Relation vers les paiements multiples
+    payments = relationship("PaymentTransaction", back_populates="sale", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<Sale(id={self.id}, total_amount={self.total_amount})>"

@@ -248,7 +248,7 @@ function Dashboard() {
                   <StatValue data-testid="stat-reception-items">
                     {receptionStats?.total_items || 0}
                   </StatValue>
-                  <StatLabel>Articles reçus</StatLabel>
+                  <StatLabel>Lignes de réception</StatLabel>
                 </StatContent>
               </StatCard>
             </StatsGrid>

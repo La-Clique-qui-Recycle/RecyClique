@@ -40,3 +40,5 @@ recommendations:
     - action: "Considérer tests frontend pour formatDate avec différents formats de dates"
       refs: ["frontend/src/pages/Admin/CashSessionDetail.tsx:384-394"]
 
+
+

@@ -56,10 +56,10 @@ export function useVirtualCashLiveStats({
   const calculateVirtualStats = useCallback((): CashLiveStats => {
     const now = new Date();
 
-    // Filtrer les ventes du jour (basé sur la date de création)
+    // Filtrer les ventes du jour (basé sur la date réelle du ticket - Story B52-P3)
     const today = new Date().toDateString();
     const todaysSales = virtualSales.filter(sale => {
-      const saleDate = new Date(sale.created_at).toDateString();
+      const saleDate = new Date(sale.sale_date || sale.created_at).toDateString();
       return saleDate === today;
     });
 
@@ -165,6 +165,8 @@ export function useVirtualCashLiveStats({
     refresh
   };
 }
+
+
 
 
 

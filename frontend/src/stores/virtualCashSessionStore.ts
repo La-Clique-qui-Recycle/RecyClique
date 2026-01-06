@@ -274,7 +274,7 @@ export const useVirtualCashSessionStore = create<VirtualCashSessionState>()(
         }
       },
 
-      updateSaleItem: (itemId: string, newQuantity: number, newWeight: number, newPrice: number, presetId?: string, notes?: string) => {
+      updateSaleItem: (itemId: string, newQuantity: number, newWeight: number, newPrice: number, presetId?: string | null, notes?: string) => {
         set((state) => ({
           currentSaleItems: state.currentSaleItems.map(item =>
             item.id === itemId
@@ -284,7 +284,8 @@ export const useVirtualCashSessionStore = create<VirtualCashSessionState>()(
                   weight: newWeight,
                   price: newPrice,
                   total: newQuantity * newPrice,
-                  presetId: presetId !== undefined ? presetId : item.presetId,
+                  // presetId: undefined => ne pas toucher ; null => effacer ; string => nouveau preset
+                  presetId: presetId !== undefined ? (presetId === null ? undefined : presetId) : item.presetId,
                   notes: notes !== undefined ? notes : item.notes
                 }
               : item
@@ -301,7 +302,7 @@ export const useVirtualCashSessionStore = create<VirtualCashSessionState>()(
                   weight: newWeight,
                   price: newPrice,
                   total: newQuantity * newPrice,
-                  presetId: presetId !== undefined ? presetId : item.presetId,
+                  presetId: presetId !== undefined ? (presetId === null ? undefined : presetId) : item.presetId,
                   notes: notes !== undefined ? notes : item.notes
                 }
               : item

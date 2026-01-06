@@ -42,6 +42,8 @@ vi.mock('../../../stores/authStore', () => ({
 vi.mock('../../../services/salesService', () => ({
   getSaleDetail: vi.fn(),
   updateSaleNote: vi.fn(),
+  // B52-P2: édition du poids
+  updateSaleItemWeight: vi.fn(),
 }))
 
 vi.mock('../../../services/categoriesService', () => ({
@@ -71,6 +73,8 @@ const mockSessionData = {
   closed_at: '2025-01-27T18:00:00Z',
   total_sales: 50.0,
   total_items: 3,
+  // B52-P6: poids total sorti sur la session
+  total_weight_out: 7.75,
   sales: [
     {
       id: 'sale-1',
@@ -78,8 +82,11 @@ const mockSessionData = {
       donation: 5.0,
       payment_method: 'cash',
       created_at: '2025-01-27T11:00:00Z',
+      sale_date: '2025-01-27T11:00:00Z',
       operator_id: 'operator-id',
-      note: 'Vente avec don pour association locale'
+      note: 'Vente avec don pour association locale',
+      // B52-P6: poids total du panier
+      total_weight: 3.5,
     },
     {
       id: 'sale-2',
@@ -87,10 +94,12 @@ const mockSessionData = {
       donation: 0.0,
       payment_method: 'card',
       created_at: '2025-01-27T12:00:00Z',
+      sale_date: '2025-01-27T12:00:00Z',
       operator_id: 'operator-id',
-      note: null
-    }
-  ]
+      note: null,
+      total_weight: 4.25,
+    },
+  ],
 }
 
 const renderWithRouter = (component: React.ReactElement) => {
@@ -133,6 +142,9 @@ describe('CashSessionDetail', () => {
     expect(screen.getByText('50,00 €')).toBeInTheDocument() // Total sales
     expect(screen.getByText('3')).toBeInTheDocument() // Total items
     expect(screen.getByText('Fermée')).toBeInTheDocument() // Status
+    // B52-P6: carte poids sorties par session
+    expect(screen.getByText('Poids vendus ou donnés (sorties)')).toBeInTheDocument()
+    expect(screen.getByText('7,75 kg')).toBeInTheDocument()
   })
 
   it('should render sales table with correct data', async () => {
@@ -151,6 +163,7 @@ describe('CashSessionDetail', () => {
     expect(screen.getByText('Heure')).toBeInTheDocument()
     expect(screen.getByText('Montant')).toBeInTheDocument()
     expect(screen.getByText('Don')).toBeInTheDocument()
+    expect(screen.getByText('Poids')).toBeInTheDocument()
     expect(screen.getByText('Paiement')).toBeInTheDocument()
     expect(screen.getByText('Opérateur')).toBeInTheDocument()
     
@@ -158,6 +171,8 @@ describe('CashSessionDetail', () => {
     expect(screen.getByText('25,00 €')).toBeInTheDocument() // Sale 1 amount
     expect(screen.getByText('20,00 €')).toBeInTheDocument() // Sale 2 amount
     expect(screen.getByText('5,00 €')).toBeInTheDocument() // Donation
+    expect(screen.getByText('3,50 kg')).toBeInTheDocument() // Sale 1 weight
+    expect(screen.getByText('4,25 kg')).toBeInTheDocument() // Sale 2 weight
     expect(screen.getByText('cash')).toBeInTheDocument()
     expect(screen.getByText('card')).toBeInTheDocument()
   })
@@ -548,6 +563,139 @@ describe('CashSessionDetail', () => {
 
       await waitFor(() => {
         expect(screen.getByText('Aucune note')).toBeInTheDocument()
+      })
+    })
+  })
+
+  // Tests B52-P2: édition du poids des items de vente dans le ticket
+  describe('Weight Editing (B52-P2)', () => {
+    beforeEach(() => {
+      mockUseAuthStore.mockReturnValue({
+        currentUser: { id: 'admin-id', role: 'admin' },
+      })
+
+      const mockSaleDetail = {
+        id: 'sale-1',
+        cash_session_id: 'test-session-id',
+        total_amount: 25.0,
+        donation: 0,
+        payment_method: 'cash',
+        created_at: '2025-01-27T11:00:00Z',
+        operator_id: 'operator-id',
+        note: null,
+        items: [
+          {
+            id: 'item-1',
+            sale_id: 'sale-1',
+            category: 'EEE-1',
+            quantity: 1,
+            weight: 1.5,
+            unit_price: 10.0,
+            total_price: 10.0,
+            preset_id: null,
+            notes: null,
+          },
+        ],
+      }
+
+      vi.mocked(require('../../../services/salesService').getSaleDetail).mockResolvedValue(
+        mockSaleDetail,
+      )
+      vi.mocked(require('../../../services/categoriesService').getCategories).mockResolvedValue([])
+      vi.mocked(require('../../../services/usersService').getUsers).mockResolvedValue([])
+      vi.mocked(
+        require('../../../services/presetService').presetService.getPresets,
+      ).mockResolvedValue([])
+    })
+
+    it('should show weight edit action for admin and call API on save', async () => {
+      const mockUpdatedSale = {
+        id: 'sale-1',
+        cash_session_id: 'test-session-id',
+        total_amount: 25.0,
+        donation: 0,
+        payment_method: 'cash',
+        created_at: '2025-01-27T11:00:00Z',
+        operator_id: 'operator-id',
+        note: null,
+        items: [
+          {
+            id: 'item-1',
+            sale_id: 'sale-1',
+            category: 'EEE-1',
+            quantity: 1,
+            weight: 2.75,
+            unit_price: 10.0,
+            total_price: 10.0,
+            preset_id: null,
+            notes: null,
+          },
+        ],
+      }
+
+      const mockGetSaleDetail = vi.mocked(
+        require('../../../services/salesService').getSaleDetail,
+      )
+      // Première fois: détails initiaux, deuxième fois: détails après update
+      mockGetSaleDetail
+        .mockResolvedValueOnce(mockUpdatedSale) // utilisé lors de l'ouverture du ticket
+        .mockResolvedValueOnce(mockUpdatedSale) // utilisé après sauvegarde
+
+      const mockUpdateWeight = vi.mocked(
+        require('../../../services/salesService').updateSaleItemWeight,
+      )
+      mockUpdateWeight.mockResolvedValue({
+        id: 'item-1',
+        sale_id: 'sale-1',
+        category: 'EEE-1',
+        quantity: 1,
+        weight: 2.75,
+        unit_price: 10.0,
+        total_price: 10.0,
+        preset_id: null,
+        notes: null,
+      })
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockSessionData,
+      })
+
+      const user = userEvent.setup()
+      renderWithRouter(<CashSessionDetail />)
+
+      await waitFor(() => {
+        expect(
+          screen.getByText('Journal des Ventes (2 ventes)'),
+        ).toBeInTheDocument()
+      })
+
+      // Ouvrir la modal du ticket
+      const viewTicketButton = screen.getAllByText('Voir le ticket')[0]
+      await user.click(viewTicketButton)
+
+      await waitFor(() => {
+        expect(screen.getByText('Ticket de Caisse')).toBeInTheDocument()
+      })
+
+      // Vérifier que le bouton "Modifier poids" est présent
+      const editButtons = screen.getAllByText('Modifier poids')
+      expect(editButtons.length).toBeGreaterThan(0)
+
+      // Cliquer sur "Modifier poids"
+      await user.click(editButtons[0])
+
+      // Modifier la valeur du poids
+      const input = screen.getByDisplayValue('1.5')
+      await user.clear(input)
+      await user.type(input, '2.75')
+
+      // Cliquer sur ✓ pour sauvegarder
+      const saveButton = screen.getByText('✓')
+      await user.click(saveButton)
+
+      await waitFor(() => {
+        expect(mockUpdateWeight).toHaveBeenCalledWith('sale-1', 'item-1', 2.75)
       })
     })
   })

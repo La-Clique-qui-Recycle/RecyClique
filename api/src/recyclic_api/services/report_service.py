@@ -505,7 +505,8 @@ def generate_bulk_cash_sessions_excel(
             if not sale.items:
                 continue
             sale_number = str(sale.id)[:8]  # Numéro de ticket (8 premiers caractères de l'UUID)
-            sale_date = _format_date(sale.created_at)
+            # Story B52-P3: Utiliser sale_date pour la date réelle du ticket
+            sale_date = _format_date(sale.sale_date or sale.created_at)
             
             for item in sale.items:
                 # Récupérer la catégorie principale (même si l'item a une sous-catégorie)

@@ -135,19 +135,48 @@ class CashSessionService:
     def get_session_with_details(self, session_id: str) -> Optional[CashSession]:
         """Récupère une session avec toutes ses relations (opérateur, site, ventes)."""
         from sqlalchemy.orm import selectinload
-        
+        from recyclic_api.models.sale import Sale
+
         sid = UUID(str(session_id)) if not isinstance(session_id, UUID) else session_id
         return (
             self.db.query(CashSession)
             .options(
                 selectinload(CashSession.operator),
                 selectinload(CashSession.site),
-                selectinload(CashSession.sales),
+                selectinload(CashSession.sales).selectinload(Sale.payments),  # Story B52-P1: Charger les paiements multiples
                 selectinload(CashSession.register)  # Story B49-P1: Charger le register pour les options
             )
             .filter(CashSession.id == sid)
             .first()
         )
+
+    def get_session_weight_aggregations(self, session: CashSession) -> Tuple[float, Dict[str, float]]:
+        """B52-P6: Calcule les agrégations de poids pour une session de caisse.
+
+        Cette méthode retourne :
+        - le poids total sorti sur la session (somme de tous les SaleItem.weight)
+        - un mapping {sale_id: total_weight} pour chaque vente de la session
+        """
+        # Agréger les poids par vente en une seule requête
+        weight_rows = (
+            self.db.query(
+                Sale.id,
+                func.coalesce(func.sum(SaleItem.weight), 0.0).label("total_weight"),
+            )
+            .join(SaleItem, SaleItem.sale_id == Sale.id)
+            .filter(Sale.cash_session_id == session.id)
+            .group_by(Sale.id)
+            .all()
+        )
+
+        sale_weights: Dict[str, float] = {
+            str(sale_id): float(total_weight or 0.0)
+            for sale_id, total_weight in weight_rows
+        }
+
+        total_weight_out = float(sum(sale_weights.values())) if sale_weights else 0.0
+
+        return total_weight_out, sale_weights
     
     def _get_register_options(self, register: Optional[CashRegister]) -> Dict[str, Any]:
         """Story B49-P1: Helper pour récupérer et valider les options de workflow d'un registre.

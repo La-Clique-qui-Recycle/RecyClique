@@ -112,7 +112,7 @@ interface CashSessionState {
   // Sale actions
   addSaleItem: (item: Omit<SaleItem, 'id'>) => void;
   removeSaleItem: (itemId: string) => void;
-  updateSaleItem: (itemId: string, newQuantity: number, newWeight: number, newPrice: number, presetId?: string, notes?: string) => void;
+  updateSaleItem: (itemId: string, newQuantity: number, newWeight: number, newPrice: number, presetId?: string | null, notes?: string) => void;
   setCurrentSaleNote: (note: string | null) => void;  // Story B40-P1: Notes sur les tickets de caisse
   clearCurrentSale: () => void;
   submitSale: (items: SaleItem[], finalization?: { donation: number; paymentMethod: 'cash'|'card'|'check'; cashGiven?: number; change?: number; note?: string; overrideTotalAmount?: number; }) => Promise<boolean>;
@@ -280,7 +280,7 @@ export const useCashSessionStore = create<CashSessionState>()(
           }));
         },
 
-        updateSaleItem: (itemId: string, newQuantity: number, newWeight: number, newPrice: number, presetId?: string, notes?: string) => {
+        updateSaleItem: (itemId: string, newQuantity: number, newWeight: number, newPrice: number, presetId?: string | null, notes?: string) => {
           set((state) => ({
             currentSaleItems: state.currentSaleItems.map(item =>
               item.id === itemId
@@ -290,7 +290,8 @@ export const useCashSessionStore = create<CashSessionState>()(
                     weight: newWeight,
                     price: newPrice,
                     total: newQuantity * newPrice,  // total = quantité × prix
-                    presetId: presetId !== undefined ? presetId : item.presetId,
+                    // presetId: undefined => ne pas toucher ; null => effacer ; string => nouveau preset
+                    presetId: presetId !== undefined ? (presetId === null ? undefined : presetId) : item.presetId,
                     notes: notes !== undefined ? notes : item.notes
                   }
                 : item
@@ -442,12 +443,41 @@ export const useCashSessionStore = create<CashSessionState>()(
             // Étendre le payload pour inclure finalisation (don, paiement)
             // Story 1.1.2: preset_id et notes sont maintenant par item, pas au niveau vente globale
             // Story B40-P1: note au niveau ticket (pas au niveau item)
+            // Story B52-P1: Support paiements multiples
             // Les codes de paiement sont maintenant simples (cash/card/check) pour éviter problèmes d'encodage
             const { currentSaleNote } = get();
+            
+            // Story B52-P1: Construire la liste de paiements
+            let payments: Array<{ payment_method: string; amount: number }> | undefined;
+            if (finalization?.payments && finalization.payments.length > 0) {
+              // Paiements multiples
+              console.log('[submitSale] Paiements multiples détectés:', finalization.payments);
+              payments = finalization.payments.map(p => ({
+                payment_method: p.paymentMethod,
+                amount: p.amount
+              }));
+              console.log('[submitSale] Paiements construits pour API:', payments);
+            } else if (finalization?.paymentMethod) {
+              // Rétrocompatibilité : paiement unique
+              console.log('[submitSale] Paiement unique (rétrocompatibilité):', finalization.paymentMethod);
+              payments = [{
+                payment_method: finalization.paymentMethod,
+                amount: finalTotalAmount
+              }];
+            } else {
+              // Par défaut : espèces
+              console.log('[submitSale] Paiement par défaut (espèces)');
+              payments = [{
+                payment_method: 'cash',
+                amount: finalTotalAmount
+              }];
+            }
+            
             const extendedPayload = {
               ...saleData,
               donation: finalization?.donation ?? 0,
-              payment_method: finalization?.paymentMethod ?? 'cash',  // Envoie directement cash/card/check
+              payment_method: finalization?.paymentMethod ?? 'cash',  // Déprécié - utiliser payments
+              payments: payments,  // Story B52-P1: Liste de paiements multiples
               note: finalization?.note || null,  // Story B40-P1-CORRECTION: Notes déplacées vers popup de paiement
               // preset_id et notes supprimés du niveau vente - maintenant dans chaque item
             };

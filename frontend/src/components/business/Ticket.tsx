@@ -5,6 +5,7 @@ import { SaleItem } from '../../stores/interfaces/ICashSessionStore';
 import { useCashStores } from '../../providers/CashStoreProvider';
 import { useCategoryStore } from '../../stores/categoryStore';
 import { usePresetStore } from '../../stores/presetStore';
+import { useAuthStore } from '../../stores/authStore';
 import PresetButtonGrid from '../presets/PresetButtonGrid';
 import { Textarea } from '@mantine/core';
 import TicketScroller from '../tickets/TicketScroller';
@@ -266,7 +267,7 @@ const Button = styled.button<{ $variant?: 'primary' | 'secondary' }>`
 interface TicketProps {
   items: SaleItem[];
   onRemoveItem: (itemId: string) => void;
-  onUpdateItem: (itemId: string, newQuantity: number, newWeight: number, newPrice: number, presetId?: string, notes?: string) => void;
+  onUpdateItem: (itemId: string, newQuantity: number, newWeight: number, newPrice: number, presetId?: string | null, notes?: string) => void;
   onFinalizeSale: () => void;
   loading?: boolean;
   saleNote?: string | null;  // Story B40-P1: Notes sur les tickets de caisse (lecture seule)
@@ -281,10 +282,11 @@ const Ticket: React.FC<TicketProps> = ({
   saleNote = null  // Story B40-P1: Notes sur les tickets de caisse (lecture seule)
 }) => {
   const { getCategoryById, fetchCategories } = useCategoryStore();
-  const { selectedPreset, notes, setNotes, presets } = usePresetStore();
+  const { selectedPreset, notes, setNotes, presets, fetchPresets } = usePresetStore();
   const { cashSessionStore } = useCashStores();  // B50-P10: Utiliser le store injecté
   const { currentRegisterOptions } = cashSessionStore;
   const { stepState } = useCashWizardStepState();  // Story B49-P2: Pour détecter l'onglet Catégorie actif
+  const isAdmin = useAuthStore((s) => s.isAdmin());  // Story B52-P4: Vérifier si l'utilisateur est admin
   
   // Story B49-P2: Détecter si le mode prix global est activé
   const isNoItemPricingEnabled = currentRegisterOptions?.features?.no_item_pricing?.enabled === true;
@@ -295,14 +297,29 @@ const Ticket: React.FC<TicketProps> = ({
   const [editQuantity, setEditQuantity] = useState<string>('');
   const [editWeight, setEditWeight] = useState<string>('');
   const [editPrice, setEditPrice] = useState<string>('');
-  const [editPresetId, setEditPresetId] = useState<string>('');
+  const [editPresetId, setEditPresetId] = useState<string | null>(null);
   const [editNotes, setEditNotes] = useState<string>('');
   const scrollManagerRef = useRef<ScrollPositionManager | null>(null);
+
+  // Presets à utiliser dans l'éditeur : presets API ou fallback locaux
+  const fallbackPresets = [
+    { id: 'don-0', name: 'Don 0€' },
+    { id: 'don-18', name: 'Don -18 ans' },
+    { id: 'recyclage', name: 'Recyclage' },
+    { id: 'decheterie', name: 'Déchèterie' },
+  ];
+  const editorPresets = (presets && presets.length > 0 ? presets : fallbackPresets).map((p: any) => ({
+    id: p.id,
+    name: p.name,
+  }));
 
   // Load categories on component mount
   useEffect(() => {
     fetchCategories();
-  }, [fetchCategories]);
+    // Story B52-P4: S'assurer que les presets sont disponibles dans l'éditeur d'item
+    // Le store gère déjà le cache (5 minutes), donc cet appel est peu coûteux.
+    fetchPresets();
+  }, [fetchCategories, fetchPresets]);
 
   const totalAmount = items.reduce((sum, item) => sum + (item.total || 0), 0);
   const totalItems = items.length; // Nombre d'articles (lignes), pas de quantités
@@ -336,7 +353,7 @@ const Ticket: React.FC<TicketProps> = ({
     setEditQuantity((item.quantity || 1).toString());
     setEditWeight((item.weight || 0).toString());
     setEditPrice(item.price.toString());
-    setEditPresetId(item.presetId || '');
+    setEditPresetId(item.presetId || null);
     setEditNotes(item.notes || '');
   };
 
@@ -349,12 +366,14 @@ const Ticket: React.FC<TicketProps> = ({
 
       if (!isNaN(newQuantity) && !isNaN(newWeight) && !isNaN(newPrice) &&
           newQuantity > 0 && newWeight > 0 && newPrice >= 0) {
-        onUpdateItem(editingItem.id, newQuantity, newWeight, newPrice, editPresetId || undefined, editNotes || undefined);
+        // presetId: undefined => ne pas toucher ; null => effacer ; string => nouveau preset
+        const presetIdToSave = editPresetId === null ? null : (editPresetId || null);
+        onUpdateItem(editingItem.id, newQuantity, newWeight, newPrice, presetIdToSave, editNotes || undefined);
         setEditingItem(null);
         setEditQuantity('');
         setEditWeight('');
         setEditPrice('');
-        setEditPresetId('');
+        setEditPresetId(null);
         setEditNotes('');
       }
     }
@@ -365,7 +384,7 @@ const Ticket: React.FC<TicketProps> = ({
     setEditQuantity('');
     setEditWeight('');
     setEditPrice('');
-    setEditPresetId('');
+    setEditPresetId(null);
     setEditNotes('');
   };
 
@@ -563,7 +582,7 @@ const Ticket: React.FC<TicketProps> = ({
               />
             </FormGroup>
             <FormGroup>
-              <Label>Prix unitaire</Label>
+              <Label>Prix unitaire {!isAdmin && '(Admin uniquement)'}</Label>
               <Input
                 type="number"
                 step="0.01"
@@ -572,13 +591,20 @@ const Ticket: React.FC<TicketProps> = ({
                 min="0"
                 max="9999.99"
                 required
+                disabled={!isAdmin}
+                title={!isAdmin ? "Seuls les administrateurs peuvent modifier le prix" : undefined}
               />
+              {!isAdmin && (
+                <span style={{ fontSize: '0.85rem', color: '#666', marginTop: '4px' }}>
+                  Seuls les administrateurs peuvent modifier le prix
+                </span>
+              )}
             </FormGroup>
 
             <FormGroup>
               <Label>Type de transaction (optionnel)</Label>
               <div style={{ marginTop: '8px', display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                {presets.map((preset) => (
+                {editorPresets.map((preset) => (
                   <Button
                     key={preset.id}
                     type="button"
@@ -592,7 +618,7 @@ const Ticket: React.FC<TicketProps> = ({
                       fontSize: '0.85rem',
                       minWidth: 'auto'
                     }}
-                    onClick={() => setEditPresetId(editPresetId === preset.id ? '' : preset.id)}
+                    onClick={() => setEditPresetId(editPresetId === preset.id ? null : preset.id)}
                   >
                     {preset.name}
                   </Button>
@@ -608,7 +634,7 @@ const Ticket: React.FC<TicketProps> = ({
                       cursor: 'pointer',
                       fontSize: '0.8rem'
                     }}
-                    onClick={() => setEditPresetId('')}
+                    onClick={() => setEditPresetId(null)}
                   >
                     ✕ Aucun
                   </Button>

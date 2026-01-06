@@ -13,12 +13,22 @@ export interface SaleItem {
   notes?: string | null
 }
 
+// Story B52-P1: Paiement individuel
+export interface Payment {
+  id: string
+  sale_id: string
+  payment_method: string
+  amount: number
+  created_at: string
+}
+
 export interface SaleDetail {
   id: string
   cash_session_id: string
   total_amount: number
   donation?: number
-  payment_method?: string
+  payment_method?: string  // Déprécié - utiliser payments
+  payments?: Payment[]  // Story B52-P1: Liste de paiements multiples
   created_at: string
   operator_id?: string
   note?: string  // Story B40-P4: Notes sur les tickets
@@ -48,6 +58,20 @@ export const updateSaleNote = async (saleId: string, note: string): Promise<Sale
     return response.data
   } catch (error) {
     console.error('Erreur lors de la mise à jour de la note:', error)
+    throw error
+  }
+}
+
+/**
+ * Service pour modifier le poids d'un item de vente (admin seulement)
+ * Story B52-P2
+ */
+export const updateSaleItemWeight = async (saleId: string, itemId: string, weight: number): Promise<SaleItem> => {
+  try {
+    const response = await axiosClient.patch(`/v1/sales/${saleId}/items/${itemId}/weight`, { weight })
+    return response.data
+  } catch (error) {
+    console.error('Erreur lors de la mise à jour du poids:', error)
     throw error
   }
 }

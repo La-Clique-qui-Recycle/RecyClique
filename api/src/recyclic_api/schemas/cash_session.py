@@ -95,6 +95,7 @@ class CashSessionResponse(CashSessionBase):
     total_items: Optional[int] = Field(None, description="Nombre total d'articles vendus")
     number_of_sales: Optional[int] = Field(None, description="Nombre de ventes effectuées")
     total_donations: Optional[float] = Field(None, description="Total des dons collectés")
+    total_weight_out: Optional[float] = Field(None, description="Poids total vendu ou donné sur la session (kg)")
     closing_amount: Optional[float] = Field(None, description="Montant théorique calculé à la fermeture")
     actual_amount: Optional[float] = Field(None, description="Montant physique compté à la fermeture")
     variance: Optional[float] = Field(None, description="Écart entre théorique et physique")
@@ -176,6 +177,27 @@ class CashSessionStats(BaseModel):
     average_session_duration: Optional[float] = Field(None, description="Durée moyenne des sessions en heures")
 
 
+class PaymentDetail(BaseModel):
+    """Story B52-P1: Schéma pour un paiement individuel dans une vente."""
+    model_config = ConfigDict(from_attributes=True)
+    
+    id: str = Field(..., description="ID du paiement")
+    sale_id: str = Field(..., description="ID de la vente")
+    payment_method: str = Field(..., description="Méthode de paiement")
+    amount: float = Field(..., description="Montant du paiement")
+    created_at: datetime = Field(..., description="Date et heure du paiement")
+    
+    @field_validator('id', 'sale_id', mode='before')
+    @classmethod
+    def convert_uuid_to_str(cls, v):
+        """Convertit les UUIDs en strings pour la sérialisation"""
+        if v is None:
+            return v
+        if hasattr(v, '__str__'):
+            return str(v)
+        return v
+
+
 class SaleDetail(BaseModel):
     """Schéma pour les détails d'une vente dans une session."""
     model_config = ConfigDict(from_attributes=True)
@@ -183,11 +205,14 @@ class SaleDetail(BaseModel):
     id: str = Field(..., description="ID de la vente")
     total_amount: float = Field(..., description="Montant total de la vente")
     donation: Optional[float] = Field(None, description="Montant du don")
-    payment_method: Optional[str] = Field(None, description="Méthode de paiement")
-    created_at: datetime = Field(..., description="Date et heure de la vente")
+    payment_method: Optional[str] = Field(None, description="Méthode de paiement (déprécié - utiliser payments)")
+    payments: Optional[List[PaymentDetail]] = Field(None, description="Story B52-P1: Liste de paiements multiples")
+    sale_date: datetime = Field(..., description="Date réelle du ticket (date du cahier)")  # Story B52-P3: Date réelle du ticket
+    created_at: datetime = Field(..., description="Date et heure d'enregistrement")  # Story B52-P3: Date d'enregistrement
     operator_id: Optional[str] = Field(None, description="ID de l'opérateur")
     operator_name: Optional[str] = Field(None, description="Nom de l'opérateur")
     note: Optional[str] = Field(None, description="Note associée à la vente")  # Story B40-P4: Notes dans liste sessions
+    total_weight: Optional[float] = Field(None, description="B52-P6: Poids total du panier (somme des poids des items)")
     
     @field_validator('id', 'operator_id', mode='before')
     @classmethod
