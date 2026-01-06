@@ -80,14 +80,26 @@ export interface SaleCreate {
 // ============================================
 
 /**
+ * Story B52-P1: Paiement individuel dans une liste de paiements multiples
+ */
+export interface Payment {
+  paymentMethod: 'cash' | 'card' | 'check' | 'free';
+  amount: number;
+  cashGiven?: number;  // Pour espèces uniquement
+  change?: number;     // Pour espèces uniquement
+}
+
+/**
  * Données de finalisation d'une vente
  * Utilisé par submitSale() pour inclure les informations de paiement
+ * Story B52-P1: Support paiements multiples
  */
 export interface FinalizationData {
   donation: number;
-  paymentMethod: 'cash' | 'card' | 'check' | 'free';
-  cashGiven?: number;
-  change?: number;
+  paymentMethod?: 'cash' | 'card' | 'check' | 'free';  // Déprécié - utiliser payments
+  payments?: Payment[];  // Story B52-P1: Liste de paiements multiples
+  cashGiven?: number;  // Déprécié - utiliser payments[].cashGiven
+  change?: number;     // Déprécié - utiliser payments[].change
   note?: string;
   /**
    * Story B49-P2: Montant total override (mode prix global)

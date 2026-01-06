@@ -234,6 +234,42 @@ class ReceptionService:
             ligne.is_exit = final_is_exit
 
         return self.ligne_repo.update(ligne)
+    
+    def update_ligne_weight_admin(
+        self,
+        *,
+        ligne_id: UUID,
+        poids_kg: float,
+    ) -> LigneDepot:
+        """
+        Modifier uniquement le poids d'une ligne de dépôt (admin uniquement).
+        
+        Story B52-P2: Permet de modifier le poids même si le ticket est fermé,
+        pour corriger les erreurs de saisie après validation.
+        
+        Args:
+            ligne_id: ID de la ligne à modifier
+            poids_kg: Nouveau poids en kg
+            
+        Returns:
+            LigneDepot: La ligne modifiée
+            
+        Raises:
+            HTTPException: Si la ligne n'existe pas ou si le poids est invalide
+        """
+        ligne: Optional[LigneDepot] = self.ligne_repo.get(ligne_id)
+        if not ligne:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ligne introuvable")
+        
+        # Validation du poids
+        if poids_kg <= 0:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="poids_kg doit être > 0")
+        
+        # Note: On ne vérifie PAS le statut du ticket ici car c'est une opération admin
+        # qui doit pouvoir corriger les erreurs même après fermeture
+        
+        ligne.poids_kg = poids_kg
+        return self.ligne_repo.update(ligne)
 
     def delete_ligne(self, *, ligne_id: UUID) -> None:
         ligne: Optional[LigneDepot] = self.ligne_repo.get(ligne_id)

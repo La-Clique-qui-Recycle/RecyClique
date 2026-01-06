@@ -44,7 +44,11 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-def enrich_session_response(session: CashSession, service: CashSessionService) -> CashSessionResponse:
+def enrich_session_response(
+    session: CashSession,
+    service: CashSessionService,
+    total_weight_out: Optional[float] = None,
+) -> CashSessionResponse:
     """Story B49-P1: Enrichit une réponse de session avec les options du register.
     
     Args:
@@ -56,19 +60,28 @@ def enrich_session_response(session: CashSession, service: CashSessionService) -
     """
     # Récupérer les options du register via la méthode publique qui valide avec Pydantic
     register_options = service.get_register_options(session)
-    
+
     # B50-P10: Calculer total_donations depuis les ventes de la session
     from recyclic_api.models.sale import Sale
-    total_donations = service.db.query(func.coalesce(func.sum(Sale.donation), 0)).filter(
-        Sale.cash_session_id == session.id
-    ).scalar() or 0.0
+
+    total_donations = (
+        service.db.query(func.coalesce(func.sum(Sale.donation), 0))
+        .filter(Sale.cash_session_id == session.id)
+        .scalar()
+        or 0.0
+    )
     total_donations = float(total_donations)
-    
+
+    # B52-P6: Calculer le poids total sorti si non fourni
+    if total_weight_out is None:
+        total_weight_out, _ = service.get_session_weight_aggregations(session)
+
     # Construire la réponse avec tous les champs
     response_data = CashSessionResponse.model_validate(session).model_dump()
-    response_data['register_options'] = register_options
-    response_data['total_donations'] = total_donations  # B50-P10: Ajouter les dons calculés
-    
+    response_data["register_options"] = register_options
+    response_data["total_donations"] = total_donations  # B50-P10: Ajouter les dons calculés
+    response_data["total_weight_out"] = total_weight_out  # B52-P6: Poids total sorti sur la session
+
     return CashSessionResponse(**response_data)
 
 @router.post(
@@ -551,13 +564,20 @@ async def get_cash_session_detail(
             db=db
         )
         
-        # Construire la réponse avec les ventes
+        # B52-P6: Calculer les agrégations de poids pour la session et les ventes
+        total_weight_out, sale_weights = service.get_session_weight_aggregations(session)
+
+        # Construire la réponse avec les ventes, enrichies avec le poids total par panier
         sales_data = []
         for sale in session.sales:
-            sales_data.append(SaleDetail.model_validate(sale))
-        
-        # B50-P10: Utiliser enrich_session_response pour obtenir total_donations et register_options
-        base_response = enrich_session_response(session, service)
+            sale_schema = SaleDetail.model_validate(sale)
+            sale_total_weight = sale_weights.get(str(sale.id), 0.0)
+            sale_schema = sale_schema.model_copy(update={"total_weight": sale_total_weight})
+            sales_data.append(sale_schema)
+
+        # B50-P10/B52-P6: Utiliser enrich_session_response pour obtenir total_donations,
+        # register_options et total_weight_out
+        base_response = enrich_session_response(session, service, total_weight_out=total_weight_out)
         
         # Construire la réponse détaillée avec les ventes et infos supplémentaires
         response_data = base_response.model_dump()

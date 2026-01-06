@@ -5,6 +5,8 @@ import { ArrowLeft, Calendar, User, Package, Scale } from 'lucide-react'
 import { Badge } from '@mantine/core'
 import axiosClient from '../../api/axiosClient'
 import { receptionTicketsService, ReceptionTicketDetail as ReceptionTicketDetailType, LigneResponse } from '../../services/receptionTicketsService'
+import { receptionService } from '../../services/receptionService'
+import { useAuthStore } from '../../stores/authStore'
 
 const Container = styled.div`
   padding: 24px;
@@ -267,9 +269,17 @@ const getTypeBadge = (ligne: LigneResponse) => {
 const ReceptionTicketDetail: React.FC = () => {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const user = useAuthStore((state) => state.currentUser)
   const [ticket, setTicket] = useState<ReceptionTicketDetailType | null>(null)
   const [loading, setLoading] = useState<boolean>(true)
   const [error, setError] = useState<string | null>(null)
+  // Story B52-P2: Edition du poids
+  const [editingLineWeight, setEditingLineWeight] = useState<string | null>(null)
+  const [weightValue, setWeightValue] = useState<string>('')
+  const [updatingWeight, setUpdatingWeight] = useState<boolean>(false)
+  
+  // Story B52-P2: Vérifier si l'utilisateur peut éditer le poids (Admin/SuperAdmin uniquement)
+  const canEditWeight = user?.role === 'admin' || user?.role === 'super-admin'
 
   useEffect(() => {
     if (!id) {
@@ -308,6 +318,52 @@ const ReceptionTicketDetail: React.FC = () => {
     } catch (err) {
       console.error('Erreur lors du téléchargement du CSV:', err)
       alert('Erreur lors du téléchargement du CSV')
+    }
+  }
+
+  // Story B52-P2: Handlers pour l'édition du poids
+  const handleEditLineWeight = (ligne: LigneResponse) => {
+    setWeightValue((ligne.poids_kg ?? 0).toString())
+    setEditingLineWeight(ligne.id)
+  }
+
+  const handleCancelEditWeight = () => {
+    setEditingLineWeight(null)
+    setWeightValue('')
+  }
+
+  const handleSaveLineWeight = async () => {
+    if (!id || !editingLineWeight) return
+
+    const ligne = ticket?.lignes.find(l => l.id === editingLineWeight)
+    if (!ligne) return
+
+    const oldWeight = ligne.poids_kg ?? 0
+    const newWeight = parseFloat(weightValue)
+
+    if (isNaN(newWeight) || newWeight <= 0) {
+      alert('Le poids doit être un nombre supérieur à 0')
+      return
+    }
+
+    try {
+      setUpdatingWeight(true)
+      await receptionService.updateLineWeight(id, editingLineWeight, newWeight)
+      
+      // Recharger les détails du ticket
+      const updatedTicket = await receptionTicketsService.getDetail(id)
+      setTicket(updatedTicket)
+      
+      setEditingLineWeight(null)
+      setWeightValue('')
+      
+      // Afficher un message de confirmation
+      alert(`Poids modifié avec succès: ${oldWeight.toFixed(2)} kg → ${newWeight.toFixed(2)} kg`)
+    } catch (error) {
+      console.error('Erreur lors de la mise à jour du poids:', error)
+      alert('Erreur lors de la mise à jour du poids. Veuillez réessayer.')
+    } finally {
+      setUpdatingWeight(false)
     }
   }
 
@@ -494,16 +550,88 @@ const ReceptionTicketDetail: React.FC = () => {
                 <Th>Type</Th>
                 <Th>Destination</Th>
                 <Th>Notes</Th>
+                {canEditWeight && <Th>Actions</Th>}
               </tr>
             </thead>
             <tbody>
               {ticket.lignes.map((ligne) => (
                 <tr key={ligne.id}>
                   <Td>{ligne.category_label || 'Non spécifiée'}</Td>
-                  <Td>{formatWeight(ligne.poids_kg || 0)}</Td>
+                  <Td>
+                    {editingLineWeight === ligne.id ? (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <input
+                          type="number"
+                          step="0.001"
+                          min="0.001"
+                          value={weightValue}
+                          onChange={(e) => setWeightValue(e.target.value)}
+                          style={{
+                            width: '80px',
+                            padding: '4px 8px',
+                            border: '1px solid #ddd',
+                            borderRadius: '4px'
+                          }}
+                          disabled={updatingWeight}
+                        />
+                        <button
+                          onClick={handleSaveLineWeight}
+                          disabled={updatingWeight}
+                          style={{
+                            padding: '4px 8px',
+                            background: '#10b981',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '4px',
+                            cursor: updatingWeight ? 'not-allowed' : 'pointer',
+                            fontSize: '0.75rem'
+                          }}
+                        >
+                          ✓
+                        </button>
+                        <button
+                          onClick={handleCancelEditWeight}
+                          disabled={updatingWeight}
+                          style={{
+                            padding: '4px 8px',
+                            background: '#ef4444',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '4px',
+                            cursor: updatingWeight ? 'not-allowed' : 'pointer',
+                            fontSize: '0.75rem'
+                          }}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ) : (
+                      formatWeight(ligne.poids_kg || 0)
+                    )}
+                  </Td>
                   <Td>{getTypeBadge(ligne)}</Td>
                   <Td>{ligne.destination || '-'}</Td>
                   <Td>{ligne.notes || '-'}</Td>
+                  {canEditWeight && (
+                    <Td>
+                      {editingLineWeight !== ligne.id && (
+                        <button
+                          onClick={() => handleEditLineWeight(ligne)}
+                          style={{
+                            padding: '4px 8px',
+                            background: '#3b82f6',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '4px',
+                            cursor: 'pointer',
+                            fontSize: '0.75rem'
+                          }}
+                        >
+                          Modifier poids
+                        </button>
+                      )}
+                    </Td>
+                  )}
                 </tr>
               ))}
             </tbody>

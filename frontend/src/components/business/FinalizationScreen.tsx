@@ -123,11 +123,20 @@ const Button = styled.button<{ $variant?: 'primary' | 'secondary' }>`
 
 export type PaymentMethod = 'cash' | 'card' | 'check' | 'free';
 
-export interface FinalizationData {
-  donation: number;
+// Story B52-P1: Paiement individuel
+export interface Payment {
   paymentMethod: PaymentMethod;
+  amount: number;
   cashGiven?: number;
   change?: number;
+}
+
+export interface FinalizationData {
+  donation: number;
+  paymentMethod?: PaymentMethod;  // Déprécié - utiliser payments
+  payments?: Payment[];  // Story B52-P1: Liste de paiements multiples
+  cashGiven?: number;  // Déprécié
+  change?: number;     // Déprécié
   note?: string;
   overrideTotalAmount?: number;  // Story B49-P2: Total négocié globalement
 }
@@ -175,6 +184,20 @@ const FinalizationScreen: React.FC<FinalizationScreenProps> = ({
   const paymentSelectRef = useRef<HTMLSelectElement>(null);
   const donationRef = useRef<HTMLInputElement>(null);
   const [pendingPaymentMethod, setPendingPaymentMethod] = useState<PaymentMethod | null>(null);  // Valeur temporaire lors de navigation flèches
+  
+  // Story B52-P1: État pour paiements multiples
+  const [payments, setPayments] = useState<Payment[]>([]);
+  const [currentPaymentAmount, setCurrentPaymentAmount] = useState<string>('');
+  
+  // Spec B52-P1 Keyboard Workflow: Refs pour section paiements multiples
+  const currentPaymentAmountRef = useRef<HTMLInputElement>(null);
+  const paymentSelectInLoopRef = useRef<HTMLSelectElement>(null);
+  
+  // Spec B52-P1 Keyboard Workflow: États pour indicateurs visuels et feedback
+  const [focusedField, setFocusedField] = useState<'donation' | 'payment-method-loop' | 'payment-amount' | null>(null);
+  const [showPaymentAddedFeedback, setShowPaymentAddedFeedback] = useState(false);
+  const [lastAddedPaymentAmount, setLastAddedPaymentAmount] = useState<string>('');
+  const [lastAddedPaymentMethod, setLastAddedPaymentMethod] = useState<string>('');
 
   const effectivePaymentMethod: PaymentMethod = pendingPaymentMethod ?? paymentMethod;
   const isCashPayment = effectivePaymentMethod === 'cash';
@@ -230,6 +253,14 @@ const FinalizationScreen: React.FC<FinalizationScreenProps> = ({
       }
       setTotalError('');
       setPendingPaymentMethod(null);  // Story B49-P5: Reset valeur en attente
+      // Story B52-P1: Réinitialiser les paiements multiples
+      setPayments([]);
+      setCurrentPaymentAmount('');
+      // Spec B52-P1 Keyboard Workflow: Réinitialiser les états de focus et feedback
+      setFocusedField(null);
+      setShowPaymentAddedFeedback(false);
+      setLastAddedPaymentAmount('');
+      setLastAddedPaymentMethod('');
       wasOpenRef.current = true;
     } else if (!open) {
       wasOpenRef.current = false;
@@ -297,14 +328,16 @@ const FinalizationScreen: React.FC<FinalizationScreenProps> = ({
     return totalAmount;
   }, [totalAmount, isNoItemPricingEnabled, manualTotal]);
 
-  // Don effectif : calcul automatique pour chèques/cartes, manuel pour espèces et gratuit/don
+  // Don effectif : calcul automatique pour chèques/cartes (si montant >= baseAmount), manuel sinon
   const parsedDonation = useMemo(() => {
-    // Pour chèques et cartes : calcul automatique = montant reçu - baseAmount
+    // Pour chèques et cartes : calcul automatique SEULEMENT si montant reçu >= baseAmount
+    // Si montant < baseAmount, on permet paiements multiples, donc don manuel
     const isCheckOrCard = (effectivePaymentMethod === 'check' || effectivePaymentMethod === 'card');
-    if (isCheckOrCard && parsedAmountReceived && parsedAmountReceived > baseAmount) {
+    if (isCheckOrCard && parsedAmountReceived && parsedAmountReceived >= baseAmount) {
+      // Montant suffisant : calcul automatique du don
       return Number((parsedAmountReceived - baseAmount).toFixed(2));
     }
-    // Pour espèces et gratuit/don : toujours manuel (pas de calcul automatique)
+    // Pour espèces, gratuit/don, ou chèques/cartes avec montant < baseAmount : don manuel
     const n = parseFloat(donation || '0');
     return isNaN(n) || n < 0 ? 0 : Math.min(n, 999999.99);
   }, [donation, parsedAmountReceived, baseAmount, effectivePaymentMethod]);
@@ -317,6 +350,111 @@ const FinalizationScreen: React.FC<FinalizationScreenProps> = ({
     if (isFreePayment) return 0; // Gratuit/don : total à payer = 0
     return baseAmount + parsedDonation;
   }, [baseAmount, parsedDonation, isFreePayment]);
+  
+  // Story B52-P1: Calculer le reste dû avec paiements multiples
+  const totalPaid = useMemo(() => {
+    return payments.reduce((sum, p) => sum + p.amount, 0);
+  }, [payments]);
+  
+  const remainingAmount = useMemo(() => {
+    // Le reste dû doit toujours inclure le don
+    // amountDue = baseAmount + parsedDonation
+    // Donc reste = amountDue - totalPaid (inclut le don)
+    return Math.max(0, amountDue - totalPaid);
+  }, [amountDue, totalPaid]);
+  
+  // Spec B52-P1 Keyboard Workflow: Focus auto sur "Don" quand reste = 0 (après ajout paiement dans boucle)
+  React.useEffect(() => {
+    if (payments.length > 0 && remainingAmount <= 0 && focusedField !== 'donation' && focusedField !== null) {
+      // Seulement si on était dans la boucle (focusedField !== null) et que le reste devient 0
+      const focusTimeout = setTimeout(() => {
+        if (donationRef.current) {
+          donationRef.current.focus();
+          setFocusedField('donation');
+        }
+      }, 150);
+      return () => clearTimeout(focusTimeout);
+    }
+  }, [payments.length, remainingAmount, focusedField]);
+  
+  // Spec B52-P1 Keyboard Workflow: Fonction pour obtenir le moyen de paiement suivant (exclut "free" dans la boucle)
+  const getNextPaymentMethod = (currentMethod: PaymentMethod): PaymentMethod => {
+    // Dans la boucle, on exclut "free" - ordre : cash → check → card → cash
+    const availableMethods: PaymentMethod[] = ['cash', 'check', 'card'];
+    // Si le moyen actuel est "free" ou n'est pas dans la liste, on commence par "cash"
+    const currentIndex = availableMethods.indexOf(currentMethod);
+    if (currentIndex === -1) {
+      return 'cash';
+    }
+    const nextIndex = (currentIndex + 1) % availableMethods.length;
+    return availableMethods[nextIndex];
+  };
+  
+  // Story B52-P1: Fonction pour ajouter un paiement
+  const handleAddPayment = () => {
+    // Utiliser currentPaymentAmount en priorité, sinon amountReceived
+    const amountToUse = currentPaymentAmount || amountReceived;
+    const amount = parseFloat(amountToUse || '0');
+    if (isNaN(amount) || amount <= 0) return;
+    
+    // Spec B52-P1 Keyboard Workflow: Protection - "free" ne peut pas être ajouté dans la boucle
+    // Si on est dans la boucle (payments.length > 0), forcer un autre moyen
+    let paymentMethodToUse = effectivePaymentMethod;
+    if (payments.length > 0 && paymentMethodToUse === 'free') {
+      paymentMethodToUse = 'cash'; // Par défaut, utiliser "cash" si "free" est sélectionné dans la boucle
+    }
+    
+    // Limiter le montant au reste dû
+    const maxAmount = remainingAmount > 0 ? remainingAmount : amountDue;
+    let paymentAmount = Math.min(amount, maxAmount);
+    
+    // Pour espèces : calculer le change si montant reçu > montant du paiement
+    let paymentChange: number | undefined = undefined;
+    let cashGiven: number | undefined = undefined;
+    
+    if (paymentMethodToUse === 'cash') {
+      const parsedAmountReceived = parseFloat(amountReceived || currentPaymentAmount || '0');
+      if (parsedAmountReceived > 0) {
+        cashGiven = parsedAmountReceived;
+        // Le montant du paiement est limité au reste dû
+        paymentAmount = Math.min(parsedAmountReceived, maxAmount);
+        // Le change est la différence entre montant reçu et montant du paiement
+        paymentChange = parsedAmountReceived > paymentAmount ? (parsedAmountReceived - paymentAmount) : undefined;
+      }
+    }
+    
+    const newPayment: Payment = {
+      paymentMethod: paymentMethodToUse,
+      amount: paymentAmount,
+      cashGiven: cashGiven,
+      change: paymentChange
+    };
+    
+    setPayments([...payments, newPayment]);
+    setCurrentPaymentAmount('');
+    setAmountReceived('');
+    
+    // Spec B52-P1 Keyboard Workflow: Feedback temporaire après ajout
+    const methodLabel = paymentMethodToUse === 'cash' ? 'Espèces' : 
+                       paymentMethodToUse === 'check' ? 'Chèque' : 
+                       paymentMethodToUse === 'card' ? 'Carte' : 'Gratuit / Don';
+    setLastAddedPaymentAmount(paymentAmount.toFixed(2));
+    setLastAddedPaymentMethod(methodLabel);
+    setShowPaymentAddedFeedback(true);
+    setTimeout(() => {
+      setShowPaymentAddedFeedback(false);
+    }, 2000);
+    
+    // Spec B52-P1 Keyboard Workflow: Sélectionner le moyen de paiement suivant (exclut "free")
+    const nextMethod = getNextPaymentMethod(paymentMethodToUse);
+    setPaymentMethod(nextMethod);
+    setPendingPaymentMethod(null);
+  };
+  
+  // Story B52-P1: Fonction pour supprimer un paiement
+  const handleRemovePayment = (index: number) => {
+    setPayments(payments.filter((_, i) => i !== index));
+  };
 
   // Story B49-P6: Déterminer si c'est une transaction spéciale (recyclage/déchèterie)
   // Une transaction est spéciale si elle contient au moins un item avec presetId recyclage ou déchèterie
@@ -343,6 +481,11 @@ const FinalizationScreen: React.FC<FinalizationScreenProps> = ({
   }, [isCashPayment, isFreePayment, parsedAmountReceived, amountDue, parsedDonation]);
 
   const canConfirm = useMemo(() => {
+    // Story B52-P1: Si paiements multiples, vérifier que le total est couvert
+    if (payments.length > 0) {
+      return remainingAmount <= 0;
+    }
+    
     // Gratuit/don : TOUJOURS validable (bouton vert), même sans montant reçu
     // Cette condition doit être vérifiée EN PREMIER pour supplanter toutes les autres
     if (isFreePayment) {
@@ -384,9 +527,12 @@ const FinalizationScreen: React.FC<FinalizationScreenProps> = ({
       if (!parsedAmountReceived) return false;
       return parsedAmountReceived >= amountDue;
     } else if (effectivePaymentMethod === 'check' || effectivePaymentMethod === 'card') {
-      // Chèque/Carte : montant reçu doit être >= baseAmount (le don est calculé automatiquement)
+      // Chèque/Carte : assouplir la validation pour permettre paiements multiples
+      // Si montant < baseAmount, on permet la validation (paiements multiples)
+      // Si montant >= baseAmount, validation normale
       if (!parsedAmountReceived) return false;
-      return parsedAmountReceived >= baseAmount;
+      // Permettre validation même si montant < baseAmount (pour paiements multiples)
+      return parsedAmountReceived > 0;
     }
     return true;
   }, [isCashPayment, isCheckPayment, isFreePayment, effectivePaymentMethod, parsedAmountReceived, amountDue, parsedDonation, isNoItemPricingEnabled, manualTotal, shouldShowSubtotal, subtotal, isSpecialTransaction, baseAmount]);
@@ -477,10 +623,156 @@ const FinalizationScreen: React.FC<FinalizationScreenProps> = ({
   const handleDonationKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       e.preventDefault();
-      // Enter sur "Don" → Validation directe (ferme popup, enregistre vente)
+      // Spec B52-P1 Keyboard Workflow: Si reste dû > 0 et premier paiement pas encore ajouté, l'ajouter d'abord
+      if (payments.length === 0) {
+        // Calculer le montant du premier paiement
+        const firstPaymentAmount = parsedAmountReceived || parseFloat(amountReceived || '0');
+        if (firstPaymentAmount > 0) {
+          // Pour chèques/cartes : si montant < baseAmount, le montant du paiement = montant reçu (pas de don inclus)
+          // Pour espèces : montant du paiement = min(montant reçu, amountDue)
+          let effectiveAmount: number;
+          const isCheckOrCard = (effectivePaymentMethod === 'check' || effectivePaymentMethod === 'card');
+          
+          if (isCheckOrCard && firstPaymentAmount < baseAmount) {
+            // Chèque partiel : le montant du paiement = montant reçu (pas de don)
+            effectiveAmount = firstPaymentAmount;
+          } else {
+            // Cas normal : limiter au total dû (inclut le don si applicable)
+            effectiveAmount = Math.min(firstPaymentAmount, amountDue);
+          }
+          
+          // Ajouter le premier paiement
+          const firstPayment: Payment = {
+            paymentMethod: effectivePaymentMethod,
+            amount: effectiveAmount,
+            cashGiven: isCashPayment ? firstPaymentAmount : undefined,
+            change: isCashPayment && firstPaymentAmount > amountDue ? (firstPaymentAmount - amountDue) : undefined
+          };
+          setPayments([firstPayment]);
+          setAmountReceived('');
+          setCurrentPaymentAmount('');
+          
+          // Calculer le reste après ajout
+          // IMPORTANT : Le reste doit toujours inclure le don (amountDue = baseAmount + don)
+          // Même pour les chèques partiels, le don doit être inclus dans le reste
+          const newRemaining = Math.max(0, amountDue - effectiveAmount);
+          
+          // Si reste > 0, entrer dans la boucle avec le moyen suivant
+          if (newRemaining > 0) {
+            // Sélectionner le moyen de paiement suivant (exclut "free")
+            // Si le moyen actuel est "free", on commence par "cash"
+            const currentMethodForLoop = effectivePaymentMethod === 'free' ? 'cash' : effectivePaymentMethod;
+            const nextMethod = getNextPaymentMethod(currentMethodForLoop);
+            setPaymentMethod(nextMethod);
+            setPendingPaymentMethod(null);
+            
+            setTimeout(() => {
+              if (paymentSelectInLoopRef.current) {
+                paymentSelectInLoopRef.current.focus();
+                setFocusedField('payment-method-loop');
+              }
+            }, 150);
+          } else {
+            // Total couvert, focus reste sur Don pour validation
+            setFocusedField('donation');
+          }
+          return; // Ne pas valider immédiatement
+        }
+      }
+      
+      // Validation directe (ferme popup, enregistre vente)
       if (canConfirm) {
         handleSubmit(e as any);
       }
+    }
+  };
+  
+  // Spec B52-P1 Keyboard Workflow: Gestionnaire pour "Montant du paiement" dans la boucle
+  const handleCurrentPaymentAmountKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      // Si montant valide et reste dû > 0, ajouter le paiement
+      const amount = parseFloat(currentPaymentAmount || '0');
+      if (amount > 0 && remainingAmount > 0) {
+        handleAddPayment();
+        // Gestion du focus après ajout
+        setTimeout(() => {
+          if (remainingAmount <= 0) {
+            // Total couvert → Focus sur "Don"
+            if (donationRef.current) {
+              donationRef.current.focus();
+              setFocusedField('donation');
+            }
+          } else {
+            // Reste dû > 0 → Focus retourne sur "Moyen de paiement" (boucle)
+            if (paymentSelectInLoopRef.current) {
+              paymentSelectInLoopRef.current.focus();
+              setFocusedField('payment-method-loop');
+            }
+          }
+        }, 150);
+      }
+    } else if (e.key === '+' || e.key === '=') {
+      e.preventDefault();
+      // Force l'ajout même si montant = 0
+      handleAddPayment();
+      // Même logique de focus après ajout
+      setTimeout(() => {
+        if (remainingAmount <= 0) {
+          if (donationRef.current) {
+            donationRef.current.focus();
+            setFocusedField('donation');
+          }
+        } else {
+          if (paymentSelectInLoopRef.current) {
+            paymentSelectInLoopRef.current.focus();
+            setFocusedField('payment-method-loop');
+          }
+        }
+      }, 150);
+    }
+  };
+  
+  // Spec B52-P1 Keyboard Workflow: Gestionnaire pour "Moyen de paiement" dans la boucle
+  const handlePaymentMethodInLoopKeyDown = (e: React.KeyboardEvent<HTMLSelectElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      e.stopPropagation();
+      // Valider la valeur en attente si elle existe
+      if (pendingPaymentMethod !== null) {
+        setPaymentMethod(pendingPaymentMethod);
+        setPendingPaymentMethod(null);
+      }
+      // Enter sur "Moyen de paiement" → Focus "Montant du paiement"
+      setTimeout(() => {
+        if (currentPaymentAmountRef.current) {
+          currentPaymentAmountRef.current.focus();
+          setFocusedField('payment-amount');
+        }
+      }, 100);
+    } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      e.preventDefault();
+      e.stopPropagation();
+      // Navigation flèches haut/bas - exclut "free" dans la boucle
+      // Ordre : cash → check → card → cash (boucle)
+      const currentMethod = pendingPaymentMethod !== null ? pendingPaymentMethod : effectivePaymentMethod;
+      const availableMethods: PaymentMethod[] = ['cash', 'check', 'card'];
+      const currentIndex = availableMethods.indexOf(currentMethod);
+      
+      if (e.key === 'ArrowUp') {
+        // Remonter : card → check → cash → card (boucle)
+        const prevIndex = currentIndex === 0 ? availableMethods.length - 1 : currentIndex - 1;
+        setPendingPaymentMethod(availableMethods[prevIndex]);
+      } else if (e.key === 'ArrowDown') {
+        // Descendre : cash → check → card → cash (boucle)
+        const nextIndex = (currentIndex + 1) % availableMethods.length;
+        setPendingPaymentMethod(availableMethods[nextIndex]);
+      }
+      requestAnimationFrame(() => {
+        if (paymentSelectInLoopRef.current) {
+          paymentSelectInLoopRef.current.focus();
+        }
+      });
     }
   };
   
@@ -506,17 +798,30 @@ const FinalizationScreen: React.FC<FinalizationScreenProps> = ({
       }
     }
     
-    // Enregistrer seulement total_amount et donation (montant reçu pour chèque/carte n'est pas enregistré)
-    onConfirm({
-      donation: Number(parsedDonation.toFixed(2)),
-      paymentMethod: effectivePaymentMethod,
-      cashGiven: (isCashPayment || isFreePayment) ? parsedAmountReceived : undefined,  // Pour espèces et gratuit/don
-      change: (isCashPayment || isFreePayment) ? change : undefined,  // Pour espèces et gratuit/don
-      note: saleNote || undefined,
-      overrideTotalAmount: isNoItemPricingEnabled && manualTotal 
-        ? parseFloat(manualTotal) 
-        : undefined,  // Story B49-P2: Passer le total override
-    });
+    // Story B52-P1: Envoyer paiements multiples si disponibles, sinon rétrocompatibilité
+    if (payments.length > 0) {
+      // Paiements multiples
+      onConfirm({
+        donation: Number(parsedDonation.toFixed(2)),
+        payments: payments,
+        note: saleNote || undefined,
+        overrideTotalAmount: isNoItemPricingEnabled && manualTotal 
+          ? parseFloat(manualTotal) 
+          : undefined,
+      });
+    } else {
+      // Rétrocompatibilité : paiement unique
+      onConfirm({
+        donation: Number(parsedDonation.toFixed(2)),
+        paymentMethod: effectivePaymentMethod,
+        cashGiven: (isCashPayment || isFreePayment) ? parsedAmountReceived : undefined,
+        change: (isCashPayment || isFreePayment) ? change : undefined,
+        note: saleNote || undefined,
+        overrideTotalAmount: isNoItemPricingEnabled && manualTotal 
+          ? parseFloat(manualTotal) 
+          : undefined,
+      });
+    }
   };
 
   return (
@@ -640,15 +945,20 @@ const FinalizationScreen: React.FC<FinalizationScreenProps> = ({
                   value={amountReceived}
                   onChange={(e) => {
                     setAmountReceived(e.target.value);
-                    // Pour chèques/cartes : calculer et mettre à jour le don automatiquement
+                    // Pour chèques/cartes : calculer et mettre à jour le don automatiquement SEULEMENT si montant >= baseAmount
                     const isCheckOrCard = (effectivePaymentMethod === 'check' || effectivePaymentMethod === 'card');
                     if (isCheckOrCard) {
                       const received = parseFloat(e.target.value);
-                      if (!isNaN(received) && received > baseAmount) {
+                      if (!isNaN(received) && received >= baseAmount) {
+                        // Montant suffisant : calcul automatique du don
                         const autoDon = received - baseAmount;
                         setDonation(autoDon.toFixed(2));
                       } else {
-                        setDonation('0');
+                        // Montant insuffisant : permettre paiements multiples, don manuel
+                        // Ne pas forcer le don à 0, laisser l'utilisateur le saisir
+                        if (!donation || parseFloat(donation) === 0) {
+                          setDonation('0');
+                        }
                       }
                     }
                     // Pour espèces : pas de calcul automatique du don
@@ -657,10 +967,28 @@ const FinalizationScreen: React.FC<FinalizationScreenProps> = ({
                   data-testid="amount-received-input"
                   placeholder="0.00"
                 />
-                {/* Afficher le don calculé pour chèques/cartes */}
-                {(effectivePaymentMethod === 'check' || effectivePaymentMethod === 'card') && parsedAmountReceived && parsedAmountReceived > baseAmount && (
+                {/* Afficher le don calculé pour chèques/cartes (si montant >= baseAmount) */}
+                {(effectivePaymentMethod === 'check' || effectivePaymentMethod === 'card') && parsedAmountReceived && parsedAmountReceived >= baseAmount && parsedDonation > 0 && (
                   <div style={{ fontSize: '0.875rem', marginTop: '0.25rem', color: '#666' }}>
                     Don calculé : {parsedDonation.toFixed(2)} €
+                  </div>
+                )}
+                {/* Indication paiements multiples si montant chèque < baseAmount */}
+                {(effectivePaymentMethod === 'check' || effectivePaymentMethod === 'card') && parsedAmountReceived && parsedAmountReceived > 0 && parsedAmountReceived < baseAmount && (
+                  <div style={{ 
+                    fontSize: '0.875rem', 
+                    marginTop: '0.25rem', 
+                    color: '#2c5530',
+                    background: '#e8f5e9',
+                    padding: '0.5rem',
+                    borderRadius: '4px',
+                    border: '1px solid #4caf50'
+                  }}>
+                    💡 <strong>Paiement partiel</strong> - Vous pourrez ajouter d'autres paiements après validation
+                    <br/>
+                    <span style={{ fontSize: '0.8rem' }}>
+                      Reste à payer : {(baseAmount - parsedAmountReceived).toFixed(2)} €
+                    </span>
                   </div>
                 )}
               </Field>
@@ -677,33 +1005,282 @@ const FinalizationScreen: React.FC<FinalizationScreenProps> = ({
                   min="0"
                   value={donation}
                   onChange={(e) => {
-                    // Pour espèces et gratuit/don : permettre modification manuelle
-                    if (isCashPayment || isFreePayment) {
-                      setDonation(e.target.value);
-                    } else if (effectivePaymentMethod === 'check' || effectivePaymentMethod === 'card') {
-                      // Pour chèques/cartes, modifier le don recalcule le montant reçu
-                      setDonation(e.target.value);
-                      const don = parseFloat(e.target.value);
-                      if (!isNaN(don) && don >= 0) {
-                        const newAmountReceived = baseAmount + don;
-                        setAmountReceived(newAmountReceived.toFixed(2));
-                      } else {
-                        setAmountReceived(baseAmount.toFixed(2));
-                      }
-                    }
+                    // Toujours permettre modification manuelle du don
+                    setDonation(e.target.value);
+                    
+                    // Spec B52-P1: Désactiver le recalcul bidirectionnel pour éviter la confusion
+                    // Le don peut être modifié librement sans affecter le montant du chèque
+                    // Le recalcul automatique se fait uniquement dans un sens : montant reçu → don
+                    // (et seulement si montant >= baseAmount)
+                    
+                    // Pour chèques/cartes : NE PLUS recalculer le montant reçu quand on modifie le don
+                    // Cela permet de :
+                    // 1. Saisir un chèque partiel (ex: 15€) puis ajouter un don (ex: 3€) sans que le chèque change
+                    // 2. Entrer dans le mode paiements multiples naturellement
+                    // 3. Éviter la confusion du recalcul bidirectionnel
                   }}
                   onKeyDown={handleDonationKeyDown}
+                  onFocus={() => setFocusedField('donation')}
                   data-testid="donation-input"
                   placeholder={(effectivePaymentMethod === 'check' || effectivePaymentMethod === 'card') && parsedAmountReceived && parsedAmountReceived > baseAmount 
                     ? `${parsedDonation.toFixed(2)} (calculé)` 
                     : '0.00'}
                 />
+                {/* Spec B52-P1 Keyboard Workflow: Indicateur 2 - Focus sur "Don" (Reste dû = 0, paiements multiples) */}
+                {focusedField === 'donation' && remainingAmount <= 0 && payments.length > 0 && (
+                  <div style={{
+                    marginTop: '0.5rem',
+                    padding: '0.75rem',
+                    background: '#e8f5e9',
+                    border: '1px solid #4caf50',
+                    borderRadius: '4px',
+                    fontSize: '0.9rem'
+                  }}>
+                    ✅ <strong>Total couvert</strong><br/>
+                    💡 <strong>Appuyez sur Enter pour valider la vente</strong>
+                  </div>
+                )}
+                {/* Spec B52-P1 Keyboard Workflow: Indicateur 3 - Focus sur "Don" (Paiement unique, pas de reste) */}
+                {focusedField === 'donation' && payments.length === 0 && canConfirm && (
+                  <div style={{
+                    marginTop: '0.5rem',
+                    padding: '0.75rem',
+                    background: '#e8f5e9',
+                    border: '1px solid #4caf50',
+                    borderRadius: '4px',
+                    fontSize: '0.9rem'
+                  }}>
+                    💡 <strong>Appuyez sur Enter pour valider la vente</strong>
+                  </div>
+                )}
               </Field>
             </Row>
           )}
 
+          {/* Story B52-P1: Section paiements multiples */}
+          {payments.length > 0 && (
+            <Field style={{ marginTop: '1rem' }}>
+              <Label style={{ marginBottom: '0.75rem', fontWeight: 600 }}>
+                Paiements ajoutés
+              </Label>
+              <div style={{
+                background: '#f8f9fa',
+                border: '1px solid #ddd',
+                borderRadius: '6px',
+                padding: '0.75rem',
+                maxHeight: '200px',
+                overflowY: 'auto'
+              }}>
+                {/* Spec B52-P1 Keyboard Workflow: Feedback temporaire après ajout paiement */}
+                {showPaymentAddedFeedback && (
+                  <div style={{
+                    padding: '0.5rem',
+                    background: '#4caf50',
+                    color: 'white',
+                    borderRadius: '4px',
+                    marginBottom: '0.5rem',
+                    fontSize: '0.875rem',
+                    textAlign: 'center'
+                  }}>
+                    ✓ Paiement ajouté: {lastAddedPaymentAmount} € ({lastAddedPaymentMethod})
+                    {remainingAmount > 0 && ` - Reste: ${remainingAmount.toFixed(2)} €`}
+                  </div>
+                )}
+                {payments.map((payment, index) => (
+                  <div key={index} style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    padding: '0.5rem',
+                    marginBottom: index < payments.length - 1 ? '0.5rem' : 0,
+                    background: '#fff',
+                    borderRadius: '4px',
+                    border: '1px solid #e0e0e0'
+                  }}>
+                    <div>
+                      <div style={{ fontWeight: 500 }}>
+                        {payment.paymentMethod === 'cash' && '💰 Espèces'}
+                        {payment.paymentMethod === 'check' && '📝 Chèque'}
+                        {payment.paymentMethod === 'card' && '💳 Carte'}
+                        {payment.paymentMethod === 'free' && '🎁 Gratuit / Don'}
+                      </div>
+                      <div style={{ fontSize: '0.875rem', color: '#666' }}>
+                        {payment.amount.toFixed(2)} €
+                        {payment.change !== undefined && payment.change > 0 && (
+                          <span style={{ marginLeft: '0.5rem', color: '#ff9800' }}>
+                            (Monnaie: {payment.change.toFixed(2)} €)
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleRemovePayment(index)}
+                      style={{
+                        background: '#dc3545',
+                        color: '#fff',
+                        border: 'none',
+                        borderRadius: '4px',
+                        padding: '0.25rem 0.5rem',
+                        cursor: 'pointer',
+                        fontSize: '0.875rem'
+                      }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+                <div style={{
+                  marginTop: '0.75rem',
+                  paddingTop: '0.75rem',
+                  borderTop: '1px solid #ddd',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  fontWeight: 600
+                }}>
+                  <span>Total payé:</span>
+                  <span>{totalPaid.toFixed(2)} €</span>
+                </div>
+                {remainingAmount > 0 && (
+                  <div style={{
+                    marginTop: '0.5rem',
+                    color: '#dc3545',
+                    fontWeight: 600
+                  }}>
+                    Reste dû: {remainingAmount.toFixed(2)} €
+                  </div>
+                )}
+                {remainingAmount <= 0 && (
+                  <div style={{
+                    marginTop: '0.5rem',
+                    color: '#4caf50',
+                    fontWeight: 600
+                  }}>
+                    ✓ Total couvert
+                  </div>
+                )}
+              </div>
+            </Field>
+          )}
+
+          {/* Spec B52-P1 Keyboard Workflow: Section "Ajouter un autre paiement" avec workflow clavier */}
+          {remainingAmount > 0 && (
+            <Field style={{ marginTop: '1rem' }}>
+              <Label style={{ marginBottom: '0.75rem', fontWeight: 600 }}>
+                Ajouter un autre paiement
+              </Label>
+              <div style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '0.75rem'
+              }}>
+                <Field>
+                  <Label htmlFor="payment-method-loop">
+                    <CreditCard size={16} style={{ marginRight: '0.5rem', color: '#2c5530' }} />
+                    Moyen de paiement
+                  </Label>
+                  <Select
+                    ref={paymentSelectInLoopRef}
+                    id="payment-method-loop"
+                    value={effectivePaymentMethod === 'free' ? 'cash' : effectivePaymentMethod}
+                    onChange={(e) => {
+                      const value = e.target.value as PaymentMethod;
+                      if (value !== 'card' && value !== 'free') {
+                        setPaymentMethod(value);
+                        setPendingPaymentMethod(null);
+                      }
+                    }}
+                    onKeyDown={handlePaymentMethodInLoopKeyDown}
+                    onFocus={() => setFocusedField('payment-method-loop')}
+                    data-testid="payment-select-loop"
+                  >
+                    <option value="cash">💰 Espèces</option>
+                    <option value="check">📝 Chèque</option>
+                    <option value="card" disabled>💳 Carte (bientôt disponible)</option>
+                    {/* Spec B52-P1 Keyboard Workflow: "Gratuit / Don" exclu de la boucle */}
+                  </Select>
+                  {/* Spec B52-P1 Keyboard Workflow: Indicateur 1 - Focus sur "Moyen de paiement" */}
+                  {focusedField === 'payment-method-loop' && remainingAmount > 0 && payments.length > 0 && (
+                    <div style={{
+                      marginTop: '0.5rem',
+                      padding: '0.75rem',
+                      background: '#e1f5ff',
+                      border: '1px solid #2c5530',
+                      borderRadius: '4px',
+                      fontSize: '0.9rem'
+                    }}>
+                      💡 <strong>Choisissez le moyen de paiement puis saisissez le montant</strong><br/>
+                      Reste à payer: {remainingAmount.toFixed(2)} €<br/>
+                      <span style={{ fontSize: '0.85rem', color: '#666', marginTop: '0.25rem', display: 'block' }}>
+                        (Flèches haut/bas pour changer, Enter pour valider)
+                      </span>
+                    </div>
+                  )}
+                </Field>
+                <Field>
+                  <Label htmlFor="current-payment-amount">
+                    <Coins size={16} style={{ marginRight: '0.5rem', color: '#2c5530' }} />
+                    Montant du paiement (€)
+                  </Label>
+                  <Input
+                    ref={currentPaymentAmountRef}
+                    id="current-payment-amount"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    max={remainingAmount}
+                    value={currentPaymentAmount}
+                    onChange={(e) => {
+                      setCurrentPaymentAmount(e.target.value);
+                    }}
+                    onKeyDown={handleCurrentPaymentAmountKeyDown}
+                    onFocus={() => setFocusedField('payment-amount')}
+                    placeholder={`Max: ${remainingAmount.toFixed(2)} €`}
+                    data-testid="current-payment-amount-input"
+                  />
+                  {/* Spec B52-P1 Keyboard Workflow: Indicateur 1B - Focus sur "Montant du paiement" */}
+                  {focusedField === 'payment-amount' && remainingAmount > 0 && (
+                    <div style={{
+                      marginTop: '0.5rem',
+                      padding: '0.75rem',
+                      background: '#e1f5ff',
+                      border: '1px solid #2c5530',
+                      borderRadius: '4px',
+                      fontSize: '0.9rem'
+                    }}>
+                      💡 <strong>Appuyez sur Enter pour ajouter ce paiement</strong><br/>
+                      Reste à payer: {remainingAmount.toFixed(2)} €
+                      {currentPaymentAmount && parseFloat(currentPaymentAmount) > 0 && (
+                        <span style={{ display: 'block', marginTop: '0.25rem', color: '#666' }}>
+                          (Raccourci: + pour forcer l'ajout)
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </Field>
+                {/* Bouton "+ Ajouter" conservé pour compatibilité souris */}
+                <Button
+                  type="button"
+                  onClick={handleAddPayment}
+                  disabled={
+                    !currentPaymentAmount || 
+                    parseFloat(currentPaymentAmount || '0') <= 0 || 
+                    parseFloat(currentPaymentAmount || '0') > remainingAmount
+                  }
+                  style={{
+                    padding: '0.75rem 1.25rem',
+                    whiteSpace: 'nowrap',
+                    alignSelf: 'flex-start'
+                  }}
+                >
+                  + Ajouter
+                </Button>
+              </div>
+            </Field>
+          )}
+
           {/* Story B49-P5: Nouvelle organisation - Ligne 3: Monnaie à rendre (seule, en dessous, espèces et gratuit/don) */}
-          {(isCashPayment || isFreePayment) && (
+          {(isCashPayment || isFreePayment) && payments.length === 0 && (
             <Field>
               <Label>
                 <Coins size={16} style={{ marginRight: '0.5rem', color: '#ff9800' }} />

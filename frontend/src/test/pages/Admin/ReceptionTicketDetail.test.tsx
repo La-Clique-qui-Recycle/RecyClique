@@ -5,12 +5,23 @@ import { MemoryRouter } from 'react-router-dom'
 import ReceptionTicketDetail from '../../../pages/Admin/ReceptionTicketDetail'
 import { receptionTicketsService } from '../../../services/receptionTicketsService'
 
-// Mock du service
+// Mock des services
 vi.mock('../../../services/receptionTicketsService', () => ({
   receptionTicketsService: {
     getDetail: vi.fn(),
     exportCSV: vi.fn(),
   }
+}))
+
+vi.mock('../../../services/receptionService', () => ({
+  receptionService: {
+    updateLineWeight: vi.fn(),
+  },
+}))
+
+const mockUseAuthStore = vi.fn()
+vi.mock('../../../stores/authStore', () => ({
+  useAuthStore: mockUseAuthStore,
 }))
 
 // Mock de react-router-dom
@@ -57,7 +68,9 @@ describe('ReceptionTicketDetail', () => {
   beforeEach(() => {
     vi.resetAllMocks()
     mockNavigate.mockClear()
-    
+    mockUseAuthStore.mockReturnValue({
+      currentUser: { id: 'admin-id', role: 'admin' },
+    })
     vi.mocked(receptionTicketsService.getDetail).mockResolvedValue(mockTicket)
   })
 
@@ -230,7 +243,49 @@ describe('ReceptionTicketDetail', () => {
     
     expect(screen.getByText(/Chargement des détails du ticket/)).toBeInTheDocument()
   })
+
+  // B52-P2: édition du poids des lignes de réception (admin uniquement)
+  it('shows weight edit action for admin and calls API on save', async () => {
+    const { receptionService } = require('../../../services/receptionService')
+    const mockUpdate = vi.mocked(receptionService.updateLineWeight)
+    mockUpdate.mockResolvedValue({
+      ...mockTicket.lignes[0],
+      poids_kg: 7.25,
+      weight: 7.25,
+    })
+
+    render(
+      <MemoryRouter>
+        <ReceptionTicketDetail />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('Lignes de Dépôt (2 lignes)'),
+      ).toBeInTheDocument()
+    })
+
+    // Bouton "Modifier poids" doit être visible pour admin
+    const editButtons = screen.getAllByText('Modifier poids')
+    expect(editButtons.length).toBeGreaterThan(0)
+
+    // Entrer en mode édition pour la première ligne
+    fireEvent.click(editButtons[0])
+
+    const input = screen.getByDisplayValue('5.5')
+    fireEvent.change(input, { target: { value: '7.25' } })
+
+    const saveButton = screen.getByText('✓')
+    fireEvent.click(saveButton)
+
+    await waitFor(() => {
+      expect(mockUpdate).toHaveBeenCalledWith('ticket-1', 'ligne-1', 7.25)
+    })
+  })
 })
+
+
 
 
 

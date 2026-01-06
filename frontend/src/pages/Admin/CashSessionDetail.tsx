@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import styled from 'styled-components'
-import { ArrowLeft, Calendar, User, DollarSign, Package, Clock, Heart, Eye } from 'lucide-react'
+import { ArrowLeft, Calendar, User, DollarSign, Package, Clock, Heart, Eye, Scale } from 'lucide-react'
 import axiosClient from '../../api/axiosClient'
-import { getSaleDetail, SaleDetail, SaleItem, updateSaleNote } from '../../services/salesService'
+import { getSaleDetail, SaleDetail, SaleItem, updateSaleNote, updateSaleItemWeight } from '../../services/salesService'
 import { getCategories, Category } from '../../services/categoriesService'
 import { getUsers, User as UserType } from '../../services/usersService'
 import { presetService } from '../../services/presetService'
@@ -24,15 +24,28 @@ const getPaymentMethodLabel = (code?: string): string => {
   return labels[code] || code
 }
 
+// Story B52-P1: Paiement individuel
+interface PaymentSummary {
+  id: string
+  sale_id: string
+  payment_method: string
+  amount: number
+  created_at: string
+}
+
 // Types pour les données de la session
 interface SaleSummary {
   id: string
   total_amount: number
   donation?: number
-  payment_method?: string
-  created_at: string
+  payment_method?: string  // Déprécié - utiliser payments
+  payments?: PaymentSummary[]  // Story B52-P1: Liste de paiements multiples
+  sale_date: string  // Story B52-P3: Date réelle du ticket (date du cahier)
+  created_at: string  // Date d'enregistrement (pour traçabilité)
   operator_id?: string
   note?: string  // Story B40-P4: Notes dans liste sessions
+  // B52-P6: Poids total du panier (somme des SaleItem.weight)
+  total_weight?: number
 }
 
 interface CashSessionDetail {
@@ -52,6 +65,8 @@ interface CashSessionDetail {
   actual_amount?: number
   variance?: number
   variance_comment?: string
+  // B52-P6: Poids total sorti sur la session (somme des poids des items de vente)
+  total_weight_out?: number
   sales: SaleSummary[]
 }
 
@@ -463,6 +478,10 @@ const CashSessionDetail: React.FC = () => {
   const [editingNote, setEditingNote] = useState<boolean>(false)
   const [noteValue, setNoteValue] = useState<string>('')
   const [updatingNote, setUpdatingNote] = useState<boolean>(false)
+  // Story B52-P2: Edition du poids
+  const [editingItemWeight, setEditingItemWeight] = useState<string | null>(null)
+  const [weightValue, setWeightValue] = useState<string>('')
+  const [updatingWeight, setUpdatingWeight] = useState<boolean>(false)
 
   useEffect(() => {
     if (!id) {
@@ -511,6 +530,13 @@ const CashSessionDetail: React.FC = () => {
 
     loadReferenceData()
   }, [])
+
+  const formatWeight = (value: number | null | undefined): string => {
+    if (value === null || value === undefined || isNaN(value)) {
+      return '0,00 kg'
+    }
+    return `${value.toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} kg`
+  }
 
   const handleBack = () => {
     navigate('/admin/session-manager')
@@ -588,6 +614,54 @@ const CashSessionDetail: React.FC = () => {
 
   // Vérifier si l'utilisateur peut éditer les notes (Admin/SuperAdmin uniquement)
   const canEditNotes = user?.role === 'admin' || user?.role === 'super-admin'
+  // Story B52-P2: Vérifier si l'utilisateur peut éditer le poids (Admin/SuperAdmin uniquement)
+  const canEditWeight = user?.role === 'admin' || user?.role === 'super-admin'
+
+  // Story B52-P2: Handlers pour l'édition du poids
+  const handleEditItemWeight = (item: SaleItem) => {
+    setWeightValue((item.weight ?? 0).toString())
+    setEditingItemWeight(item.id)
+  }
+
+  const handleCancelEditWeight = () => {
+    setEditingItemWeight(null)
+    setWeightValue('')
+  }
+
+  const handleSaveItemWeight = async () => {
+    if (!selectedSale || !editingItemWeight) return
+
+    const item = selectedSale.items.find(i => i.id === editingItemWeight)
+    if (!item) return
+
+    const oldWeight = item.weight ?? 0
+    const newWeight = parseFloat(weightValue)
+
+    if (isNaN(newWeight) || newWeight <= 0) {
+      alert('Le poids doit être un nombre supérieur à 0')
+      return
+    }
+
+    try {
+      setUpdatingWeight(true)
+      await updateSaleItemWeight(selectedSale.id, editingItemWeight, newWeight)
+      
+      // Recharger les détails de la vente
+      const updatedSale = await getSaleDetail(selectedSale.id)
+      setSelectedSale(updatedSale)
+      
+      setEditingItemWeight(null)
+      setWeightValue('')
+      
+      // Afficher un message de confirmation
+      alert(`Poids modifié avec succès: ${oldWeight.toFixed(2)} kg → ${newWeight.toFixed(2)} kg`)
+    } catch (error) {
+      console.error('Erreur lors de la mise à jour du poids:', error)
+      alert('Erreur lors de la mise à jour du poids. Veuillez réessayer.')
+    } finally {
+      setUpdatingWeight(false)
+    }
+  }
 
   // Gestionnaire de retour à la caisse
   const handleReturnToCashRegister = () => {
@@ -740,7 +814,7 @@ const CashSessionDetail: React.FC = () => {
               <DollarSign size={20} />
             </InfoIcon>
             <InfoContent>
-              <InfoLabel>Montant initial</InfoLabel>
+              <InfoLabel>Montant initial (fond de caisse)</InfoLabel>
               <InfoValue>{formatCurrency(session.initial_amount)}</InfoValue>
             </InfoContent>
           </InfoItem>
@@ -770,10 +844,23 @@ const CashSessionDetail: React.FC = () => {
               <Package size={20} />
             </InfoIcon>
             <InfoContent>
-              <InfoLabel>Articles vendus</InfoLabel>
-              <InfoValue>{session.total_items}</InfoValue>
+              <InfoLabel>Nombre de paniers</InfoLabel>
+              <InfoValue>{session.sales.length}</InfoValue>
             </InfoContent>
           </InfoItem>
+
+          {/* B52-P6: Poids vendus ou donnés sur la session (sorties) */}
+          {typeof session.total_weight_out === 'number' && (
+            <InfoItem>
+              <InfoIcon>
+                <Scale size={20} />
+              </InfoIcon>
+              <InfoContent>
+                <InfoLabel>Poids vendus ou donnés (sorties)</InfoLabel>
+                <InfoValue>{formatWeight(session.total_weight_out)}</InfoValue>
+              </InfoContent>
+            </InfoItem>
+          )}
         </InfoGrid>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
@@ -832,6 +919,7 @@ const CashSessionDetail: React.FC = () => {
                 <Th>Heure</Th>
                 <Th>Montant</Th>
                 <Th>Don</Th>
+                <Th>Poids</Th>
                 <Th>Paiement</Th>
                 <Th>Opérateur</Th>
                 <Th>Notes</Th>
@@ -841,10 +929,24 @@ const CashSessionDetail: React.FC = () => {
             <tbody>
               {session.sales.map((sale) => (
                 <tr key={sale.id} onClick={() => handleViewTicket(sale.id, sale.operator_id)} style={{ cursor: 'pointer' }}>
-                  <Td>{formatDate(sale.created_at)}</Td>
+                  <Td>{formatDate(sale.sale_date)}</Td>
                   <Td>{formatCurrency(sale.total_amount)}</Td>
                   <Td>{sale.donation ? formatCurrency(sale.donation) : '-'}</Td>
-                  <Td>{getPaymentMethodLabel(sale.payment_method)}</Td>
+                  <Td>{formatWeight(sale.total_weight ?? 0)}</Td>
+                  <Td>
+                    {/* Story B52-P1: Afficher paiements multiples si disponibles */}
+                    {sale.payments && sale.payments.length > 0 ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                        {sale.payments.map((payment: any, index: number) => (
+                          <span key={payment.id || index}>
+                            {getPaymentMethodLabel(payment.payment_method)}: {formatCurrency(payment.amount)}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      getPaymentMethodLabel(sale.payment_method)
+                    )}
+                  </Td>
                   <Td>{sale.operator_id ? getUserName(sale.operator_id) : '-'}</Td>
                   <Td style={{ maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {sale.note || '-'}
@@ -880,16 +982,33 @@ const CashSessionDetail: React.FC = () => {
             <TicketInfo>
               <TicketRow>
                 <span>Heure de vente:</span>
-                <span>{formatDate(selectedSale.created_at)}</span>
+                <span>{formatDate(selectedSale.sale_date)}</span>
               </TicketRow>
               <TicketRow>
                 <span>Opérateur:</span>
                 <span>{selectedSale.operator_id ? getUserName(selectedSale.operator_id) : 'Non spécifié'}</span>
               </TicketRow>
-              <TicketRow>
-                <span>Méthode de paiement:</span>
-                <span>{getPaymentMethodLabel(selectedSale.payment_method)}</span>
-              </TicketRow>
+              {/* Story B52-P1: Afficher paiements multiples si disponibles, sinon rétrocompatibilité */}
+              {selectedSale.payments && selectedSale.payments.length > 0 ? (
+                <TicketRow>
+                  <span>Paiements:</span>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', alignItems: 'flex-end' }}>
+                    {selectedSale.payments.map((payment, index) => (
+                      <span key={payment.id || index}>
+                        {getPaymentMethodLabel(payment.payment_method)}: {formatCurrency(payment.amount)}
+                      </span>
+                    ))}
+                    <span style={{ fontWeight: 600, marginTop: '4px', borderTop: '1px solid #ddd', paddingTop: '4px' }}>
+                      Total: {formatCurrency(selectedSale.payments.reduce((sum, p) => sum + p.amount, 0))}
+                    </span>
+                  </div>
+                </TicketRow>
+              ) : (
+                <TicketRow>
+                  <span>Méthode de paiement:</span>
+                  <span>{getPaymentMethodLabel(selectedSale.payment_method)}</span>
+                </TicketRow>
+              )}
               <TicketRow>
                 <span>Don:</span>
                 <span>{selectedSale.donation ? formatCurrency(selectedSale.donation) : 'Aucun'}</span>
@@ -996,18 +1115,90 @@ const CashSessionDetail: React.FC = () => {
                       <ItemTh>Total</ItemTh>
                       <ItemTh>Type de transaction</ItemTh>
                       <ItemTh>Notes</ItemTh>
+                      {canEditWeight && <ItemTh>Actions</ItemTh>}
                     </tr>
                   </thead>
                   <tbody>
                     {selectedSale.items.map((item) => (
                       <tr key={item.id}>
                         <ItemTd>{getCategoryName(item.category)}</ItemTd>
-                        <ItemTd>{(item.weight ?? 0).toFixed(2)}</ItemTd>
+                        <ItemTd>
+                          {editingItemWeight === item.id ? (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <input
+                                type="number"
+                                step="0.01"
+                                min="0.01"
+                                value={weightValue}
+                                onChange={(e) => setWeightValue(e.target.value)}
+                                style={{
+                                  width: '80px',
+                                  padding: '4px 8px',
+                                  border: '1px solid #ddd',
+                                  borderRadius: '4px'
+                                }}
+                                disabled={updatingWeight}
+                              />
+                              <button
+                                onClick={handleSaveItemWeight}
+                                disabled={updatingWeight}
+                                style={{
+                                  padding: '4px 8px',
+                                  background: '#10b981',
+                                  color: 'white',
+                                  border: 'none',
+                                  borderRadius: '4px',
+                                  cursor: updatingWeight ? 'not-allowed' : 'pointer',
+                                  fontSize: '0.75rem'
+                                }}
+                              >
+                                ✓
+                              </button>
+                              <button
+                                onClick={handleCancelEditWeight}
+                                disabled={updatingWeight}
+                                style={{
+                                  padding: '4px 8px',
+                                  background: '#ef4444',
+                                  color: 'white',
+                                  border: 'none',
+                                  borderRadius: '4px',
+                                  cursor: updatingWeight ? 'not-allowed' : 'pointer',
+                                  fontSize: '0.75rem'
+                                }}
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          ) : (
+                            (item.weight ?? 0).toFixed(2)
+                          )}
+                        </ItemTd>
                         <ItemTd>{formatCurrency(item.unit_price)}</ItemTd>
                         <ItemTd>{formatCurrency(item.total_price)}</ItemTd>
                         {/* Story 1.1.2: Utiliser preset_id et notes de l'item, pas de la vente globale */}
                         <ItemTd>{getPresetName(item.preset_id || undefined, item.notes || undefined)}</ItemTd>
                         <ItemTd>{item.notes ? item.notes.replace(/preset_type:[^;]+;?\s*/g, '').trim() : ''}</ItemTd>
+                        {canEditWeight && (
+                          <ItemTd>
+                            {editingItemWeight !== item.id && (
+                              <button
+                                onClick={() => handleEditItemWeight(item)}
+                                style={{
+                                  padding: '4px 8px',
+                                  background: '#3b82f6',
+                                  color: 'white',
+                                  border: 'none',
+                                  borderRadius: '4px',
+                                  cursor: 'pointer',
+                                  fontSize: '0.75rem'
+                                }}
+                              >
+                                Modifier poids
+                              </button>
+                            )}
+                          </ItemTd>
+                        )}
                       </tr>
                     ))}
                   </tbody>

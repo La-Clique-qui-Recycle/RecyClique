@@ -128,13 +128,13 @@ const ComparisonCards: React.FC<ComparisonCardsProps> = ({ data }) => {
       <Card>
         <CardTitle>Période 1</CardTitle>
         <CardValue>{formatWeight(period1.weight)}</CardValue>
-        <CardSubValue>{period1.items} articles</CardSubValue>
+        <CardSubValue>{period1.items} lignes de vente</CardSubValue>
       </Card>
 
       <Card>
         <CardTitle>Période 2</CardTitle>
         <CardValue>{formatWeight(period2.weight)}</CardValue>
-        <CardSubValue>{period2.items} articles</CardSubValue>
+        <CardSubValue>{period2.items} lignes de vente</CardSubValue>
       </Card>
 
       <ComparisonCard variant={variant}>
@@ -155,7 +155,7 @@ const ComparisonCards: React.FC<ComparisonCardsProps> = ({ data }) => {
         </CardSubValue>
         <CardSubValue style={{ marginTop: '4px' }}>
           {difference.items_diff >= 0 ? '+' : ''}
-          {difference.items_diff} articles
+          {difference.items_diff} lignes de vente
         </CardSubValue>
       </ComparisonCard>
     </CardsGrid>

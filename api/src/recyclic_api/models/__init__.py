@@ -5,6 +5,7 @@ from .site import Site
 from .deposit import Deposit
 from .sale import Sale
 from .sale_item import SaleItem
+from .payment_transaction import PaymentTransaction
 from .cash_session import CashSession, CashSessionStep
 from .cash_register import CashRegister
 from .sync_log import SyncLog
@@ -33,6 +34,8 @@ __all__ = [
     "Site",
     "Deposit",
     "Sale",
+    "SaleItem",
+    "PaymentTransaction",
     "CashSession",
     "CashSessionStep",
     "CashRegister",

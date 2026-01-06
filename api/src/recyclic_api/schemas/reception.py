@@ -68,6 +68,15 @@ class UpdateLigneRequest(BaseModel):
     is_exit: Optional[bool] = Field(None, description="Indique si c'est une sortie de stock")
 
 
+# Story B52-P2: Schéma pour modification du poids uniquement (admin, même si ticket fermé)
+class LigneWeightUpdate(BaseModel):
+    """Corps de requête pour modifier uniquement le poids d'une ligne de dépôt (admin uniquement)."""
+    
+    poids_kg: condecimal(gt=0, max_digits=8, decimal_places=3) = Field(
+        ..., description="Nouveau poids en kilogrammes (> 0)"
+    )
+
+
 class LigneResponse(BaseModel):
     """Représentation d'une ligne de dépôt."""
 

@@ -134,6 +134,30 @@ class ReceptionService {
     const response = await api.get('/v1/reception/categories');
     return response.data;
   }
+
+  /**
+   * Modifier le poids d'une ligne de réception (admin seulement)
+   * Story B52-P2
+   */
+  async updateLineWeight(ticketId: string, lineId: string, weight: number): Promise<TicketLine> {
+    const response = await api.patch(`/v1/reception/tickets/${ticketId}/lignes/${lineId}/weight`, {
+      poids_kg: weight
+    });
+    // Normaliser la réponse pour correspondre à l'interface TicketLine
+    return {
+      id: response.data.id,
+      ticket_id: response.data.ticket_id,
+      category: response.data.category_id,
+      dom_category_id: response.data.category_id,
+      weight: response.data.poids_kg,
+      poids_kg: response.data.poids_kg,
+      destination: response.data.destination,
+      notes: response.data.notes,
+      is_exit: response.data.is_exit,
+      created_at: response.data.created_at,
+      updated_at: response.data.updated_at
+    };
+  }
 }
 
 export const receptionService = new ReceptionService();

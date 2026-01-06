@@ -21,6 +21,7 @@ from recyclic_api.schemas.reception import (
     CreateLigneRequest,
     UpdateLigneRequest,
     LigneResponse,
+    LigneWeightUpdate,
     TicketSummaryResponse,
     TicketDetailResponse,
     TicketListResponse,
@@ -31,6 +32,9 @@ from recyclic_api.schemas.stats import ReceptionLiveStatsResponse
 from recyclic_api.models.category import Category
 from recyclic_api.services.reception_service import ReceptionService
 from recyclic_api.services.reception_stats_service import ReceptionLiveStatsService
+from recyclic_api.services.statistics_recalculation_service import StatisticsRecalculationService
+from recyclic_api.core.audit import log_audit
+from recyclic_api.models.audit_log import AuditActionType
 from recyclic_api.core.config import settings
 
 
@@ -198,6 +202,105 @@ def delete_ligne(
     service = ReceptionService(db)
     service.delete_ligne(ligne_id=UUID(ligne_id))
     return {"status": "deleted"}
+
+
+@router.patch("/tickets/{ticket_id}/lignes/{ligne_id}/weight", response_model=LigneResponse)
+def update_ligne_weight(
+    ticket_id: str,
+    ligne_id: str,
+    weight_update: LigneWeightUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_role_strict([UserRole.ADMIN, UserRole.SUPER_ADMIN])),
+):
+    """
+    Modifier le poids d'une ligne de réception (admin uniquement).
+    
+    Story B52-P2: Permet de corriger les erreurs de saisie de poids après validation.
+    - Seuls les administrateurs peuvent modifier
+    - Permet la modification même si le ticket est fermé
+    - Recalcule automatiquement les statistiques affectées
+    - Log d'audit complet
+    """
+    # Valider les UUIDs
+    try:
+        ticket_uuid = UUID(ticket_id)
+        ligne_uuid = UUID(ligne_id)
+    except ValueError:
+        from fastapi import HTTPException, status
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid ID format")
+    
+    service = ReceptionService(db)
+    
+    # Récupérer la ligne pour obtenir l'ancien poids
+    ligne = service.ligne_repo.get(ligne_uuid)
+    if not ligne:
+        from fastapi import HTTPException, status
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ligne introuvable")
+    
+    # Vérifier que la ligne appartient au ticket
+    if ligne.ticket_id != ticket_uuid:
+        from fastapi import HTTPException, status
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La ligne n'appartient pas à ce ticket")
+    
+    # Sauvegarder l'ancien poids pour l'audit et le recalcul
+    old_weight = float(ligne.poids_kg) if ligne.poids_kg else 0.0
+    new_weight = float(weight_update.poids_kg)
+    
+    # Mettre à jour le poids (méthode admin qui ignore le statut du ticket)
+    ligne = service.update_ligne_weight_admin(
+        ligne_id=ligne_uuid,
+        poids_kg=new_weight
+    )
+    
+    # Recalculer les statistiques affectées
+    recalculation_result = None
+    try:
+        recalculation_service = StatisticsRecalculationService(db)
+        recalculation_result = recalculation_service.recalculate_after_ligne_weight_update(
+            ticket_id=ticket_uuid,
+            ligne_id=ligne_uuid,
+            old_weight=old_weight,
+            new_weight=new_weight
+        )
+    except Exception as e:  # pragma: no cover - chemin de secours
+        # En cas d'échec du recalcul, on conserve la modification de poids
+        # mais on trace l'erreur dans les détails d'audit.
+        recalculation_result = {"error": str(e)}
+    
+    # Logger l'audit
+    log_audit(
+        action_type=AuditActionType.SYSTEM_CONFIG_CHANGED,
+        actor=current_user,
+        target_id=ligne_uuid,
+        target_type="ligne_depot",
+        details={
+            "ticket_id": str(ticket_uuid),
+            "ligne_id": str(ligne_uuid),
+            "old_weight": old_weight,
+            "new_weight": new_weight,
+            "weight_delta": new_weight - old_weight,
+            "recalculation_result": recalculation_result
+        },
+        description=f"Modification du poids d'une ligne de réception: {old_weight} kg → {new_weight} kg",
+        db=db
+    )
+    
+    # Récupérer le nom de la catégorie
+    from recyclic_api.services.category_service import CategoryService
+    category_label = "Catégorie inconnue"
+    if ligne.category:
+        category_label = ligne.category.name  # Story B48-P5: Utilise name (nom court/rapide)
+    
+    return {
+        "id": str(ligne.id),
+        "ticket_id": str(ligne.ticket_id),
+        "category_id": str(ligne.category_id),
+        "category_label": category_label,
+        "poids_kg": ligne.poids_kg,
+        "destination": ligne.destination,
+        "notes": ligne.notes,
+        "is_exit": ligne.is_exit,
+    }
 
 
 # Endpoints pour l'historique des tickets

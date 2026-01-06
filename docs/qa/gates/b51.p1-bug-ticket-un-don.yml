@@ -40,3 +40,5 @@ recommendations:
     - action: "Considérer tests E2E pour scénario complet ticket don-seul"
       refs: ["docs/stories/story-b51-p1-bug-ticket-un-don.md:187-188"]
 
+
+

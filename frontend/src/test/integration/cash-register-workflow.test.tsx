@@ -144,4 +144,153 @@ describe('Cash Register Integration Workflow', () => {
     // Calculate expected total: (2*10) + (1*25.50) + (3*5.25) = 20 + 25.50 + 15.75 = 61.25
     expect(screen.getByText('61.25€')).toBeInTheDocument()
   })
+
+  // Story B52-P1: Tests pour paiements multiples
+  it('should handle multiple payments workflow', async () => {
+    const onComplete = vi.fn()
+    render(<CashRegister onComplete={onComplete} />)
+    
+    // Step 1: Add items
+    fireEvent.click(screen.getByTestId('category-EEE-1'))
+    fireEvent.change(screen.getByTestId('quantity-input'), { target: { value: '1' } })
+    fireEvent.change(screen.getByTestId('price-input'), { target: { value: '50' } })
+    fireEvent.click(screen.getByTestId('add-item-button'))
+    
+    // Step 2: Finalize sale
+    fireEvent.click(screen.getByTestId('finalize-sale-button'))
+    
+    // Step 3: Wait for FinalizationScreen to appear
+    await waitFor(() => {
+      expect(screen.getByTestId('payment-method-select')).toBeInTheDocument()
+    })
+    
+    // Step 4: First payment - Cash 25€
+    const paymentMethodSelect = screen.getByTestId('payment-method-select')
+    fireEvent.change(paymentMethodSelect, { target: { value: 'cash' } })
+    
+    const amountReceivedInput = screen.getByTestId('amount-received-input')
+    fireEvent.change(amountReceivedInput, { target: { value: '25' } })
+    
+    // Step 5: Add first payment
+    const addPaymentButton = screen.getByTestId('add-payment-button')
+    fireEvent.click(addPaymentButton)
+    
+    // Step 6: Verify first payment is added and remaining amount is shown
+    await waitFor(() => {
+      expect(screen.getByText(/Reste à payer.*25/i)).toBeInTheDocument()
+    })
+    
+    // Step 7: Second payment - Check 25€
+    const paymentMethodLoopSelect = screen.getByTestId('payment-select-loop')
+    fireEvent.change(paymentMethodLoopSelect, { target: { value: 'check' } })
+    
+    const currentPaymentAmountInput = screen.getByTestId('current-payment-amount-input')
+    fireEvent.change(currentPaymentAmountInput, { target: { value: '25' } })
+    
+    // Step 8: Add second payment
+    const addAnotherPaymentButton = screen.getByText('+ Ajouter')
+    fireEvent.click(addAnotherPaymentButton)
+    
+    // Step 9: Verify total is covered
+    await waitFor(() => {
+      expect(screen.getByText(/Total couvert/i)).toBeInTheDocument()
+    })
+    
+    // Step 10: Confirm sale
+    const confirmButton = screen.getByTestId('confirm-sale-button')
+    fireEvent.click(confirmButton)
+    
+    // Step 11: Verify onComplete was called with multiple payments
+    await waitFor(() => {
+      expect(onComplete).toHaveBeenCalled()
+      const callArgs = onComplete.mock.calls[0][0]
+      expect(callArgs.payments).toBeDefined()
+      expect(callArgs.payments.length).toBeGreaterThanOrEqual(2)
+    })
+  })
+
+  it('should validate that total is covered before allowing confirmation', async () => {
+    render(<CashRegister />)
+    
+    // Add items totaling 50€
+    fireEvent.click(screen.getByTestId('category-EEE-1'))
+    fireEvent.change(screen.getByTestId('quantity-input'), { target: { value: '1' } })
+    fireEvent.change(screen.getByTestId('price-input'), { target: { value: '50' } })
+    fireEvent.click(screen.getByTestId('add-item-button'))
+    
+    // Finalize sale
+    fireEvent.click(screen.getByTestId('finalize-sale-button'))
+    
+    // Wait for FinalizationScreen
+    await waitFor(() => {
+      expect(screen.getByTestId('payment-method-select')).toBeInTheDocument()
+    })
+    
+    // Add partial payment (25€ < 50€)
+    const paymentMethodSelect = screen.getByTestId('payment-method-select')
+    fireEvent.change(paymentMethodSelect, { target: { value: 'cash' } })
+    
+    const amountReceivedInput = screen.getByTestId('amount-received-input')
+    fireEvent.change(amountReceivedInput, { target: { value: '25' } })
+    
+    const addPaymentButton = screen.getByTestId('add-payment-button')
+    fireEvent.click(addPaymentButton)
+    
+    // Verify remaining amount is shown
+    await waitFor(() => {
+      expect(screen.getByText(/Reste à payer.*25/i)).toBeInTheDocument()
+    })
+    
+    // Verify confirm button is disabled (total not covered)
+    const confirmButton = screen.getByTestId('confirm-sale-button')
+    expect(confirmButton).toBeDisabled()
+  })
+
+  it('should display all payments in the payment list', async () => {
+    render(<CashRegister />)
+    
+    // Add items
+    fireEvent.click(screen.getByTestId('category-EEE-1'))
+    fireEvent.change(screen.getByTestId('quantity-input'), { target: { value: '1' } })
+    fireEvent.change(screen.getByTestId('price-input'), { target: { value: '100' } })
+    fireEvent.click(screen.getByTestId('add-item-button'))
+    
+    // Finalize sale
+    fireEvent.click(screen.getByTestId('finalize-sale-button'))
+    
+    // Wait for FinalizationScreen
+    await waitFor(() => {
+      expect(screen.getByTestId('payment-method-select')).toBeInTheDocument()
+    })
+    
+    // Add first payment - Cash 50€
+    const paymentMethodSelect = screen.getByTestId('payment-method-select')
+    fireEvent.change(paymentMethodSelect, { target: { value: 'cash' } })
+    
+    const amountReceivedInput = screen.getByTestId('amount-received-input')
+    fireEvent.change(amountReceivedInput, { target: { value: '50' } })
+    
+    const addPaymentButton = screen.getByTestId('add-payment-button')
+    fireEvent.click(addPaymentButton)
+    
+    // Add second payment - Check 50€
+    await waitFor(() => {
+      expect(screen.getByTestId('payment-select-loop')).toBeInTheDocument()
+    })
+    
+    const paymentMethodLoopSelect = screen.getByTestId('payment-select-loop')
+    fireEvent.change(paymentMethodLoopSelect, { target: { value: 'check' } })
+    
+    const currentPaymentAmountInput = screen.getByTestId('current-payment-amount-input')
+    fireEvent.change(currentPaymentAmountInput, { target: { value: '50' } })
+    
+    const addAnotherPaymentButton = screen.getByText('+ Ajouter')
+    fireEvent.click(addAnotherPaymentButton)
+    
+    // Verify both payments are displayed
+    await waitFor(() => {
+      expect(screen.getByText(/Espèces.*50/i)).toBeInTheDocument()
+      expect(screen.getByText(/Chèque.*50/i)).toBeInTheDocument()
+    })
+  })
 })

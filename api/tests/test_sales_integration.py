@@ -885,3 +885,350 @@ class TestSalesIntegration:
         assert response.status_code == 422, f"Expected 422, got {response.status_code}: {response.text}"
         assert "fermée" in response.json()["detail"].lower() or "closed" in response.json()["detail"].lower(), \
             f"Le message d'erreur doit mentionner que la session est fermée: {response.json()['detail']}"
+
+    # Story B52-P1: Tests pour paiements multiples
+    def test_create_sale_with_multiple_payments(self, client: TestClient, test_cashier, test_site, test_cash_register, test_cash_session, cashier_token, db_session):
+        """
+        Test de création d'une vente avec paiements multiples.
+        
+        Story B52-P1: Valide que plusieurs paiements peuvent être associés à une vente.
+        """
+        # Créer les données de test en base
+        user = User(**test_cashier)
+        site = Site(**test_site)
+        cash_register = CashRegister(**test_cash_register)
+        cash_session = CashSession(**test_cash_session)
+
+        db_session.add(user)
+        db_session.add(site)
+        db_session.add(cash_register)
+        db_session.add(cash_session)
+        db_session.commit()
+
+        # Données de la vente avec paiements multiples
+        sale_data = {
+            "cash_session_id": str(test_cash_session["id"]),
+            "items": [
+                {
+                    "category": "EEE-1",
+                    "quantity": 1,
+                    "weight": 1.0,
+                    "unit_price": 50.0,
+                    "total_price": 50.0
+                }
+            ],
+            "total_amount": 50.0,
+            "donation": 0.0,
+            "payments": [
+                {"payment_method": "cash", "amount": 25.0},
+                {"payment_method": "check", "amount": 25.0}
+            ]
+        }
+
+        response = client.post(
+            "/api/v1/sales/",
+            json=sale_data,
+            headers={"Authorization": f"Bearer {cashier_token}"}
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Vérifier que la vente a été créée
+        assert "id" in data
+        assert data["total_amount"] == 50.0
+
+        # Vérifier que les paiements multiples sont présents
+        assert "payments" in data
+        assert len(data["payments"]) == 2
+
+        # Vérifier les détails des paiements
+        payment_methods = {p["payment_method"] for p in data["payments"]}
+        assert "cash" in payment_methods
+        assert "check" in payment_methods
+
+        payment_amounts = {p["amount"] for p in data["payments"]}
+        assert 25.0 in payment_amounts
+
+        # Vérifier que la somme des paiements couvre le total
+        total_payments = sum(p["amount"] for p in data["payments"])
+        assert total_payments == 50.0
+
+        # Vérifier en base de données
+        from recyclic_api.models.payment_transaction import PaymentTransaction
+        sale_id = data["id"]
+        db_payments = db_session.query(PaymentTransaction).filter(
+            PaymentTransaction.sale_id == sale_id
+        ).all()
+        assert len(db_payments) == 2
+
+    def test_create_sale_with_multiple_payments_and_donation(self, client: TestClient, test_cashier, test_site, test_cash_register, test_cash_session, cashier_token, db_session):
+        """
+        Test de création d'une vente avec paiements multiples et don.
+        
+        Story B52-P1: Valide que le don est inclus dans le calcul du total.
+        """
+        # Créer les données de test en base
+        user = User(**test_cashier)
+        site = Site(**test_site)
+        cash_register = CashRegister(**test_cash_register)
+        cash_session = CashSession(**test_cash_session)
+
+        db_session.add(user)
+        db_session.add(site)
+        db_session.add(cash_register)
+        db_session.add(cash_session)
+        db_session.commit()
+
+        # Données de la vente : 100€ base + 20€ don = 120€ total
+        sale_data = {
+            "cash_session_id": str(test_cash_session["id"]),
+            "items": [
+                {
+                    "category": "EEE-1",
+                    "quantity": 1,
+                    "weight": 2.0,
+                    "unit_price": 100.0,
+                    "total_price": 100.0
+                }
+            ],
+            "total_amount": 120.0,  # 100€ base + 20€ don
+            "donation": 20.0,
+            "payments": [
+                {"payment_method": "cash", "amount": 60.0},
+                {"payment_method": "check", "amount": 60.0}
+            ]
+        }
+
+        response = client.post(
+            "/api/v1/sales/",
+            json=sale_data,
+            headers={"Authorization": f"Bearer {cashier_token}"}
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Vérifier que la somme des paiements couvre le total (inclut le don)
+        total_payments = sum(p["amount"] for p in data["payments"])
+        assert total_payments == 120.0
+        assert total_payments >= data["total_amount"]
+
+    def test_create_sale_with_multiple_payments_cash_change(self, client: TestClient, test_cashier, test_site, test_cash_register, test_cash_session, cashier_token, db_session):
+        """
+        Test de création d'une vente avec paiement espèces supérieur au total (reste).
+        
+        Story B52-P1: Valide que la somme des paiements peut être supérieure au total pour espèces.
+        """
+        # Créer les données de test en base
+        user = User(**test_cashier)
+        site = Site(**test_site)
+        cash_register = CashRegister(**test_cash_register)
+        cash_session = CashSession(**test_cash_session)
+
+        db_session.add(user)
+        db_session.add(site)
+        db_session.add(cash_register)
+        db_session.add(cash_session)
+        db_session.commit()
+
+        # Données de la vente : 50€ total, paiement espèces 55€ (reste 5€)
+        sale_data = {
+            "cash_session_id": str(test_cash_session["id"]),
+            "items": [
+                {
+                    "category": "EEE-1",
+                    "quantity": 1,
+                    "weight": 1.0,
+                    "unit_price": 50.0,
+                    "total_price": 50.0
+                }
+            ],
+            "total_amount": 50.0,
+            "donation": 0.0,
+            "payments": [
+                {"payment_method": "cash", "amount": 55.0}  # 5€ de reste
+            ]
+        }
+
+        response = client.post(
+            "/api/v1/sales/",
+            json=sale_data,
+            headers={"Authorization": f"Bearer {cashier_token}"}
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Vérifier que le paiement est supérieur au total (reste pour espèces)
+        total_payments = sum(p["amount"] for p in data["payments"])
+        assert total_payments == 55.0
+        assert total_payments > data["total_amount"]
+
+    def test_create_sale_with_multiple_payments_validation_error(self, client: TestClient, test_cashier, test_site, test_cash_register, test_cash_session, cashier_token, db_session):
+        """
+        Test de validation : somme des paiements < total doit échouer.
+        
+        Story B52-P1: Valide que la validation rejette les paiements insuffisants.
+        """
+        # Créer les données de test en base
+        user = User(**test_cashier)
+        site = Site(**test_site)
+        cash_register = CashRegister(**test_cash_register)
+        cash_session = CashSession(**test_cash_session)
+
+        db_session.add(user)
+        db_session.add(site)
+        db_session.add(cash_register)
+        db_session.add(cash_session)
+        db_session.commit()
+
+        # Données de la vente : 50€ total, paiements seulement 40€ (insuffisant)
+        sale_data = {
+            "cash_session_id": str(test_cash_session["id"]),
+            "items": [
+                {
+                    "category": "EEE-1",
+                    "quantity": 1,
+                    "weight": 1.0,
+                    "unit_price": 50.0,
+                    "total_price": 50.0
+                }
+            ],
+            "total_amount": 50.0,
+            "donation": 0.0,
+            "payments": [
+                {"payment_method": "cash", "amount": 25.0},
+                {"payment_method": "check", "amount": 15.0}  # Total = 40€ < 50€
+            ]
+        }
+
+        response = client.post(
+            "/api/v1/sales/",
+            json=sale_data,
+            headers={"Authorization": f"Bearer {cashier_token}"}
+        )
+
+        # Doit retourner une erreur de validation
+        assert response.status_code == 422
+        assert "paiements" in response.json()["detail"].lower() or "payments" in response.json()["detail"].lower()
+
+    def test_create_sale_backward_compatibility_single_payment(self, client: TestClient, test_cashier, test_site, test_cash_register, test_cash_session, cashier_token, db_session):
+        """
+        Test de rétrocompatibilité : paiement unique avec payment_method.
+        
+        Story B52-P1: Valide que les ventes avec payment_method unique continuent de fonctionner.
+        """
+        # Créer les données de test en base
+        user = User(**test_cashier)
+        site = Site(**test_site)
+        cash_register = CashRegister(**test_cash_register)
+        cash_session = CashSession(**test_cash_session)
+
+        db_session.add(user)
+        db_session.add(site)
+        db_session.add(cash_register)
+        db_session.add(cash_session)
+        db_session.commit()
+
+        # Données de la vente avec payment_method (ancien format)
+        sale_data = {
+            "cash_session_id": str(test_cash_session["id"]),
+            "items": [
+                {
+                    "category": "EEE-1",
+                    "quantity": 1,
+                    "weight": 1.0,
+                    "unit_price": 50.0,
+                    "total_price": 50.0
+                }
+            ],
+            "total_amount": 50.0,
+            "donation": 0.0,
+            "payment_method": "cash"  # Ancien format
+        }
+
+        response = client.post(
+            "/api/v1/sales/",
+            json=sale_data,
+            headers={"Authorization": f"Bearer {cashier_token}"}
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Vérifier qu'un PaymentTransaction a été créé automatiquement
+        assert "payments" in data
+        assert len(data["payments"]) == 1
+        assert data["payments"][0]["payment_method"] == "cash"
+        assert data["payments"][0]["amount"] == 50.0
+
+        # Vérifier en base de données
+        from recyclic_api.models.payment_transaction import PaymentTransaction
+        sale_id = data["id"]
+        db_payments = db_session.query(PaymentTransaction).filter(
+            PaymentTransaction.sale_id == sale_id
+        ).all()
+        assert len(db_payments) == 1
+        assert db_payments[0].payment_method.value == "cash"
+        assert db_payments[0].amount == 50.0
+
+    def test_get_sale_with_multiple_payments(self, client: TestClient, test_cashier, test_site, test_cash_register, test_cash_session, cashier_token, db_session):
+        """
+        Test de récupération d'une vente avec paiements multiples.
+        
+        Story B52-P1: Valide que les paiements multiples sont retournés lors de la lecture.
+        """
+        # Créer les données de test en base
+        user = User(**test_cashier)
+        site = Site(**test_site)
+        cash_register = CashRegister(**test_cash_register)
+        cash_session = CashSession(**test_cash_session)
+
+        db_session.add(user)
+        db_session.add(site)
+        db_session.add(cash_register)
+        db_session.add(cash_session)
+        db_session.commit()
+
+        # Créer une vente avec paiements multiples
+        sale_data = {
+            "cash_session_id": str(test_cash_session["id"]),
+            "items": [
+                {
+                    "category": "EEE-1",
+                    "quantity": 1,
+                    "weight": 1.0,
+                    "unit_price": 100.0,
+                    "total_price": 100.0
+                }
+            ],
+            "total_amount": 100.0,
+            "donation": 0.0,
+            "payments": [
+                {"payment_method": "cash", "amount": 50.0},
+                {"payment_method": "check", "amount": 50.0}
+            ]
+        }
+
+        create_response = client.post(
+            "/api/v1/sales/",
+            json=sale_data,
+            headers={"Authorization": f"Bearer {cashier_token}"}
+        )
+        assert create_response.status_code == 200
+        sale_id = create_response.json()["id"]
+
+        # Récupérer la vente
+        get_response = client.get(
+            f"/api/v1/sales/{sale_id}",
+            headers={"Authorization": f"Bearer {cashier_token}"}
+        )
+
+        assert get_response.status_code == 200
+        data = get_response.json()
+
+        # Vérifier que les paiements multiples sont présents
+        assert "payments" in data
+        assert len(data["payments"]) == 2
+        assert sum(p["amount"] for p in data["payments"]) == 100.0

@@ -42,3 +42,5 @@ recommendations:
     - action: "Exécuter tests manuels complets (checklist T7)"
       refs: ["docs/stories/story-tech-debt-fix-api-js-to-ts.md:121-153"]
 
+
+
