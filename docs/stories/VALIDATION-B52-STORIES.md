@@ -212,3 +212,5 @@ Toutes les stories de l'Epic B52 sont **validées et prêtes pour implémentatio
 
 **Action requise** : Mettre à jour le statut des stories de "Draft" à "Ready for Dev".
 
+
+

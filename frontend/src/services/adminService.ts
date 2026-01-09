@@ -712,6 +712,95 @@ export const adminService = {
   },
 
   /**
+   * Valide la conformité d'un CSV legacy
+   * Story B47-P7: Validation de Conformité CSV et Nettoyage Automatique
+   * @param file Fichier CSV à valider
+   */
+  async validateLegacyImportCSV(file: File): Promise<{
+    is_valid: boolean;
+    errors: string[];
+    warnings: string[];
+    statistics: {
+      total_lines: number;
+      valid_lines: number;
+      invalid_lines: number;
+      missing_columns: string[];
+      extra_columns: string[];
+      date_errors: number;
+      weight_errors: number;
+      structure_issues: number;
+    };
+  }> {
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const response = await axiosClient.post('/v1/admin/import/legacy/validate', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+        timeout: 60000, // 1 minute timeout
+      });
+
+      return response.data;
+    } catch (error: any) {
+      console.error('Erreur lors de la validation du CSV:', error);
+      // En cas d'erreur, retourner un rapport invalide
+      return {
+        is_valid: false,
+        errors: [error.response?.data?.detail || 'Erreur lors de la validation du CSV'],
+        warnings: [],
+        statistics: {
+          total_lines: 0,
+          valid_lines: 0,
+          invalid_lines: 0,
+          missing_columns: [],
+          extra_columns: [],
+          date_errors: 0,
+          weight_errors: 0,
+          structure_issues: 0,
+        },
+      };
+    }
+  },
+
+  /**
+   * Nettoie un CSV legacy non conforme
+   * Story B47-P7: Validation de Conformité CSV et Nettoyage Automatique
+   * @param file Fichier CSV legacy à nettoyer
+   */
+  async cleanLegacyImportCSV(file: File): Promise<{
+    cleaned_csv_base64: string;
+    filename: string;
+    statistics: {
+      total_lines: number;
+      cleaned_lines: number;
+      excluded_lines: number;
+      orphan_lines: number;
+      dates_normalized: number;
+      weights_rounded: number;
+      date_distribution: Record<string, number>;
+    };
+  }> {
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const response = await axiosClient.post('/v1/admin/import/legacy/clean', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+        timeout: 300000, // 5 minutes timeout
+      });
+
+      return response.data;
+    } catch (error) {
+      console.error('Erreur lors du nettoyage du CSV legacy:', error);
+      throw error;
+    }
+  },
+
+  /**
    * Analyse un CSV legacy pour proposer des mappings de catégories
    * @param file Fichier CSV nettoyé à analyser
    * @param confidenceThreshold Seuil de confiance pour le fuzzy matching (0-100, optionnel)
@@ -808,13 +897,60 @@ export const adminService = {
   },
 
   /**
+   * Calcule le récapitulatif de ce qui sera importé avec les mappings fournis
+   * Story B47-P10: Simplification Workflow et Récapitulatif Pré-Import
+   * @param csvFile Fichier CSV nettoyé à prévisualiser
+   * @param mappingFile Fichier JSON de mapping validé
+   */
+  async previewLegacyImport(
+    csvFile: File,
+    mappingFile: File
+  ): Promise<{
+    total_lines: number;
+    total_kilos: number;
+    unique_dates: number;
+    unique_categories: number;
+    by_category: Array<{
+      category_name: string;
+      category_id: string;
+      line_count: number;
+      total_kilos: number;
+    }>;
+    by_date: Array<{
+      date: string;
+      line_count: number;
+      total_kilos: number;
+    }>;
+    unmapped_categories: string[];
+  }> {
+    try {
+      const formData = new FormData();
+      formData.append('csv_file', csvFile);
+      formData.append('mapping_file', mappingFile);
+
+      const response = await axiosClient.post('/v1/admin/import/legacy/preview', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+        timeout: 60000, // 1 minute timeout pour le preview
+      });
+
+      return response.data;
+    } catch (error) {
+      console.error('Erreur lors du calcul du récapitulatif:', error);
+      throw error;
+    }
+  },
+
+  /**
    * Exécute l'import legacy avec le CSV et le fichier de mapping validé
    * @param csvFile Fichier CSV nettoyé à importer
    * @param mappingFile Fichier JSON de mapping validé
    */
   async executeLegacyImport(
     csvFile: File,
-    mappingFile: File
+    mappingFile: File,
+    importDate?: string
   ): Promise<{
     report: {
       postes_created: number;
@@ -830,6 +966,9 @@ export const adminService = {
       const formData = new FormData();
       formData.append('csv_file', csvFile);
       formData.append('mapping_file', mappingFile);
+      if (importDate) {
+        formData.append('import_date', importDate);
+      }
 
       const response = await axiosClient.post('/v1/admin/import/legacy/execute', formData, {
         headers: {
@@ -884,6 +1023,56 @@ export const adminService = {
       console.log(`Template CSV offline téléchargé: ${filename}`);
     } catch (error) {
       console.error('Erreur lors du téléchargement du template:', error);
+      throw error;
+    }
+  },
+
+  async exportRemappedLegacyImportCSV(
+    csvFile: File,
+    mappingFile: File
+  ): Promise<void> {
+    try {
+      const formData = new FormData();
+      formData.append('csv_file', csvFile);
+      formData.append('mapping_file', mappingFile);
+
+      const response = await axiosClient.post('/v1/admin/import/legacy/export-remapped', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+        responseType: 'blob',
+        timeout: 60000, // 1 minute timeout
+      });
+
+      // Créer un blob à partir de la réponse
+      const blob = new Blob([response.data], { type: 'text/csv; charset=utf-8' });
+
+      // Extraire le nom du fichier depuis les headers
+      const contentDisposition = response.headers['content-disposition'];
+      let filename = 'import_legacy_remappe.csv';
+
+      if (contentDisposition) {
+        const filenameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+        if (filenameMatch && filenameMatch[1]) {
+          filename = filenameMatch[1].replace(/['"]/g, '');
+        }
+      }
+
+      // Créer un lien temporaire et déclencher le téléchargement
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+
+      // Nettoyage
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+
+      console.log(`CSV remappé téléchargé: ${filename}`);
+    } catch (error) {
+      console.error('Erreur lors de l\'export CSV remappé:', error);
       throw error;
     }
   }

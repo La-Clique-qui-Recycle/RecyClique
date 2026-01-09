@@ -33,11 +33,13 @@ import {
   IconAlertCircle,
   IconFileTypeCsv,
   IconDownload,
-  IconDatabaseImport
+  IconDatabaseImport,
+  IconCalendar
 } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 import { adminService } from '../../services/adminService';
 import { categoryService, Category } from '../../services/categoryService';
+import { LLMModelSelector } from '../../components/LegacyImport/LLMModelSelector';
 
 // Types pour les données d'import
 interface CategoryMapping {
@@ -103,6 +105,25 @@ const LegacyImport: React.FC = () => {
   const [analyzeResult, setAnalyzeResult] = useState<LegacyImportAnalyzeResponse | null>(null);
   const [analyzeError, setAnalyzeError] = useState<string | null>(null);
   
+  // Validation et nettoyage (B47-P7)
+  const [validationResult, setValidationResult] = useState<{
+    is_valid: boolean;
+    errors: string[];
+    warnings: string[];
+    statistics: {
+      total_lines: number;
+      valid_lines: number;
+      invalid_lines: number;
+      missing_columns: string[];
+      extra_columns: string[];
+      date_errors: number;
+      weight_errors: number;
+      structure_issues: number;
+    };
+  } | null>(null);
+  const [isValidating, setIsValidating] = useState(false);
+  const [cleaning, setCleaning] = useState(false);
+  
   // Sélecteur de modèles LLM (T5)
   const [llmModels, setLlmModels] = useState<LLMModel[]>([]);
   const [loadingLlmModels, setLoadingLlmModels] = useState(false);
@@ -110,24 +131,56 @@ const LegacyImport: React.FC = () => {
   const [llmModelsError, setLlmModelsError] = useState<string | null>(null);
   const [showFreeOnly, setShowFreeOnly] = useState(false);
   
+  // Sélecteur de modèles LLM pour l'étape 2 (B47-P8)
+  const [selectedLlmModelIdStep2, setSelectedLlmModelIdStep2] = useState<string | null>(null);
+  const [showFreeOnlyStep2, setShowFreeOnlyStep2] = useState(false);
+  
   // Relance LLM ciblée (T7)
   const [relaunchingLlm, setRelaunchingLlm] = useState(false);
 
-  // Étape 2-3: Mappings
+  // Étape 2: Mappings
   const [categories, setCategories] = useState<Category[]>([]);
   const [loadingCategories, setLoadingCategories] = useState(false);
   const [mappings, setMappings] = useState<Record<string, CategoryMapping>>({});
   const [unmapped, setUnmapped] = useState<string[]>([]);
   const [rejectedCategories, setRejectedCategories] = useState<Set<string>>(new Set());
 
-  // Étape 4: Export
-  const [exporting, setExporting] = useState(false);
+  // Étape 3: Récapitulatif
+  const [previewSummary, setPreviewSummary] = useState<{
+    total_lines: number;
+    total_kilos: number;
+    unique_dates: number;
+    unique_categories: number;
+    by_category: Array<{
+      category_name: string;
+      category_id: string;
+      line_count: number;
+      total_kilos: number;
+    }>;
+    by_date: Array<{
+      date: string;
+      line_count: number;
+      total_kilos: number;
+    }>;
+    unmapped_categories: string[];
+  } | null>(null);
+  const [loadingPreview, setLoadingPreview] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
 
-  // Étape 5: Import
+  // Étape 3: Import
   const [importing, setImporting] = useState(false);
   const [importProgress, setImportProgress] = useState(0);
   const [importReport, setImportReport] = useState<ImportReport | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
+  
+  // Étape 3: Date d'import manuelle (B47-P11)
+  const [importDate, setImportDate] = useState<string | null>(null);
+  
+  // Export optionnel (dans l'étape 2)
+  const [exporting, setExporting] = useState(false);
+  
+  // Export CSV remappé (B47-P11)
+  const [exportingRemapped, setExportingRemapped] = useState(false);
 
   // Tri du tableau des mappings
   const [sortBy, setSortBy] = useState<'csv' | 'proposed' | 'confidence'>('csv');
@@ -198,6 +251,21 @@ const LegacyImport: React.FC = () => {
     loadLlmModels();
   }, []);
 
+  // Initialiser le modèle de l'étape 2 avec celui de l'étape 1 quand analyzeResult est disponible (B47-P8)
+  useEffect(() => {
+    if (analyzeResult && selectedLlmModelId && !selectedLlmModelIdStep2) {
+      setSelectedLlmModelIdStep2(selectedLlmModelId);
+    }
+  }, [analyzeResult, selectedLlmModelId, selectedLlmModelIdStep2]);
+
+  // Calculer automatiquement le récapitulatif quand on arrive à l'étape 3 (B47-P10)
+  useEffect(() => {
+    if (activeStep === 2 && csvFile && Object.keys(mappings).length > 0 && !previewSummary && !loadingPreview && !previewError) {
+      handleCalculatePreview();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeStep]);
+
   // Étape 1: Analyser le CSV
   const handleAnalyze = async () => {
     if (!csvFile) {
@@ -256,9 +324,11 @@ const LegacyImport: React.FC = () => {
     }
   };
 
-  // Relancer LLM uniquement sur les catégories restantes (T7)
+  // Relancer LLM uniquement sur les catégories restantes (T7, B47-P8)
   const handleRelaunchLLM = async () => {
-    if (!analyzeResult || unmapped.length === 0 || !selectedLlmModelId) {
+    // Utiliser le modèle de l'étape 2 ou celui de l'étape 1 en fallback
+    const modelToUse = selectedLlmModelIdStep2 || selectedLlmModelId;
+    if (!analyzeResult || unmapped.length === 0 || !modelToUse) {
       return;
     }
 
@@ -266,7 +336,7 @@ const LegacyImport: React.FC = () => {
     try {
       const result = await adminService.analyzeLegacyImportLLMOnly(
         unmapped,
-        selectedLlmModelId
+        modelToUse
       );
 
       // Fusionner les nouveaux mappings (sans écraser les corrections manuelles) (T7)
@@ -320,6 +390,101 @@ const LegacyImport: React.FC = () => {
     }
   };
 
+  // Relancer LLM sur toutes les catégories (B47-P8)
+  const handleRelaunchLLMAllCategories = async () => {
+    // Utiliser le modèle de l'étape 2 ou celui de l'étape 1 en fallback
+    const modelToUse = selectedLlmModelIdStep2 || selectedLlmModelId;
+    if (!analyzeResult || !modelToUse) {
+      return;
+    }
+
+    // Demander confirmation avant de relancer sur toutes les catégories
+    const confirmed = window.confirm(
+      'Êtes-vous sûr de vouloir relancer le LLM sur toutes les catégories ? ' +
+      'Cela va remplacer les mappings existants, sauf les corrections manuelles (confiance = 100%).'
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    // Extraire toutes les catégories uniques depuis mappings et unmapped
+    const allUniqueCategories = [
+      ...Object.keys(mappings),
+      ...unmapped,
+    ];
+
+    if (allUniqueCategories.length === 0) {
+      notifications.show({
+        title: 'Avertissement',
+        message: 'Aucune catégorie à mapper',
+        color: 'yellow',
+      });
+      return;
+    }
+
+    setRelaunchingLlm(true);
+    try {
+      const result = await adminService.analyzeLegacyImportLLMOnly(
+        allUniqueCategories,
+        modelToUse
+      );
+
+      // Fusionner les nouveaux mappings en préservant les corrections manuelles (confidence = 100)
+      const newMappings = { ...mappings };
+      Object.keys(result.mappings).forEach(key => {
+        // Ne pas écraser si c'est une correction manuelle (confidence = 100)
+        if (!newMappings[key] || newMappings[key].confidence !== 100) {
+          newMappings[key] = result.mappings[key];
+        }
+      });
+
+      setMappings(newMappings);
+      
+      // Mettre à jour unmapped : toutes les catégories qui ne sont pas dans les nouveaux mappings
+      const newlyMapped = Object.keys(result.mappings);
+      const updatedUnmapped = allUniqueCategories.filter(cat => !newlyMapped.includes(cat));
+      setUnmapped(updatedUnmapped);
+
+      // Mettre à jour analyzeResult avec les nouvelles stats
+      if (analyzeResult) {
+        setAnalyzeResult({
+          ...analyzeResult,
+          mappings: newMappings,
+          unmapped: updatedUnmapped,
+          statistics: {
+            ...analyzeResult.statistics,
+            llm_mapped_categories: result.statistics.llm_mapped_categories,
+            llm_batches_total: result.statistics.llm_batches_total,
+            llm_batches_succeeded: result.statistics.llm_batches_succeeded,
+            llm_batches_failed: result.statistics.llm_batches_failed,
+            llm_unmapped_after_llm: result.statistics.llm_unmapped_after_llm,
+            llm_last_error: result.statistics.llm_last_error,
+            llm_avg_confidence: result.statistics.llm_avg_confidence,
+            llm_model_used: result.statistics.llm_model_used,
+            llm_provider_used: result.statistics.llm_provider_used,
+            mapped_categories: Object.keys(newMappings).length,
+            unmapped_categories: updatedUnmapped.length,
+          },
+        });
+      }
+
+      notifications.show({
+        title: 'Relance LLM terminée',
+        message: `${result.statistics.llm_mapped_categories} catégories remappées par le LLM sur ${allUniqueCategories.length} catégories totales`,
+        color: 'green',
+      });
+    } catch (error: any) {
+      const errorMessage = error.response?.data?.detail || error.message || 'Erreur lors de la relance LLM';
+      notifications.show({
+        title: 'Erreur',
+        message: errorMessage,
+        color: 'red',
+      });
+    } finally {
+      setRelaunchingLlm(false);
+    }
+  };
+
   // Étape 3: Modifier un mapping
   const handleMappingChange = (csvCategory: string, categoryId: string | null) => {
     if (categoryId === null) {
@@ -328,6 +493,8 @@ const LegacyImport: React.FC = () => {
       const newMappings = { ...mappings };
       delete newMappings[csvCategory];
       setMappings(newMappings);
+      // RETIRER de unmapped
+      setUnmapped(prev => prev.filter(cat => cat !== csvCategory));
     } else {
       // Mapper vers une catégorie
       setRejectedCategories(prev => {
@@ -345,6 +512,8 @@ const LegacyImport: React.FC = () => {
             confidence: 100 // Mapping manuel = 100%
           }
         }));
+        // RETIRER de unmapped
+        setUnmapped(prev => prev.filter(cat => cat !== csvCategory));
       }
     }
   };
@@ -358,13 +527,74 @@ const LegacyImport: React.FC = () => {
     }
   };
 
-  // Étape 4: Exporter le mapping
+  // Calculer le récapitulatif (appelé automatiquement quand on passe à l'étape 3)
+  const handleCalculatePreview = async () => {
+    if (!csvFile) {
+      notifications.show({
+        title: 'Erreur',
+        message: 'Aucun fichier CSV sélectionné',
+        color: 'red',
+      });
+      return;
+    }
+
+    // Créer le fichier de mapping en mémoire
+    const filteredUnmapped = unmapped.filter(cat => !rejectedCategories.has(cat));
+    const inconsistencies = filteredUnmapped.filter(cat => mappings[cat]);
+    if (inconsistencies.length > 0) {
+      filteredUnmapped.splice(0, filteredUnmapped.length, ...filteredUnmapped.filter(cat => !mappings[cat]));
+    }
+
+    const mappingData = {
+      mappings: mappings,
+      unmapped: filteredUnmapped
+    };
+
+    const mappingBlob = new Blob([JSON.stringify(mappingData)], { type: 'application/json' });
+    const mappingFile = new File([mappingBlob], 'category_mapping.json', { type: 'application/json' });
+
+    setLoadingPreview(true);
+    setPreviewError(null);
+    setPreviewSummary(null);
+
+    try {
+      const summary = await adminService.previewLegacyImport(csvFile, mappingFile);
+      setPreviewSummary(summary);
+    } catch (error: any) {
+      const errorMessage = error.response?.data?.detail || error.message || 'Erreur lors du calcul du récapitulatif';
+      setPreviewError(errorMessage);
+      notifications.show({
+        title: 'Erreur',
+        message: errorMessage,
+        color: 'red',
+      });
+    } finally {
+      setLoadingPreview(false);
+    }
+  };
+
+  // Export optionnel du mapping (dans l'étape 2)
   const handleExportMapping = () => {
     setExporting(true);
     try {
+      // Filtrer les catégories rejetées de unmapped
+      const filteredUnmapped = unmapped.filter(cat => !rejectedCategories.has(cat));
+      
+      // Validation : détecter les incohérences (catégorie dans mappings ET unmapped)
+      const inconsistencies = filteredUnmapped.filter(cat => mappings[cat]);
+      if (inconsistencies.length > 0) {
+        console.warn(
+          `Incohérences détectées lors de l'export : ${inconsistencies.length} catégorie(s) présentes à la fois dans mappings et unmapped:`,
+          inconsistencies
+        );
+        // Retirer les incohérences de unmapped (elles sont déjà dans mappings)
+        const correctedUnmapped = filteredUnmapped.filter(cat => !mappings[cat]);
+        filteredUnmapped.splice(0, filteredUnmapped.length, ...correctedUnmapped);
+      }
+
       const mappingData = {
         mappings: mappings,
-        unmapped: unmapped.filter(cat => !rejectedCategories.has(cat))
+        unmapped: filteredUnmapped
       };
 
       const jsonStr = JSON.stringify(mappingData, null, 2);
@@ -394,6 +624,52 @@ const LegacyImport: React.FC = () => {
     }
   };
 
+  // Export CSV remappé (B47-P11)
+  const handleExportRemappedCSV = async () => {
+    if (!csvFile) {
+      notifications.show({
+        title: 'Erreur',
+        message: 'Aucun fichier CSV sélectionné',
+        color: 'red',
+      });
+      return;
+    }
+
+    // Créer le fichier de mapping en mémoire
+    const filteredUnmapped = unmapped.filter(cat => !rejectedCategories.has(cat));
+    const inconsistencies = filteredUnmapped.filter(cat => mappings[cat]);
+    if (inconsistencies.length > 0) {
+      filteredUnmapped.splice(0, filteredUnmapped.length, ...filteredUnmapped.filter(cat => !mappings[cat]));
+    }
+
+    const mappingData = {
+      mappings: mappings,
+      unmapped: filteredUnmapped
+    };
+
+    const mappingBlob = new Blob([JSON.stringify(mappingData)], { type: 'application/json' });
+    const mappingFile = new File([mappingBlob], 'category_mapping.json', { type: 'application/json' });
+
+    setExportingRemapped(true);
+    try {
+      await adminService.exportRemappedLegacyImportCSV(csvFile, mappingFile);
+      notifications.show({
+        title: 'Export réussi',
+        message: 'Le CSV remappé a été téléchargé',
+        color: 'green',
+      });
+    } catch (error: any) {
+      const errorMessage = error.response?.data?.detail || error.message || 'Erreur lors de l\'export';
+      notifications.show({
+        title: 'Erreur',
+        message: errorMessage,
+        color: 'red',
+      });
+    } finally {
+      setExportingRemapped(false);
+    }
+  };
+
   // Étape 5: Importer
   const handleImport = async () => {
     if (!csvFile) {
@@ -406,9 +682,23 @@ const LegacyImport: React.FC = () => {
     }
 
     // Créer le fichier de mapping
+    // Filtrer les catégories rejetées de unmapped
+    const filteredUnmapped = unmapped.filter(cat => !rejectedCategories.has(cat));
+    
+    // Validation : détecter les incohérences (catégorie dans mappings ET unmapped)
+    const inconsistencies = filteredUnmapped.filter(cat => mappings[cat]);
+    if (inconsistencies.length > 0) {
+      console.warn(
+        `Incohérences détectées lors de l'import : ${inconsistencies.length} catégorie(s) présentes à la fois dans mappings et unmapped:`,
+        inconsistencies
+      );
+      // Retirer les incohérences de unmapped (elles sont déjà dans mappings)
+      filteredUnmapped.splice(0, filteredUnmapped.length, ...filteredUnmapped.filter(cat => !mappings[cat]));
+    }
+
     const mappingData = {
       mappings: mappings,
-      unmapped: unmapped.filter(cat => !rejectedCategories.has(cat))
+      unmapped: filteredUnmapped
     };
 
     const mappingBlob = new Blob([JSON.stringify(mappingData)], { type: 'application/json' });
@@ -427,7 +717,7 @@ const LegacyImport: React.FC = () => {
         setImportProgress(prev => Math.min(prev + 10, 90));
       }, 500);
 
-      const result = await adminService.executeLegacyImport(csvFile, mappingFile);
+      const result = await adminService.executeLegacyImport(csvFile, mappingFile, importDate || undefined);
       
       if (progressInterval) {
         clearInterval(progressInterval);
@@ -556,6 +846,11 @@ const LegacyImport: React.FC = () => {
     return sortDirection === 'asc' ? ' ▲' : ' ▼';
   };
 
+  // Calculer le nombre de catégories vraiment non mappées (non assignées et non rejetées)
+  const unmappedCount = useMemo(() => {
+    return unmapped.filter(cat => !rejectedCategories.has(cat)).length;
+  }, [unmapped, rejectedCategories]);
+
   return (
     <Container size="xl" py="xl">
       <Title order={1} mb="md">Import Legacy CSV</Title>
@@ -573,7 +868,7 @@ const LegacyImport: React.FC = () => {
               
               <Group>
                 <FileButton
-                  onChange={(file) => {
+                  onChange={async (file) => {
                     if (file) {
                       if (!file.name.toLowerCase().endsWith('.csv')) {
                         notifications.show({
@@ -586,6 +881,47 @@ const LegacyImport: React.FC = () => {
                       setCsvFile(file);
                       setAnalyzeResult(null);
                       setAnalyzeError(null);
+                      setValidationResult(null);
+                      
+                      // Validation automatique (B47-P7)
+                      setIsValidating(true);
+                      try {
+                        const validation = await adminService.validateLegacyImportCSV(file);
+                        setValidationResult(validation);
+                        if (!validation.is_valid) {
+                          notifications.show({
+                            title: 'CSV non conforme',
+                            message: `Le CSV contient ${validation.errors.length} erreur(s). Utilisez "Nettoyer automatiquement" pour corriger.`,
+                            color: 'orange',
+                          });
+                        } else {
+                          notifications.show({
+                            title: 'CSV conforme',
+                            message: 'Le CSV est conforme au template offline',
+                            color: 'green',
+                          });
+                        }
+                      } catch (error: any) {
+                        console.error('Erreur lors de la validation:', error);
+                        // En cas d'erreur, on continue quand même
+                        setValidationResult({
+                          is_valid: false,
+                          errors: ['Erreur lors de la validation'],
+                          warnings: [],
+                          statistics: {
+                            total_lines: 0,
+                            valid_lines: 0,
+                            invalid_lines: 0,
+                            missing_columns: [],
+                            extra_columns: [],
+                            date_errors: 0,
+                            weight_errors: 0,
+                            structure_issues: 0,
+                          },
+                        });
+                      } finally {
+                        setIsValidating(false);
+                      }
                     }
                   }}
                   accept=".csv"
@@ -627,98 +963,147 @@ const LegacyImport: React.FC = () => {
                     <Text size="xs" c="dimmed">
                       ({(csvFile.size / 1024).toFixed(2)} KB)
                     </Text>
+                    {isValidating && (
+                      <Badge color="blue" variant="light">Validation en cours...</Badge>
+                    )}
+                    {validationResult && !isValidating && (
+                      <Badge
+                        color={validationResult.is_valid ? 'green' : 'red'}
+                        variant="light"
+                      >
+                        {validationResult.is_valid ? 'CSV conforme' : 'CSV non conforme'}
+                      </Badge>
+                    )}
                   </Group>
                 )}
               </Group>
 
-              {/* Sélecteur de modèles LLM (T5) */}
-              <Stack gap="sm" mt="md">
-                <Group justify="space-between" align="flex-start">
-                  <Text size="sm" fw={500}>Modèle LLM (optionnel)</Text>
-                  {llmModelsError && (
-                    <Button
-                      size="xs"
-                      variant="light"
-                      onClick={async () => {
-                        setLoadingLlmModels(true);
-                        setLlmModelsError(null);
-                        try {
-                          const result = await adminService.getLegacyImportLLMModels();
-                          if (result.error) {
-                            setLlmModelsError(result.error);
-                            setLlmModels([]);
-                          } else {
-                            setLlmModels(result.models);
-                            setLlmModelsError(null); // Réinitialiser l'erreur si les modèles sont chargés avec succès
-                            if (result.models.length > 0 && !selectedLlmModelId) {
-                              const defaultModel = result.default_model_id
-                                ? result.models.find(m => m.id === result.default_model_id)
-                                : null;
-                              if (defaultModel) {
-                                setSelectedLlmModelId(defaultModel.id);
-                              } else {
-                                const freeModel = result.models.find(m => m.is_free);
-                                setSelectedLlmModelId(freeModel ? freeModel.id : result.models[0].id);
-                              }
-                            }
-                          }
-                        } catch (error: any) {
-                          console.error('Erreur lors du chargement des modèles LLM:', error);
-                          setLlmModelsError('Impossible de charger les modèles LLM');
-                          setLlmModels([]);
-                        } finally {
-                          setLoadingLlmModels(false);
-                        }
-                      }}
-                      disabled={loadingLlmModels}
-                    >
-                      Recharger
-                    </Button>
-                  )}
-                </Group>
-                <Checkbox
-                  label="Afficher uniquement les modèles gratuits"
-                  checked={showFreeOnly}
-                  onChange={(event) => setShowFreeOnly(event.currentTarget.checked)}
-                  disabled={loadingLlmModels}
-                />
-                <Select
-                  data={[
-                    { value: '__none__', label: 'Aucun (désactiver le LLM)' },
-                    ...(showFreeOnly
-                      ? llmModels.filter(m => m.is_free)
-                      : llmModels
-                    ).map(m => ({
-                      value: m.id,
-                      label: `${m.name}${m.is_free ? ' (Gratuit)' : ''}`,
-                    })),
-                  ]}
-                  value={selectedLlmModelId || '__none__'}
-                  onChange={(value) => {
-                    setSelectedLlmModelId(value === '__none__' ? null : value);
-                  }}
-                  disabled={loadingLlmModels || analyzing}
-                  loading={loadingLlmModels}
-                  placeholder={loadingLlmModels ? "Chargement des modèles..." : "Sélectionner un modèle ou désactiver le LLM"}
-                  searchable
-                  nothingFoundMessage="Aucun modèle trouvé"
-                />
-                {llmModelsError && (
-                  <Alert color="orange" title="Erreur de chargement" size="xs">
-                    {llmModelsError}
-                    {llmModels.length === 0 && (
-                      <Text size="xs" mt="xs">
-                        Le LLM sera désactivé. Vous pouvez utiliser uniquement le fuzzy matching.
+              {/* Affichage du statut de validation et nettoyage (B47-P7) */}
+              {validationResult && !isValidating && (
+                <Stack gap="sm" mt="md">
+                  {validationResult.is_valid ? (
+                    <Alert color="green" title="CSV conforme" icon={<IconCheck size={16} />}>
+                      <Text size="sm">
+                        Le CSV est conforme au template offline. Vous pouvez continuer directement à l'analyse.
                       </Text>
-                    )}
-                  </Alert>
-                )}
-                {!loadingLlmModels && !llmModelsError && llmModels.length === 0 && (
-                  <Alert color="yellow" title="Aucun modèle disponible" size="xs">
-                    Aucun modèle LLM n'a pu être chargé. Le LLM sera désactivé et seul le fuzzy matching sera utilisé.
-                  </Alert>
-                )}
-              </Stack>
+                    </Alert>
+                  ) : (
+                    <>
+                      <Alert color="orange" title="CSV non conforme" icon={<IconAlertCircle size={16} />}>
+                        <Text size="sm" mb="xs">
+                          Le CSV contient {validationResult.errors.length} erreur(s) et {validationResult.warnings.length} avertissement(s).
+                        </Text>
+                        {validationResult.errors.length > 0 && (
+                          <Stack gap="xs" mt="xs">
+                            <Text size="xs" fw={500}>Erreurs détectées :</Text>
+                            <Text size="xs" component="ul" style={{ margin: 0, paddingLeft: 20 }}>
+                              {validationResult.errors.slice(0, 5).map((err, idx) => (
+                                <li key={idx}>{err}</li>
+                              ))}
+                              {validationResult.errors.length > 5 && (
+                                <li>... et {validationResult.errors.length - 5} autre(s) erreur(s)</li>
+                              )}
+                            </Text>
+                          </Stack>
+                        )}
+                      </Alert>
+                      <Button
+                        onClick={async () => {
+                          if (!csvFile) return;
+                          setCleaning(true);
+                          try {
+                            const result = await adminService.cleanLegacyImportCSV(csvFile);
+                            
+                            // Convertir le CSV nettoyé (base64) en File
+                            const cleanedCsvBytes = Uint8Array.from(atob(result.cleaned_csv_base64), c => c.charCodeAt(0));
+                            const cleanedBlob = new Blob([cleanedCsvBytes], { type: 'text/csv' });
+                            const cleanedFile = new File([cleanedBlob], result.filename, { type: 'text/csv' });
+                            
+                            // Remplacer le fichier original
+                            setCsvFile(cleanedFile);
+                            setValidationResult(null);
+                            
+                            // Re-valider le fichier nettoyé
+                            setIsValidating(true);
+                            try {
+                              const newValidation = await adminService.validateLegacyImportCSV(cleanedFile);
+                              setValidationResult(newValidation);
+                            } catch (error) {
+                              console.error('Erreur lors de la re-validation:', error);
+                            } finally {
+                              setIsValidating(false);
+                            }
+                            
+                            notifications.show({
+                              title: 'Nettoyage terminé',
+                              message: `${result.statistics.cleaned_lines} lignes nettoyées, ${result.statistics.dates_normalized} dates normalisées`,
+                              color: 'green',
+                            });
+                          } catch (error: any) {
+                            notifications.show({
+                              title: 'Erreur',
+                              message: error.response?.data?.detail || error.message || 'Impossible de nettoyer le CSV',
+                              color: 'red',
+                            });
+                          } finally {
+                            setCleaning(false);
+                          }
+                        }}
+                        disabled={cleaning || !csvFile}
+                        loading={cleaning}
+                        leftSection={<IconCheck size={16} />}
+                        color="orange"
+                      >
+                        Nettoyer automatiquement
+                      </Button>
+                    </>
+                  )}
+                </Stack>
+              )}
+
+              {/* Sélecteur de modèles LLM (T5, B47-P8) */}
+              <LLMModelSelector
+                selectedModelId={selectedLlmModelId}
+                onModelChange={setSelectedLlmModelId}
+                showFreeOnly={showFreeOnly}
+                onShowFreeOnlyChange={setShowFreeOnly}
+                disabled={analyzing}
+                loading={loadingLlmModels}
+                error={llmModelsError}
+                models={llmModels}
+                autoLoad={false}
+                onReload={async () => {
+                  setLoadingLlmModels(true);
+                  setLlmModelsError(null);
+                  try {
+                    const result = await adminService.getLegacyImportLLMModels();
+                    if (result.error) {
+                      setLlmModelsError(result.error);
+                      setLlmModels([]);
+                    } else {
+                      setLlmModels(result.models);
+                      setLlmModelsError(null);
+                      if (result.models.length > 0 && !selectedLlmModelId) {
+                        const defaultModel = result.default_model_id
+                          ? result.models.find(m => m.id === result.default_model_id)
+                          : null;
+                        if (defaultModel) {
+                          setSelectedLlmModelId(defaultModel.id);
+                        } else {
+                          const freeModel = result.models.find(m => m.is_free);
+                          setSelectedLlmModelId(freeModel ? freeModel.id : result.models[0].id);
+                        }
+                      }
+                    }
+                  } catch (error: any) {
+                    console.error('Erreur lors du chargement des modèles LLM:', error);
+                    setLlmModelsError('Impossible de charger les modèles LLM');
+                    setLlmModels([]);
+                  } finally {
+                    setLoadingLlmModels(false);
+                  }
+                }}
+              />
 
               {analyzeError && (
                 <Alert icon={<IconAlertCircle size={16} />} title="Erreur" color="red" mt="md">
@@ -861,21 +1246,49 @@ const LegacyImport: React.FC = () => {
                   </Stack>
                 )}
 
-                {/* Bouton Relancer LLM (T7) */}
+                {/* Sélecteur de modèles LLM pour l'étape 2 (B47-P8) */}
+                {analyzeResult && (
+                  <Stack gap="sm" mt="md">
+                    <LLMModelSelector
+                      selectedModelId={selectedLlmModelIdStep2}
+                      onModelChange={setSelectedLlmModelIdStep2}
+                      showFreeOnly={showFreeOnlyStep2}
+                      onShowFreeOnlyChange={setShowFreeOnlyStep2}
+                      disabled={relaunchingLlm}
+                      loading={loadingLlmModels}
+                      error={llmModelsError}
+                      models={llmModels}
+                      defaultModelId={selectedLlmModelId}
+                      autoLoad={false}
+                    />
+                  </Stack>
+                )}
+
+                {/* Boutons Relancer LLM (T7, B47-P8) */}
                 {analyzeResult &&
-                  unmapped.length > 0 &&
-                  selectedLlmModelId &&
-                  analyzeResult.statistics.unmapped_categories > 0 && (
+                  (selectedLlmModelIdStep2 || selectedLlmModelId) && (
                     <Group mt="md">
+                      {unmapped.length > 0 && (
+                        <Button
+                          variant="light"
+                          color="blue"
+                          onClick={handleRelaunchLLM}
+                          disabled={relaunchingLlm}
+                          loading={relaunchingLlm}
+                          leftSection={<IconCheck size={16} />}
+                        >
+                          Relancer LLM pour les {unmapped.length} catégories restantes
+                        </Button>
+                      )}
                       <Button
                         variant="light"
-                        color="blue"
-                        onClick={handleRelaunchLLM}
+                        color="cyan"
+                        onClick={handleRelaunchLLMAllCategories}
                         disabled={relaunchingLlm}
                         loading={relaunchingLlm}
                         leftSection={<IconCheck size={16} />}
                       >
-                        Relancer LLM pour les {unmapped.length} catégories restantes
+                        Relancer LLM pour toutes les catégories
                       </Button>
                     </Group>
                   )}
@@ -1058,48 +1471,193 @@ const LegacyImport: React.FC = () => {
                   >
                     Réinitialiser
                   </Button>
-                  <Button
-                    onClick={() => setActiveStep(2)}
-                    leftSection={<IconCheck size={16} />}
-                    disabled={unmapped.length > 0 && unmapped.length > 5}
-                    title={
-                      unmapped.length > 5
-                        ? `Il reste ${unmapped.length} catégories non mappées. Vous pouvez continuer ou relancer le LLM.`
-                        : undefined
-                    }
-                  >
-                    Continuer
-                    {unmapped.length > 0 && unmapped.length <= 5 && ` (${unmapped.length} non mappées)`}
-                  </Button>
+                  <Group>
+                    <Button
+                      variant="outline"
+                      onClick={handleExportMapping}
+                      disabled={exporting || Object.keys(mappings).length === 0}
+                      loading={exporting}
+                      leftSection={<IconDownload size={16} />}
+                    >
+                      Télécharger le mapping
+                    </Button>
+                    <Button
+                      onClick={async () => {
+                        await handleCalculatePreview();
+                        setActiveStep(2);
+                      }}
+                      leftSection={<IconCheck size={16} />}
+                      disabled={unmappedCount > 5 || loadingPreview}
+                      loading={loadingPreview}
+                      title={
+                        unmappedCount > 5
+                          ? `Il reste ${unmappedCount} catégories non mappées. Vous pouvez continuer ou relancer le LLM.`
+                          : undefined
+                      }
+                    >
+                      Continuer
+                      {unmappedCount > 0 && unmappedCount <= 5 && ` (${unmappedCount} non mappées)`}
+                    </Button>
+                  </Group>
                 </Group>
               </Stack>
             </Paper>
           )}
         </Stepper.Step>
 
-        <Stepper.Step label="Export" description="Télécharger le mapping">
+        <Stepper.Step label="Récapitulatif & Import" description="Vérifier et importer">
           <Paper p="md" withBorder>
             <Stack>
-              <Text size="sm" c="dimmed" mb="md">
-                Téléchargez le fichier de mapping validé avant de procéder à l'import.
-              </Text>
-              
-              <Button
-                onClick={handleExportMapping}
-                disabled={exporting || Object.keys(mappings).length === 0}
-                loading={exporting}
-                leftSection={<IconDownload size={16} />}
-                fullWidth
-              >
-                Exporter le mapping
-              </Button>
-            </Stack>
-          </Paper>
-        </Stepper.Step>
+              {loadingPreview && !previewSummary && (
+                <Alert color="blue" title="Calcul du récapitulatif en cours...">
+                  Analyse du CSV et calcul des statistiques...
+                </Alert>
+              )}
 
-        <Stepper.Step label="Import" description="Exécuter l'import">
-          <Paper p="md" withBorder>
-            <Stack>
+              {previewError && (
+                <Alert icon={<IconAlertCircle size={16} />} title="Erreur" color="red">
+                  {previewError}
+                </Alert>
+              )}
+
+              {/* Sélecteur de date d'import (B47-P11) */}
+              <TextInput
+                type="date"
+                label="Date d'import (optionnel)"
+                placeholder="Sélectionnez une date d'import"
+                value={importDate || ''}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setImportDate(value || null);
+                }}
+                max={new Date().toISOString().split('T')[0]}
+                icon={<IconCalendar size={16} />}
+                mb="md"
+                description="Si une date est sélectionnée, toutes les données seront importées avec cette date unique. Sinon, les dates du CSV seront utilisées."
+              />
+
+              {/* Avertissement si date sélectionnée */}
+              {importDate && (
+                <Alert icon={<IconAlertCircle size={16} />} title="Date d'import sélectionnée" color="yellow" mb="md">
+                  ⚠️ Toutes les données seront importées avec la date <strong>{importDate}</strong> au lieu des dates du CSV.
+                </Alert>
+              )}
+
+              {previewSummary && !importing && !importReport && (
+                <>
+                  {/* Section Total général */}
+                  <Alert color="blue" title="Total général">
+                    <Group gap="xl" mt="xs">
+                      <Box>
+                        <Text size="xs" c="dimmed">Lignes à importer</Text>
+                        <Text size="lg" fw={700}>{previewSummary.total_lines}</Text>
+                      </Box>
+                      <Box>
+                        <Text size="xs" c="dimmed">Total kilos</Text>
+                        <Text size="lg" fw={700}>{previewSummary.total_kilos.toFixed(2)} kg</Text>
+                      </Box>
+                      {importDate ? (
+                        <Box>
+                          <Text size="xs" c="dimmed">Date d'import</Text>
+                          <Text size="lg" fw={700}>{importDate}</Text>
+                        </Box>
+                      ) : (
+                        <Box>
+                          <Text size="xs" c="dimmed">Dates uniques</Text>
+                          <Text size="lg" fw={700}>{previewSummary.unique_dates}</Text>
+                        </Box>
+                      )}
+                      <Box>
+                        <Text size="xs" c="dimmed">Catégories</Text>
+                        <Text size="lg" fw={700}>{previewSummary.unique_categories}</Text>
+                      </Box>
+                    </Group>
+                  </Alert>
+
+                  {/* Section Répartition par catégorie */}
+                  <Box>
+                    <Text size="sm" fw={500} mb="xs">Répartition par catégorie</Text>
+                    <Table striped highlightOnHover>
+                      <Table.Thead>
+                        <Table.Tr>
+                          <Table.Th>Catégorie</Table.Th>
+                          <Table.Th style={{ textAlign: 'right' }}>Lignes</Table.Th>
+                          <Table.Th style={{ textAlign: 'right' }}>Total kilos</Table.Th>
+                        </Table.Tr>
+                      </Table.Thead>
+                      <Table.Tbody>
+                        {previewSummary.by_category.map((cat) => (
+                          <Table.Tr key={cat.category_id}>
+                            <Table.Td>{cat.category_name}</Table.Td>
+                            <Table.Td style={{ textAlign: 'right' }}>{cat.line_count}</Table.Td>
+                            <Table.Td style={{ textAlign: 'right' }}>{cat.total_kilos.toFixed(2)} kg</Table.Td>
+                          </Table.Tr>
+                        ))}
+                      </Table.Tbody>
+                    </Table>
+                  </Box>
+
+                  {/* Section Répartition par date */}
+                  {previewSummary.by_date.length > 0 && (
+                    <Box>
+                      <Text size="sm" fw={500} mb="xs">Répartition par date</Text>
+                      <Table striped highlightOnHover>
+                        <Table.Thead>
+                          <Table.Tr>
+                            <Table.Th>Date</Table.Th>
+                            <Table.Th style={{ textAlign: 'right' }}>Lignes</Table.Th>
+                            <Table.Th style={{ textAlign: 'right' }}>Total kilos</Table.Th>
+                          </Table.Tr>
+                        </Table.Thead>
+                        <Table.Tbody>
+                          {previewSummary.by_date.map((dateItem) => (
+                            <Table.Tr key={dateItem.date}>
+                              <Table.Td>{dateItem.date}</Table.Td>
+                              <Table.Td style={{ textAlign: 'right' }}>{dateItem.line_count}</Table.Td>
+                              <Table.Td style={{ textAlign: 'right' }}>{dateItem.total_kilos.toFixed(2)} kg</Table.Td>
+                            </Table.Tr>
+                          ))}
+                        </Table.Tbody>
+                      </Table>
+                    </Box>
+                  )}
+
+                  {/* Section Catégories non mappées */}
+                  {previewSummary.unmapped_categories.length > 0 && (
+                    <Alert color="orange" title="Catégories non mappées" icon={<IconAlertCircle size={16} />}>
+                      <Text size="sm" mb="xs">
+                        {previewSummary.unmapped_categories.length} catégorie(s) non mappée(s). 
+                        Les lignes correspondantes ne seront pas importées.
+                      </Text>
+                      <Text size="xs" c="dimmed">
+                        {previewSummary.unmapped_categories.join(', ')}
+                      </Text>
+                    </Alert>
+                  )}
+
+                  <Group position="right" mt="md">
+                    <Button
+                      variant="outline"
+                      leftSection={<IconDownload size={16} />}
+                      onClick={handleExportRemappedCSV}
+                      disabled={!previewSummary || !csvFile || exportingRemapped}
+                      loading={exportingRemapped}
+                    >
+                      Exporter CSV remappé
+                    </Button>
+                    <Button
+                      onClick={handleImport}
+                      disabled={importing || !csvFile || Object.keys(mappings).length === 0}
+                      loading={importing}
+                      leftSection={<IconDatabaseImport size={16} />}
+                      size="lg"
+                    >
+                      Valider et importer
+                    </Button>
+                  </Group>
+                </>
+              )}
+
               {importing && (
                 <Box>
                   <Text size="sm" mb="xs">Import en cours...</Text>
@@ -1140,17 +1698,6 @@ const LegacyImport: React.FC = () => {
                   </Stack>
                 </Alert>
               )}
-
-              <Button
-                onClick={handleImport}
-                disabled={importing || !csvFile || Object.keys(mappings).length === 0}
-                loading={importing}
-                leftSection={<IconDatabaseImport size={16} />}
-                fullWidth
-                mt="md"
-              >
-                Importer
-              </Button>
             </Stack>
           </Paper>
         </Stepper.Step>
@@ -1170,7 +1717,7 @@ const LegacyImport: React.FC = () => {
             Précédent
           </Button>
         )}
-        {activeStep < 4 && activeStep > 0 && (
+        {activeStep < 2 && activeStep > 0 && (
           <Button onClick={() => setActiveStep(activeStep + 1)}>
             Suivant
           </Button>

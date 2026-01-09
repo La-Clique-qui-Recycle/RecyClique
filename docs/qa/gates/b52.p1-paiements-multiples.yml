@@ -61,3 +61,5 @@ recommendations:
     - action: "Documenter les cas limites (paiements partiels, reste dû, etc.)"
       refs: ["docs/testing-strategy.md"]
 
+
+

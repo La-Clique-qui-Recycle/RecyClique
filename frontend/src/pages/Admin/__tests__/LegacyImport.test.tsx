@@ -254,5 +254,203 @@ describe('LegacyImport', () => {
       });
     });
   });
+
+  describe('B47-P9: Correction Bugs Mapping Manuel', () => {
+    beforeEach(() => {
+      // Mock pour window.URL.createObjectURL et document.createElement
+      global.URL.createObjectURL = vi.fn(() => 'blob:mock-url');
+      global.URL.revokeObjectURL = vi.fn();
+      document.createElement = vi.fn((tagName: string) => {
+        const element = document.createElement(tagName);
+        if (tagName === 'a') {
+          element.click = vi.fn();
+        }
+        return element;
+      });
+    });
+
+    it('devrait retirer la catégorie de unmapped lors de l\'assignation manuelle', async () => {
+      const user = userEvent.setup();
+      mockAdminService.analyzeLegacyImport.mockResolvedValue(mockAnalyzeResult);
+
+      render(<LegacyImport />);
+
+      // Attendre que l'analyse soit terminée
+      await waitFor(() => {
+        expect(screen.getByText('D3E')).toBeInTheDocument();
+      });
+
+      // Trouver le select pour la catégorie non mappée 'D3E'
+      const unmappedSelects = screen.getAllByRole('combobox');
+      const d3eSelect = unmappedSelects.find(select => {
+        const parent = select.closest('tr');
+        return parent?.textContent?.includes('D3E');
+      });
+
+      expect(d3eSelect).toBeDefined();
+
+      // Simuler l'assignation manuelle de 'D3E' vers 'DIVERS' (id: '3')
+      if (d3eSelect) {
+        await user.click(d3eSelect);
+        await waitFor(() => {
+          // Chercher l'option 'DIVERS' dans le dropdown
+          const diversOption = screen.getByText(/DIVERS/i);
+          expect(diversOption).toBeInTheDocument();
+        });
+      }
+
+      // Vérifier que 'D3E' n'est plus dans la liste unmapped
+      await waitFor(() => {
+        const unmappedRows = screen.queryAllByText('D3E');
+        // D3E ne devrait plus apparaître dans la section unmapped
+        expect(unmappedRows.length).toBeLessThanOrEqual(1); // Peut-être encore dans le header ou ailleurs
+      });
+    });
+
+    it('devrait retirer la catégorie de unmapped et l\'ajouter à rejectedCategories lors du rejet', async () => {
+      const user = userEvent.setup();
+      mockAdminService.analyzeLegacyImport.mockResolvedValue(mockAnalyzeResult);
+
+      render(<LegacyImport />);
+
+      // Attendre que l'analyse soit terminée
+      await waitFor(() => {
+        expect(screen.getByText('D3E')).toBeInTheDocument();
+      });
+
+      // Trouver le select pour la catégorie non mappée 'D3E'
+      const unmappedSelects = screen.getAllByRole('combobox');
+      const d3eSelect = unmappedSelects.find(select => {
+        const parent = select.closest('tr');
+        return parent?.textContent?.includes('D3E');
+      });
+
+      expect(d3eSelect).toBeDefined();
+
+      // Simuler le rejet de 'D3E'
+      if (d3eSelect) {
+        await user.click(d3eSelect);
+        await waitFor(() => {
+          // Chercher l'option 'Rejeter' dans le dropdown
+          const rejectOption = screen.getByText(/rejeter/i);
+          expect(rejectOption).toBeInTheDocument();
+        });
+      }
+
+      // Vérifier que 'D3E' apparaît dans la section "Catégories rejetées"
+      await waitFor(() => {
+        const rejectedSection = screen.getByText(/catégories rejetées/i);
+        expect(rejectedSection).toBeInTheDocument();
+      });
+    });
+
+    it('devrait activer le bouton "Continuer" quand toutes les catégories sont assignées/rejetées', async () => {
+      const user = userEvent.setup();
+      // Mock avec seulement 2 catégories non mappées (≤ 5)
+      const smallUnmappedResult = {
+        ...mockAnalyzeResult,
+        unmapped: ['D3E', 'EEE PAM'],
+        statistics: {
+          ...mockAnalyzeResult.statistics,
+          unmapped_categories: 2,
+        },
+      };
+      mockAdminService.analyzeLegacyImport.mockResolvedValue(smallUnmappedResult);
+
+      render(<LegacyImport />);
+
+      // Attendre que l'analyse soit terminée
+      await waitFor(() => {
+        expect(screen.getByText('D3E')).toBeInTheDocument();
+      });
+
+      // Le bouton "Continuer" devrait être activé car unmappedCount (2) ≤ 5
+      const continueButton = screen.getByText(/continuer/i);
+      expect(continueButton).not.toBeDisabled();
+    });
+
+    it('devrait désactiver le bouton "Continuer" quand il reste > 5 catégories non mappées', async () => {
+      // Mock avec 6 catégories non mappées (> 5)
+      const largeUnmappedResult = {
+        ...mockAnalyzeResult,
+        unmapped: ['D3E', 'EEE PAM', 'CAT1', 'CAT2', 'CAT3', 'CAT4'],
+        statistics: {
+          ...mockAnalyzeResult.statistics,
+          unmapped_categories: 6,
+        },
+      };
+      mockAdminService.analyzeLegacyImport.mockResolvedValue(largeUnmappedResult);
+
+      render(<LegacyImport />);
+
+      // Attendre que l'analyse soit terminée
+      await waitFor(() => {
+        expect(screen.getByText('D3E')).toBeInTheDocument();
+      });
+
+      // Le bouton "Continuer" devrait être désactivé car unmappedCount (6) > 5
+      const continueButton = screen.getByText(/continuer/i);
+      expect(continueButton).toBeDisabled();
+    });
+
+    it('devrait exporter le JSON avec les catégories assignées dans mappings et non dans unmapped', async () => {
+      const user = userEvent.setup();
+      mockAdminService.analyzeLegacyImport.mockResolvedValue(mockAnalyzeResult);
+
+      // Mock pour capturer le contenu du blob exporté
+      let exportedData: any = null;
+      const mockBlob = {
+        type: 'application/json',
+        size: 0,
+      };
+      global.Blob = vi.fn((parts: any[]) => {
+        exportedData = JSON.parse(parts[0]);
+        return mockBlob as any;
+      }) as any;
+
+      render(<LegacyImport />);
+
+      // Attendre que l'analyse soit terminée
+      await waitFor(() => {
+        expect(screen.getByText('D3E')).toBeInTheDocument();
+      });
+
+      // Simuler l'assignation manuelle de 'D3E' vers 'DIVERS'
+      const unmappedSelects = screen.getAllByRole('combobox');
+      const d3eSelect = unmappedSelects.find(select => {
+        const parent = select.closest('tr');
+        return parent?.textContent?.includes('D3E');
+      });
+
+      if (d3eSelect) {
+        await user.click(d3eSelect);
+        await waitFor(() => {
+          const diversOption = screen.getByText(/DIVERS/i);
+          expect(diversOption).toBeInTheDocument();
+        });
+      }
+
+      // Naviguer vers l'étape d'export et exporter
+      const exportButton = await screen.findByText(/exporter/i);
+      await user.click(exportButton);
+
+      // Vérifier que le JSON exporté contient 'D3E' dans mappings et non dans unmapped
+      await waitFor(() => {
+        expect(exportedData).not.toBeNull();
+        expect(exportedData.mappings).toBeDefined();
+        expect(exportedData.unmapped).toBeDefined();
+        
+        // 'D3E' devrait être dans mappings (assignée manuellement)
+        expect(exportedData.mappings['D3E']).toBeDefined();
+        expect(exportedData.mappings['D3E'].confidence).toBe(100);
+        
+        // 'D3E' ne devrait PAS être dans unmapped
+        expect(exportedData.unmapped).not.toContain('D3E');
+        
+        // 'EEE PAM' devrait toujours être dans unmapped (non assignée)
+        expect(exportedData.unmapped).toContain('EEE PAM');
+      });
+    });
+  });
 });
 

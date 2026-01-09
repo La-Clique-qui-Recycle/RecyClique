@@ -647,6 +647,147 @@ class LegacyImportService:
             "errors": errors
         }
 
+    # ---------- Preview (récapitulatif pré-import) ----------
+
+    def preview(
+        self,
+        file_bytes: bytes,
+        mapping_json: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Calcule le récapitulatif de ce qui sera importé avec les mappings fournis.
+        
+        Args:
+            file_bytes: Contenu du fichier CSV
+            mapping_json: Dictionnaire avec 'mappings' (Record<string, CategoryMapping>) et 'unmapped' (List<string>)
+        
+        Returns:
+            Dict avec le récapitulatif (totaux, répartition par catégorie, par date, etc.)
+        """
+        # Extraire les mappings et catégories rejetées
+        mappings = mapping_json.get("mappings", {})
+        unmapped_list = mapping_json.get("unmapped", [])
+        rejected_categories = set()
+        
+        # Décoder le CSV
+        try:
+            text = file_bytes.decode("utf-8", errors="replace")
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Erreur lors du décodage du CSV: {str(e)}"
+            )
+        
+        reader = csv.DictReader(io.StringIO(text))
+        
+        # Valider les en-têtes
+        headers = [h.strip() for h in (reader.fieldnames or [])]
+        missing = [h for h in self.REQUIRED_HEADERS if h not in headers]
+        if missing:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Colonnes manquantes: {', '.join(missing)}. Colonnes requises: {', '.join(self.REQUIRED_HEADERS)}"
+            )
+        
+        # Parser les lignes valides
+        valid_rows = []
+        errors = []
+        
+        for idx, raw in enumerate(reader, start=2):
+            date_str = raw.get("date", "").strip()
+            category = raw.get("category", "").strip()
+            poids_str = raw.get("poids_kg", "").strip()
+            
+            # Validation basique
+            if not date_str or not category or not poids_str:
+                continue  # Ignorer les lignes invalides
+            
+            # Parser la date
+            parsed_date = LegacyImportService._parse_date(date_str)
+            if not parsed_date:
+                continue
+            
+            # Parser le poids
+            poids = LegacyImportService._parse_float(poids_str)
+            if poids is None or poids <= 0:
+                continue
+            
+            # Filtrer les lignes avec catégories mappées (non rejetées)
+            if category in mappings and category not in rejected_categories:
+                valid_rows.append({
+                    "date": parsed_date,
+                    "category": category,
+                    "poids_kg": poids,
+                    "mapping": mappings[category]
+                })
+        
+        # Calculer les totaux
+        total_lines = len(valid_rows)
+        total_kilos = sum(row["poids_kg"] for row in valid_rows)
+        
+        # Répartition par catégorie
+        by_category_map: Dict[str, Dict[str, Any]] = {}
+        for row in valid_rows:
+            mapping = row["mapping"]
+            cat_name = mapping["category_name"]
+            cat_id = mapping["category_id"]
+            
+            if cat_name not in by_category_map:
+                by_category_map[cat_name] = {
+                    "category_id": cat_id,
+                    "line_count": 0,
+                    "total_kilos": 0.0
+                }
+            
+            by_category_map[cat_name]["line_count"] += 1
+            by_category_map[cat_name]["total_kilos"] += row["poids_kg"]
+        
+        by_category = [
+            {
+                "category_name": name,
+                "category_id": data["category_id"],
+                "line_count": data["line_count"],
+                "total_kilos": round(data["total_kilos"], 2)
+            }
+            for name, data in sorted(by_category_map.items(), key=lambda x: x[1]["total_kilos"], reverse=True)
+        ]
+        
+        # Répartition par date
+        by_date_map: Dict[str, Dict[str, Any]] = {}
+        for row in valid_rows:
+            date_str = row["date"].isoformat()
+            
+            if date_str not in by_date_map:
+                by_date_map[date_str] = {
+                    "line_count": 0,
+                    "total_kilos": 0.0
+                }
+            
+            by_date_map[date_str]["line_count"] += 1
+            by_date_map[date_str]["total_kilos"] += row["poids_kg"]
+        
+        by_date = [
+            {
+                "date": date_str,
+                "line_count": data["line_count"],
+                "total_kilos": round(data["total_kilos"], 2)
+            }
+            for date_str, data in sorted(by_date_map.items())
+        ]
+        
+        # Catégories non mappées (celles qui sont dans unmapped mais pas rejetées)
+        unmapped_categories = [cat for cat in unmapped_list if cat not in rejected_categories]
+        
+        return {
+            "total_lines": total_lines,
+            "total_kilos": round(total_kilos, 2),
+            "unique_dates": len(by_date),
+            "unique_categories": len(by_category),
+            "by_category": by_category,
+            "by_date": by_date,
+            "unmapped_categories": unmapped_categories
+        }
+
     # ---------- LLM-only (relance ciblée) ----------
 
     def analyze_llm_only(
@@ -900,7 +1041,8 @@ class LegacyImportService:
         self, 
         file_bytes: bytes, 
         mapping_json: Dict[str, Any],
-        admin_user_id: UUID
+        admin_user_id: UUID,
+        import_date: Optional[date] = None
     ) -> Dict[str, Any]:
         """
         Exécute l'import du CSV avec le mapping validé.
@@ -909,6 +1051,7 @@ class LegacyImportService:
             file_bytes: Contenu du fichier CSV
             mapping_json: Fichier de mapping validé (structure: {mappings: {...}, unmapped: [...]})
             admin_user_id: ID de l'utilisateur admin qui importe
+            import_date: Date d'import manuelle (optionnel). Si fournie, toutes les données seront importées avec cette date unique.
         
         Returns:
             Rapport d'import avec statistiques
@@ -967,10 +1110,9 @@ class LegacyImportService:
         lignes_imported = 0
         errors = []
         
-        # Groupement par date pour créer un poste/ticket par jour
-        rows_by_date: Dict[date, List[Dict[str, Any]]] = {}
-        
         # Parser toutes les lignes
+        all_rows: List[Dict[str, Any]] = []
+        
         for idx, raw in enumerate(reader, start=2):
             date_str = raw.get("date", "").strip()
             category = raw.get("category", "").strip()
@@ -978,11 +1120,15 @@ class LegacyImportService:
             destination = raw.get("destination", "").strip()
             notes = raw.get("notes", "").strip()
             
-            # Validation
-            parsed_date = self._parse_date(date_str)
-            if not parsed_date:
-                errors.append(f"L{idx}: Date invalide: {date_str}")
-                continue
+            # Validation de la date (seulement si import_date n'est pas fourni)
+            if not import_date:
+                parsed_date = self._parse_date(date_str)
+                if not parsed_date:
+                    errors.append(f"L{idx}: Date invalide: {date_str}")
+                    continue
+            else:
+                # Si import_date est fourni, on ignore la date du CSV
+                parsed_date = None
             
             if not category:
                 errors.append(f"L{idx}: Catégorie manquante")
@@ -1001,40 +1147,36 @@ class LegacyImportService:
                 errors.append(f"L{idx}: Poids invalide (doit être > 0): {poids_str}")
                 continue
             
-            # Grouper par date
-            if parsed_date not in rows_by_date:
-                rows_by_date[parsed_date] = []
-            
-            rows_by_date[parsed_date].append({
+            # Ajouter la ligne à la liste
+            all_rows.append({
                 "category": category,
                 "category_id": UUID(mappings[category]["category_id"]),
                 "poids_kg": poids,
                 "destination": destination if destination else "MAGASIN",
-                "notes": notes if notes else None
+                "notes": notes if notes else None,
+                "parsed_date": parsed_date  # Pour le groupement si pas d'import_date
             })
         
         # Transaction: tout ou rien
         try:
-            # Créer postes et tickets par date
-            for date_obj, rows in rows_by_date.items():
-                # Récupérer ou créer le poste pour cette date
-                poste, is_new = self._get_or_create_poste_for_date(date_obj, admin_user_id)
+            if import_date:
+                # Mode date unique : créer un seul poste/ticket (B47-P11)
+                poste, is_new = self._get_or_create_poste_for_date(import_date, admin_user_id)
                 if is_new:
                     postes_created += 1
                 else:
                     postes_reused += 1
                 
-                # Créer un ticket pour cette date
+                # Créer un seul ticket pour cette date
                 ticket = self.reception_service.create_ticket(
                     poste_id=poste.id,
                     benevole_user_id=admin_user_id
                 )
                 tickets_created += 1
                 
-                # Créer les lignes
-                for row in rows:
+                # Associer toutes les lignes à ce ticket unique
+                for row in all_rows:
                     try:
-                        # create_ligne accepte une string pour destination et la convertit en enum
                         ligne = self.reception_service.create_ligne(
                             ticket_id=ticket.id,
                             category_id=row["category_id"],
@@ -1045,6 +1187,45 @@ class LegacyImportService:
                         lignes_imported += 1
                     except Exception as e:
                         errors.append(f"Ligne {row}: Erreur lors de la création: {str(e)}")
+            else:
+                # Mode normal : grouper par date du CSV (comportement actuel)
+                rows_by_date: Dict[date, List[Dict[str, Any]]] = {}
+                for row in all_rows:
+                    date_obj = row["parsed_date"]
+                    if date_obj not in rows_by_date:
+                        rows_by_date[date_obj] = []
+                    rows_by_date[date_obj].append(row)
+                
+                # Créer postes et tickets par date
+                for date_obj, rows in rows_by_date.items():
+                    # Récupérer ou créer le poste pour cette date
+                    poste, is_new = self._get_or_create_poste_for_date(date_obj, admin_user_id)
+                    if is_new:
+                        postes_created += 1
+                    else:
+                        postes_reused += 1
+                    
+                    # Créer un ticket pour cette date
+                    ticket = self.reception_service.create_ticket(
+                        poste_id=poste.id,
+                        benevole_user_id=admin_user_id
+                    )
+                    tickets_created += 1
+                    
+                    # Créer les lignes
+                    for row in rows:
+                        try:
+                            # create_ligne accepte une string pour destination et la convertit en enum
+                            ligne = self.reception_service.create_ligne(
+                                ticket_id=ticket.id,
+                                category_id=row["category_id"],
+                                poids_kg=row["poids_kg"],
+                                destination=row["destination"],
+                                notes=row["notes"]
+                            )
+                            lignes_imported += 1
+                        except Exception as e:
+                            errors.append(f"Ligne {row}: Erreur lors de la création: {str(e)}")
             
             # Commit final
             self.db.commit()
