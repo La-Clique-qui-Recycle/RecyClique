@@ -230,24 +230,114 @@ class CashSessionService:
         return self._get_register_options(register)
     
     def get_open_session_by_operator(self, operator_id: str) -> Optional[CashSession]:
-        """Récupère la session ouverte d'un opérateur."""
+        """Récupère la session ouverte d'un opérateur.
+        
+        Exclut les sessions différées (opened_at dans le passé).
+        Pour les sessions différées, utiliser get_deferred_session_by_operator().
+        """
         oid = UUID(str(operator_id)) if not isinstance(operator_id, UUID) else operator_id
+        now = datetime.now(timezone.utc)
         return self.db.query(CashSession).filter(
             and_(
                 CashSession.operator_id == oid,
-                CashSession.status == CashSessionStatus.OPEN
+                CashSession.status == CashSessionStatus.OPEN,
+                # Exclure les sessions différées : opened_at doit être >= maintenant
+                # (sessions normales uniquement)
+                CashSession.opened_at >= now
             )
         ).first()
 
     def get_open_session_by_register(self, register_id: str) -> Optional[CashSession]:
-        """Récupère la session ouverte pour un poste de caisse donné."""
+        """Récupère la session ouverte pour un poste de caisse donné.
+        
+        Exclut les sessions différées (opened_at dans le passé).
+        Pour les sessions différées, utiliser get_deferred_session_by_register().
+        """
         rid = UUID(str(register_id)) if not isinstance(register_id, UUID) else register_id
+        now = datetime.now(timezone.utc)
         return (
             self.db.query(CashSession)
             .filter(
                 and_(
                     CashSession.register_id == rid,
                     CashSession.status == CashSessionStatus.OPEN,
+                    # Exclure les sessions différées : opened_at doit être >= maintenant
+                    # (sessions normales uniquement)
+                    CashSession.opened_at >= now
+                )
+            )
+            .first()
+        )
+    
+    def get_deferred_session_by_operator(self, operator_id: str) -> Optional[CashSession]:
+        """Récupère la session différée ouverte d'un opérateur.
+        
+        Retourne uniquement les sessions différées (opened_at dans le passé).
+        """
+        oid = UUID(str(operator_id)) if not isinstance(operator_id, UUID) else operator_id
+        now = datetime.now(timezone.utc)
+        return self.db.query(CashSession).filter(
+            and_(
+                CashSession.operator_id == oid,
+                CashSession.status == CashSessionStatus.OPEN,
+                # Inclure uniquement les sessions différées : opened_at < maintenant
+                CashSession.opened_at < now
+            )
+        ).first()
+    
+    def get_deferred_session_by_register(self, register_id: str) -> Optional[CashSession]:
+        """Récupère la session différée ouverte pour un poste de caisse donné.
+        
+        Retourne uniquement les sessions différées (opened_at dans le passé).
+        """
+        rid = UUID(str(register_id)) if not isinstance(register_id, UUID) else register_id
+        now = datetime.now(timezone.utc)
+        return (
+            self.db.query(CashSession)
+            .filter(
+                and_(
+                    CashSession.register_id == rid,
+                    CashSession.status == CashSessionStatus.OPEN,
+                    # Inclure uniquement les sessions différées : opened_at < maintenant
+                    CashSession.opened_at < now
+                )
+            )
+            .first()
+        )
+    
+    def get_deferred_session_by_date(self, operator_id: str, target_date: datetime) -> Optional[CashSession]:
+        """Récupère une session différée ouverte pour une date spécifique.
+        
+        Args:
+            operator_id: ID de l'opérateur
+            target_date: Date cible (doit être timezone-aware)
+        
+        Returns:
+            La session différée ouverte pour cette date, ou None si aucune
+        """
+        oid = UUID(str(operator_id)) if not isinstance(operator_id, UUID) else operator_id
+        
+        # S'assurer que target_date est timezone-aware
+        if target_date.tzinfo is None:
+            target_date = target_date.replace(tzinfo=timezone.utc)
+        
+        # Calculer le début et la fin de la journée pour la date cible
+        start_of_day = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
+        end_of_day = start_of_day + timedelta(days=1)
+        
+        now = datetime.now(timezone.utc)
+        
+        return (
+            self.db.query(CashSession)
+            .filter(
+                and_(
+                    CashSession.operator_id == oid,
+                    CashSession.status == CashSessionStatus.OPEN,
+                    # Session différée : opened_at < maintenant
+                    CashSession.opened_at < now,
+                    # Date correspond à la journée cible
+                    CashSession.opened_at >= start_of_day,
+                    CashSession.opened_at < end_of_day
                 )
             )
             .first()

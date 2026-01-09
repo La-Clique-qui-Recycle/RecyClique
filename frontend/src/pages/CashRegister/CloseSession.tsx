@@ -306,11 +306,22 @@ export default function CloseSession() {
         });
 
         if (success) {
-          // Session vide supprimée : rediriger
+          // Session vide supprimée : rediriger immédiatement
+          // Ne pas attendre, rediriger tout de suite
+          setShowEmptySessionWarning(false);
+          navigate('/caisse');
+          return;
+        } else {
+          console.error('[performCloseSession] Échec de la fermeture de session vide');
+          // En cas d'échec, forcer le nettoyage du localStorage et rediriger quand même
+          localStorage.removeItem('deferredCashSession');
           navigate('/caisse');
         }
       } catch (err) {
         console.error('Erreur lors de la fermeture de session:', err);
+        // En cas d'erreur, forcer le nettoyage et rediriger
+        localStorage.removeItem('deferredCashSession');
+        navigate('/caisse');
       } finally {
         setIsSubmitting(false);
         setShowEmptySessionWarning(false);
@@ -448,7 +459,13 @@ export default function CloseSession() {
           <div style={{ display: 'flex', gap: '1rem' }}>
             <button
               type="button"
-              onClick={performCloseSession}
+              onClick={async () => {
+                await performCloseSession();
+                // Redirection déjà gérée dans performCloseSession, mais on s'assure qu'elle se fait
+                if (!isSubmitting) {
+                  navigate('/caisse');
+                }
+              }}
               disabled={isSubmitting}
               style={{
                 padding: '0.75rem 1.5rem',
