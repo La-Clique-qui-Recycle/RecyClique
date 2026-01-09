@@ -272,6 +272,21 @@ export const cashSessionService = {
       console.error('Erreur lors de la récupération du statut de session pour la caisse:', error);
       return { is_active: false, session_id: null };
     }
+  },
+
+  /**
+   * Vérifie si une session différée existe pour une date donnée
+   * @param date Date au format YYYY-MM-DD
+   * @returns Informations sur la session si elle existe, null sinon
+   */
+  async checkDeferredSessionByDate(date: string): Promise<{ exists: boolean; session_id: string | null; opened_at?: string; initial_amount?: number; total_sales?: number; total_items?: number } | null> {
+    try {
+      const response = await ApiClient.client.get(`/v1/cash-sessions/deferred/check?date=${date}`);
+      return response.data;
+    } catch (error) {
+      console.error('Erreur lors de la vérification de session différée:', error);
+      return null;
+    }
   }
 };
 

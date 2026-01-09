@@ -254,6 +254,46 @@ const OpenCashSession: React.FC<OpenCashSessionProps> = ({ onSessionOpened }) =>
     }
   }, [isDeferredMode, registerStatus.is_active, registerStatus.session_id, cashSessionStore.currentSession]);
 
+  // Reprise intelligente : Vérifier si une session existe pour la date saisie
+  const [existingSessionInfo, setExistingSessionInfo] = useState<{ exists: boolean; session_id: string | null; opened_at?: string; initial_amount?: number; total_sales?: number; total_items?: number } | null>(null);
+  const [checkingSession, setCheckingSession] = useState(false);
+
+  useEffect(() => {
+    // Vérifier l'existence d'une session uniquement en mode différé et si une date est saisie
+    if (isDeferredMode && sessionDate && sessionDate.match(/^\d{4}-\d{2}-\d{2}$/)) {
+      const checkSession = async () => {
+        setCheckingSession(true);
+        try {
+          const result = await cashSessionService.checkDeferredSessionByDate(sessionDate);
+          if (result) {
+            setExistingSessionInfo(result);
+            // Si une session existe, pré-remplir le fond de caisse
+            if (result.exists && result.initial_amount !== undefined && (!formData.initial_amount || formData.initial_amount === '')) {
+              const amountStr = result.initial_amount.toString().replace('.', ',');
+              setFormData(prev => ({
+                ...prev,
+                initial_amount: amountStr
+              }));
+            }
+          } else {
+            setExistingSessionInfo(null);
+          }
+        } catch (error) {
+          console.error('Erreur lors de la vérification de session:', error);
+          setExistingSessionInfo(null);
+        } finally {
+          setCheckingSession(false);
+        }
+      };
+      
+      // Délai pour éviter trop de requêtes pendant la saisie
+      const timeoutId = setTimeout(checkSession, 500);
+      return () => clearTimeout(timeoutId);
+    } else {
+      setExistingSessionInfo(null);
+    }
+  }, [sessionDate, isDeferredMode, formData.initial_amount]);
+
   const handleInputChange = (field: string, value: string | number) => {
     setFormData(prev => ({
       ...prev,
@@ -476,11 +516,25 @@ const OpenCashSession: React.FC<OpenCashSessionProps> = ({ onSessionOpened }) =>
         }
       }
       
+      // En mode différé, vérifier d'abord si une session existe pour cette date (via existingSessionInfo)
+      if (isDeferredMode && sessionDate && existingSessionInfo?.exists && existingSessionInfo.session_id) {
+        // Une session existe déjà pour cette date : la reprendre au lieu d'en créer une nouvelle
+        console.log('[handleSubmit] Session existante détectée pour la date, reprise:', existingSessionInfo.session_id);
+        const ok = await resumeSession(existingSessionInfo.session_id);
+        if (ok) {
+          navigate(`${basePath}/sale`);
+          return;
+        } else {
+          console.warn('[handleSubmit] Échec de la reprise de session existante, création d\'une nouvelle session');
+          // Continuer pour créer une nouvelle session (fallback)
+        }
+      }
+      
       // En mode virtuel ou différé, vérifier la session depuis le store
       if (isVirtualMode || isDeferredMode) {
         const { currentSession } = cashSessionStore;
         if (currentSession && currentSession.status === 'open') {
-          // B44-P1: En mode différé, vérifier que c'est bien une session différée
+          // B44-P1: En mode différé, vérifier que c'est bien une session différée ET que la date correspond
           if (isDeferredMode) {
             const openedAtDate = new Date(currentSession.opened_at);
             const now = new Date();
@@ -488,9 +542,32 @@ const OpenCashSession: React.FC<OpenCashSessionProps> = ({ onSessionOpened }) =>
               // Session normale trouvée, ne pas la reprendre en mode différé
               console.warn('[handleSubmit] Session normale trouvée en mode différé, création d\'une nouvelle session');
             } else {
-              // Session différée valide
-              navigate(`${basePath}/sale`);
-              return;
+              // Vérifier que la date de la session correspond à la date saisie
+              if (sessionDate) {
+                const sessionDateObj = new Date(sessionDate + 'T00:00:00Z');
+                const sessionDateOnly = sessionDateObj.toISOString().split('T')[0];
+                const openedAtDateOnly = openedAtDate.toISOString().split('T')[0];
+                
+                if (sessionDateOnly === openedAtDateOnly) {
+                  // Session différée valide ET date correspond : reprendre explicitement
+                  console.log('[handleSubmit] Reprise de session différée pour la date:', sessionDateOnly);
+                  // Reprendre explicitement la session pour charger les données
+                  const ok = await resumeSession(currentSession.id);
+                  if (ok) {
+                    navigate(`${basePath}/sale`);
+                    return;
+                  } else {
+                    console.warn('[handleSubmit] Échec de la reprise, création d\'une nouvelle session');
+                    // Continuer pour créer une nouvelle session
+                  }
+                } else {
+                  // Date différente : ne pas reprendre, créer une nouvelle session
+                  console.log('[handleSubmit] Session différée trouvée mais date différente. Session:', openedAtDateOnly, 'Saisie:', sessionDateOnly);
+                }
+              } else {
+                // Pas de date saisie mais session différée trouvée : ne pas reprendre (besoin d'une date)
+                console.warn('[handleSubmit] Session différée trouvée mais pas de date saisie, création d\'une nouvelle session');
+              }
             }
           } else {
             // Mode virtuel
@@ -633,28 +710,60 @@ const OpenCashSession: React.FC<OpenCashSessionProps> = ({ onSessionOpened }) =>
           {/* B49-P7: Dropdowns Site et Caisse supprimés, récupérés depuis route params */}
           {/* B49-P7: DatePickerInput remplacé par input type="date" pour saisie différée */}
           {isDeferredMode && (
-            <TextInput
-              type="date"
-              label="Date du cahier"
-              placeholder="Sélectionnez la date de vente"
-              value={sessionDate}
-              onChange={(e) => setSessionDate(e.target.value)}
-              max={new Date().toISOString().split('T')[0]}  // Pas de date future (format YYYY-MM-DD)
-              required
-              error={validationErrors.sessionDate}
-              icon={<IconCalendar size={16} />}
-              mb="md"
-              description="Date réelle de vente (date du cahier papier)"
-              data-testid="deferred-session-date-input"
-              styles={{
-                input: {
-                  padding: '10px 12px',
-                  border: '1px solid #e5e7eb',
-                  borderRadius: '8px',
-                  fontSize: '0.95rem'
-                }
-              }}
-            />
+            <>
+              <TextInput
+                type="date"
+                label="Date du cahier"
+                placeholder="Sélectionnez la date de vente"
+                value={sessionDate}
+                onChange={(e) => setSessionDate(e.target.value)}
+                max={new Date().toISOString().split('T')[0]}  // Pas de date future (format YYYY-MM-DD)
+                required
+                error={validationErrors.sessionDate}
+                icon={<IconCalendar size={16} />}
+                mb="md"
+                description="Date réelle de vente (date du cahier papier)"
+                data-testid="deferred-session-date-input"
+                styles={{
+                  input: {
+                    padding: '10px 12px',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: '8px',
+                    fontSize: '0.95rem'
+                  }
+                }}
+              />
+              
+              {/* Reprise intelligente : Afficher si une session existe pour cette date */}
+              {checkingSession && (
+                <Alert icon={<IconAlertCircle size={16} />} color="blue" mb="md">
+                  Vérification de l'existence d'une session...
+                </Alert>
+              )}
+              
+              {!checkingSession && existingSessionInfo?.exists && (
+                <Alert 
+                  icon={<IconAlertCircle size={16} />} 
+                  color="blue" 
+                  mb="md"
+                  title={`Session du ${new Date(existingSessionInfo.opened_at || '').toLocaleDateString('fr-FR')} déjà ouverte`}
+                  withCloseButton
+                  onClose={() => setExistingSessionInfo(null)}
+                >
+                  <p style={{ marginBottom: '8px' }}>
+                    Une session différée existe déjà pour cette date.
+                  </p>
+                  {existingSessionInfo.total_sales !== undefined && existingSessionInfo.total_sales > 0 && (
+                    <p style={{ marginBottom: '8px', fontSize: '0.9rem', color: '#666' }}>
+                      Ventes : {existingSessionInfo.total_sales.toFixed(2)}€ ({existingSessionInfo.total_items || 0} articles)
+                    </p>
+                  )}
+                  <p style={{ marginBottom: '12px', fontSize: '0.9rem', fontStyle: 'italic' }}>
+                    Cliquez sur "Ouvrir la session" pour reprendre cette session existante.
+                  </p>
+                </Alert>
+              )}
+            </>
           )}
 
           <TextInput

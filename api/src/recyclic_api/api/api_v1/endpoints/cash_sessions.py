@@ -303,6 +303,55 @@ async def get_cash_session_status(
 
 
 @router.get(
+    "/deferred/check",
+    summary="Vérifier si une session différée existe pour une date",
+    description="Vérifie si l'opérateur a déjà une session différée ouverte pour la date spécifiée.",
+    tags=["Sessions de Caisse"]
+)
+async def check_deferred_session_by_date(
+    date: str = Query(..., description="Date au format YYYY-MM-DD"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role_strict([UserRole.USER, UserRole.ADMIN, UserRole.SUPER_ADMIN]))
+):
+    """
+    Vérifie si une session différée existe pour la date fournie.
+    
+    Utilisé pour la reprise intelligente : avant de créer une nouvelle session,
+    on vérifie si une session existe déjà pour cette date.
+    """
+    from datetime import datetime, timezone
+    
+    try:
+        # Parser la date (format YYYY-MM-DD)
+        target_date = datetime.strptime(date, "%Y-%m-%d")
+        # Convertir en UTC (minuit UTC pour la date)
+        target_date = target_date.replace(tzinfo=timezone.utc)
+        
+        service = CashSessionService(db)
+        session = service.get_deferred_session_by_date(str(current_user.id), target_date)
+        
+        if session:
+            return {
+                "exists": True,
+                "session_id": str(session.id),
+                "opened_at": session.opened_at.isoformat(),
+                "initial_amount": session.initial_amount,
+                "total_sales": session.total_sales or 0,
+                "total_items": session.total_items or 0
+            }
+        else:
+            return {
+                "exists": False,
+                "session_id": None
+            }
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Format de date invalide. Utilisez YYYY-MM-DD. Erreur: {str(e)}"
+        )
+
+
+@router.get(
     "/", 
     response_model=CashSessionListResponse,
     summary="Lister les sessions de caisse",

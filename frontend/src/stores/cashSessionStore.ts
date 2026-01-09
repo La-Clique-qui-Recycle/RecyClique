@@ -523,28 +523,64 @@ export const useCashSessionStore = create<CashSessionState>()(
             console.log('[Store] openSession - Début, register_id:', data.register_id);
             
             // Pré-check 1: vérifier s'il y a déjà une session ouverte sur ce poste de caisse
+            // Le backend filtre maintenant automatiquement les sessions différées (opened_at >= now)
             if (data.register_id) {
               const status = await cashSessionService.getRegisterSessionStatus(data.register_id);
               if (status.is_active && status.session_id) {
                 const existingByRegister = await cashSessionService.getSession(status.session_id);
                 console.log('[Store] openSession - Session existante par register, register_options:', (existingByRegister as any)?.register_options);
                 if (existingByRegister) {
-                  get().setCurrentSession(existingByRegister);
-                  localStorage.setItem('currentCashSession', JSON.stringify(existingByRegister));
-                  set({ loading: false });
-                  return existingByRegister;
+                  // Sécurité supplémentaire : vérifier que ce n'est pas une session différée
+                  // (le backend devrait déjà l'avoir filtrée, mais on double-vérifie)
+                  if (existingByRegister.opened_at) {
+                    const openedAtDate = new Date(existingByRegister.opened_at);
+                    const now = new Date();
+                    if (openedAtDate < now) {
+                      console.warn('[Store] openSession - Session différée détectée, ignorée (ne devrait pas arriver avec le backend corrigé)');
+                      // Ne pas utiliser cette session, continuer pour en créer une nouvelle
+                    } else {
+                      get().setCurrentSession(existingByRegister);
+                      localStorage.setItem('currentCashSession', JSON.stringify(existingByRegister));
+                      set({ loading: false });
+                      return existingByRegister;
+                    }
+                  } else {
+                    // Session sans opened_at, l'utiliser
+                    get().setCurrentSession(existingByRegister);
+                    localStorage.setItem('currentCashSession', JSON.stringify(existingByRegister));
+                    set({ loading: false });
+                    return existingByRegister;
+                  }
                 }
               }
             }
 
             // Pré-check 2: session ouverte pour l'opérateur courant (fallback)
+            // Le backend filtre maintenant automatiquement les sessions différées (opened_at >= now)
             const existing = await cashSessionService.getCurrentSession();
             console.log('[Store] openSession - Session existante opérateur, register_options:', (existing as any)?.register_options);
             if (existing) {
-              get().setCurrentSession(existing);
-              localStorage.setItem('currentCashSession', JSON.stringify(existing));
-              set({ loading: false });
-              return existing;
+              // Sécurité supplémentaire : vérifier que ce n'est pas une session différée
+              // (le backend devrait déjà l'avoir filtrée, mais on double-vérifie)
+              if (existing.opened_at) {
+                const openedAtDate = new Date(existing.opened_at);
+                const now = new Date();
+                if (openedAtDate < now) {
+                  console.warn('[Store] openSession - Session différée détectée, ignorée (ne devrait pas arriver avec le backend corrigé)');
+                  // Ne pas utiliser cette session, continuer pour en créer une nouvelle
+                } else {
+                  get().setCurrentSession(existing);
+                  localStorage.setItem('currentCashSession', JSON.stringify(existing));
+                  set({ loading: false });
+                  return existing;
+                }
+              } else {
+                // Session sans opened_at, l'utiliser
+                get().setCurrentSession(existing);
+                localStorage.setItem('currentCashSession', JSON.stringify(existing));
+                set({ loading: false });
+                return existing;
+              }
             }
 
             const session = await cashSessionService.createSession(data);

@@ -583,16 +583,17 @@ export const useDeferredCashSessionStore = create<DeferredCashSessionState>()(
               success = await cashSessionService.closeSession(sessionId);
             }
             
-            if (success) {
-              set({ 
-                currentSession: null, 
-                loading: false,
-                openedAt: null  // B44-P1: Réinitialiser la date de session
-              });
-              
-              // B44-P1: Utiliser la clé localStorage spécifique au mode différé
-              localStorage.removeItem('deferredCashSession');
-            }
+            // IMPORTANT: Toujours nettoyer le store et localStorage, même si la fermeture échoue
+            // Cela évite les sessions "fantômes" qui restent dans le localStorage
+            set({ 
+              currentSession: null, 
+              loading: false,
+              openedAt: null,  // B44-P1: Réinitialiser la date de session
+              currentSaleItems: []  // Réinitialiser les articles
+            });
+            
+            // B44-P1: Utiliser la clé localStorage spécifique au mode différé
+            localStorage.removeItem('deferredCashSession');
             
             return success;
           } catch (error: any) {
@@ -617,7 +618,16 @@ export const useDeferredCashSessionStore = create<DeferredCashSessionState>()(
               originalError: error
             });
             
-            set({ error: errorMessage, loading: false });
+            // IMPORTANT: Nettoyer TOUJOURS le store et localStorage, même en cas d'erreur
+            // Cela évite les sessions "fantômes" qui restent bloquées
+            set({ 
+              error: errorMessage, 
+              loading: false, 
+              currentSession: null, 
+              openedAt: null,
+              currentSaleItems: []  // Réinitialiser les articles
+            });
+            localStorage.removeItem('deferredCashSession');
             return false;
           }
         },
@@ -688,50 +698,95 @@ export const useDeferredCashSessionStore = create<DeferredCashSessionState>()(
               
               try {
                 const serverSession = await cashSessionService.getSession(session.id);
-                if (serverSession && serverSession.status === 'open') {
-                  // B44-P1: Vérifier que c'est bien une session différée (opened_at dans le passé)
-                  const openedAtDate = new Date(serverSession.opened_at);
-                  const now = new Date();
-                  if (openedAtDate < now) {
-                    // B50-P10: Charger les options de workflow depuis la caisse source
-                    let registerOptions: Record<string, any> | null = null;
-                    if (serverSession.register_id) {
-                      try {
-                        const register = await getCashRegister(serverSession.register_id);
-                        if (register?.workflow_options) {
-                          registerOptions = register.workflow_options;
-                          console.log('[fetchCurrentSession] Options héritées de la caisse source:', registerOptions);
-                        }
-                      } catch (error) {
-                        console.warn('[fetchCurrentSession] Impossible de charger les options de la caisse source:', error);
-                      }
+                
+                // Vérifier que la session existe côté serveur
+                if (!serverSession) {
+                  // Session n'existe plus, nettoyer
+                  console.warn('[fetchCurrentSession] Session non trouvée côté serveur, nettoyage localStorage');
+                  localStorage.removeItem('deferredCashSession');
+                  set({ currentSession: null, loading: false, openedAt: null });
+                  return;
+                }
+                
+                // Vérifier que la session est toujours ouverte côté serveur
+                if (serverSession.status !== 'open') {
+                  // Session fermée côté serveur, nettoyer
+                  console.warn('[fetchCurrentSession] Session fermée côté serveur (status:', serverSession.status, '), nettoyage localStorage');
+                  localStorage.removeItem('deferredCashSession');
+                  set({ currentSession: null, loading: false, openedAt: null });
+                  return;
+                }
+                
+                // Session ouverte côté serveur, vérifier que c'est bien une session différée
+                if (!serverSession.opened_at) {
+                  console.warn('[fetchCurrentSession] Session sans opened_at, nettoyage localStorage');
+                  localStorage.removeItem('deferredCashSession');
+                  set({ currentSession: null, loading: false, openedAt: null });
+                  return;
+                }
+                
+                const openedAtDate = new Date(serverSession.opened_at);
+                const now = new Date();
+                if (openedAtDate >= now) {
+                  // Session normale, ne pas l'utiliser en mode différé
+                  console.warn('[fetchCurrentSession] Session normale trouvée, nettoyage localStorage');
+                  localStorage.removeItem('deferredCashSession');
+                  set({ currentSession: null, loading: false, openedAt: null });
+                  return;
+                }
+                
+                // Session différée valide et ouverte côté serveur
+                // B50-P10: Charger les options de workflow depuis la caisse source
+                let registerOptions: Record<string, any> | null = null;
+                if (serverSession.register_id) {
+                  try {
+                    const register = await getCashRegister(serverSession.register_id);
+                    if (register?.workflow_options) {
+                      registerOptions = register.workflow_options;
+                      console.log('[fetchCurrentSession] Options héritées de la caisse source:', registerOptions);
                     }
-                    
-                    // B50-P10: Préserver total_donations du localStorage si la session serveur ne l'a pas
-                    const localTotalDonations = session.total_donations || 0;
-                    const serverSessionWithDonations = {
-                      ...serverSession,
-                      total_donations: localTotalDonations  // Préserver les dons du localStorage
-                    };
-                    
-                    set({ 
-                      currentSession: serverSessionWithDonations, 
-                      loading: false, 
-                      openedAt: serverSession.opened_at,
-                      currentRegisterOptions: registerOptions  // B50-P10: Charger les options de workflow
-                    });
-                    // Mettre à jour le localStorage avec la session serveur (en préservant total_donations)
-                    localStorage.setItem('deferredCashSession', JSON.stringify(serverSessionWithDonations));
-                    return;
-                  } else {
-                    // Session normale trouvée, ne pas l'utiliser en mode différé
-                    console.warn('[fetchCurrentSession] Session normale trouvée, nettoyage localStorage');
-                    localStorage.removeItem('deferredCashSession');
+                  } catch (error) {
+                    console.warn('[fetchCurrentSession] Impossible de charger les options de la caisse source:', error);
                   }
                 }
-                // B50-P10: Si l'appel API retourne null (erreur 403/404) ou session fermée, utiliser la session locale
+                
+                // B50-P10: Préserver total_donations du localStorage si la session serveur ne l'a pas
+                const localTotalDonations = session.total_donations || 0;
+                const serverSessionWithDonations = {
+                  ...serverSession,
+                  total_donations: localTotalDonations  // Préserver les dons du localStorage
+                };
+                
+                set({ 
+                  currentSession: serverSessionWithDonations, 
+                  loading: false, 
+                  openedAt: serverSession.opened_at,
+                  currentRegisterOptions: registerOptions  // B50-P10: Charger les options de workflow
+                });
+                // Mettre à jour le localStorage avec la session serveur (en préservant total_donations)
+                localStorage.setItem('deferredCashSession', JSON.stringify(serverSessionWithDonations));
+                return;
+              } catch (apiError: any) {
+                // Erreur API : vérifier si c'est une 404 (session n'existe plus)
+                if (apiError?.response?.status === 404) {
+                  console.warn('[fetchCurrentSession] Session non trouvée (404), nettoyage localStorage');
+                  localStorage.removeItem('deferredCashSession');
+                  set({ currentSession: null, loading: false, openedAt: null });
+                  return;
+                }
+                
+                // Autre erreur API : par sécurité, ne pas utiliser la session locale si elle est fermée
+                // (pour éviter les sessions fantômes)
+                if (session.status !== 'open') {
+                  console.warn('[fetchCurrentSession] Session locale fermée après erreur API, nettoyage localStorage');
+                  localStorage.removeItem('deferredCashSession');
+                  set({ currentSession: null, loading: false, openedAt: null });
+                  return;
+                }
+                
+                // B50-P10: Fallback uniquement si session locale est ouverte ET erreur API non-critique
                 // Cela permet aux bénévoles de fermer leur session même sans permission API
-                console.log('[fetchCurrentSession] Appel API échoué ou session non trouvée, utilisation de la session locale');
+                console.log('[fetchCurrentSession] Utilisation de la session locale en fallback après erreur API non-critique');
                 if (session.status === 'open') {
                   // B50-P10: Charger les options de workflow depuis la caisse source (peut échouer pour bénévoles)
                   let registerOptions: Record<string, any> | null = null;
@@ -757,36 +812,7 @@ export const useDeferredCashSessionStore = create<DeferredCashSessionState>()(
                 } else {
                   console.warn('[fetchCurrentSession] Session locale fermée, nettoyage localStorage');
                   localStorage.removeItem('deferredCashSession');
-                }
-              } catch (apiError: any) {
-                // B50-P10: Si l'appel API échoue (403 Forbidden pour bénévoles), utiliser la session locale
-                console.warn('[fetchCurrentSession] Erreur API (probablement 403 pour bénévoles), utilisation de la session locale:', apiError?.response?.status || apiError?.message);
-                if (session.status === 'open') {
-                  // B50-P10: Charger les options de workflow depuis la caisse source (peut échouer pour bénévoles)
-                  let registerOptions: Record<string, any> | null = null;
-                  if (session.register_id) {
-                    try {
-                      const register = await getCashRegister(session.register_id);
-                      if (register?.workflow_options) {
-                        registerOptions = register.workflow_options;
-                        console.log('[fetchCurrentSession] Options héritées de la caisse source (fallback après erreur):', registerOptions);
-                      }
-                    } catch (error) {
-                      console.warn('[fetchCurrentSession] Impossible de charger les options de la caisse source (fallback après erreur):', error);
-                    }
-                  }
-                  
-                  console.log('[fetchCurrentSession] Utilisation de la session locale en fallback après erreur API');
-                  set({ 
-                    currentSession: session, 
-                    loading: false, 
-                    openedAt: session.opened_at,
-                    currentRegisterOptions: registerOptions  // B50-P10: Charger les options de workflow
-                  });
-                  return;
-                } else {
-                  console.warn('[fetchCurrentSession] Session locale fermée après erreur API, nettoyage localStorage');
-                  localStorage.removeItem('deferredCashSession');
+                  set({ currentSession: null, loading: false, openedAt: null });
                 }
               }
             }
@@ -822,11 +848,32 @@ export const useDeferredCashSessionStore = create<DeferredCashSessionState>()(
             const localTotalDonations = localSession?.total_donations || 0;
             
             const session = await cashSessionService.getSession(sessionId);
-            if (session && session.status === 'open') {
-              // B44-P1: Vérifier que c'est bien une session différée (opened_at dans le passé)
-              const openedAtDate = new Date(session.opened_at);
-              const now = new Date();
-              if (openedAtDate < now) {
+            
+            // Vérifier que la session existe
+            if (!session) {
+              console.warn('[resumeSession] Session non trouvée, nettoyage localStorage');
+              localStorage.removeItem('deferredCashSession');
+              set({ loading: false, error: "Session non trouvée", currentSession: null, openedAt: null });
+              return false;
+            }
+            
+            // Vérifier que la session est ouverte
+            if (session.status !== 'open') {
+              console.warn('[resumeSession] Session fermée (status:', session.status, '), nettoyage localStorage');
+              localStorage.removeItem('deferredCashSession');
+              set({ loading: false, error: "Cette session est fermée", currentSession: null, openedAt: null });
+              return false;
+            }
+            
+            // B44-P1: Vérifier que c'est bien une session différée (opened_at dans le passé)
+            if (!session.opened_at) {
+              set({ loading: false, error: "Cette session n'a pas de date d'ouverture" });
+              return false;
+            }
+            
+            const openedAtDate = new Date(session.opened_at);
+            const now = new Date();
+            if (openedAtDate < now) {
                 // B50-P10: Charger les options de workflow depuis la caisse source
                 let registerOptions: Record<string, any> | null = null;
                 if (session.register_id) {
@@ -847,25 +894,31 @@ export const useDeferredCashSessionStore = create<DeferredCashSessionState>()(
                   total_donations: localTotalDonations  // Préserver les dons du localStorage
                 };
                 
+                // IMPORTANT: Réinitialiser currentSaleItems lors de la reprise
+                // Les articles sont gérés par session, pas persistés dans le store
+                // Ils seront rechargés depuis le backend si nécessaire
                 set({ 
                   currentSession: sessionWithDonations, 
                   loading: false, 
                   openedAt: session.opened_at,
-                  currentRegisterOptions: registerOptions  // B50-P10: Charger les options de workflow
+                  currentRegisterOptions: registerOptions,  // B50-P10: Charger les options de workflow
+                  currentSaleItems: []  // Réinitialiser les articles (ils sont dans les ventes, pas dans le panier)
                 });
                 localStorage.setItem('deferredCashSession', JSON.stringify(sessionWithDonations));
                 return true;
               } else {
                 // Session normale, ne pas l'utiliser en mode différé
-                set({ loading: false, error: "Cette session n'est pas une session différée" });
+                console.warn('[resumeSession] Session normale détectée, nettoyage localStorage');
+                localStorage.removeItem('deferredCashSession');
+                set({ loading: false, error: "Cette session n'est pas une session différée", currentSession: null, openedAt: null });
                 return false;
               }
-            }
-            set({ loading: false, error: "Aucune session ouverte trouvée pour cet identifiant" });
-            return false;
           } catch (error) {
             const errorMessage = error instanceof Error ? error.message : 'Erreur lors de la reprise de session';
-            set({ error: errorMessage, loading: false });
+            console.error('[resumeSession] Erreur:', errorMessage);
+            // Nettoyer le localStorage en cas d'erreur
+            localStorage.removeItem('deferredCashSession');
+            set({ error: errorMessage, loading: false, currentSession: null, openedAt: null });
             return false;
           }
         }
