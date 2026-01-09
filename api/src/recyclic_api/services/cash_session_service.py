@@ -232,38 +232,62 @@ class CashSessionService:
     def get_open_session_by_operator(self, operator_id: str) -> Optional[CashSession]:
         """Récupère la session ouverte d'un opérateur.
         
-        Exclut les sessions différées (opened_at dans le passé).
-        Pour les sessions différées, utiliser get_deferred_session_by_operator().
+        Retourne uniquement les sessions normales (status = OPEN).
+        Les sessions différées sont exclues en vérifiant que opened_at n'est pas
+        trop dans le passé (seuil de 90 jours pour couvrir tous les cas d'usage).
+        
+        Pour les sessions différées, utiliser get_deferred_session_by_operator() ou
+        get_deferred_session_by_date().
+        
+        Note: Les sessions normales peuvent rester ouvertes plusieurs jours sans limite.
+        On utilise un seuil de 90 jours uniquement pour exclure les sessions différées
+        qui ont été créées avec opened_at explicitement défini dans le passé lointain.
         """
         oid = UUID(str(operator_id)) if not isinstance(operator_id, UUID) else operator_id
         now = datetime.now(timezone.utc)
+        # Seuil de 90 jours : exclure uniquement les sessions différées créées avec
+        # opened_at explicitement défini dans le passé lointain. Les sessions normales
+        # peuvent rester ouvertes indéfiniment.
+        threshold = now - timedelta(days=90)
         return self.db.query(CashSession).filter(
             and_(
                 CashSession.operator_id == oid,
                 CashSession.status == CashSessionStatus.OPEN,
-                # Exclure les sessions différées : opened_at doit être >= maintenant
-                # (sessions normales uniquement)
-                CashSession.opened_at >= now
+                # Exclure uniquement les sessions différées très anciennes
+                # (sessions normales peuvent rester ouvertes indéfiniment)
+                CashSession.opened_at >= threshold
             )
         ).first()
 
     def get_open_session_by_register(self, register_id: str) -> Optional[CashSession]:
         """Récupère la session ouverte pour un poste de caisse donné.
         
-        Exclut les sessions différées (opened_at dans le passé).
-        Pour les sessions différées, utiliser get_deferred_session_by_register().
+        Retourne uniquement les sessions normales (status = OPEN).
+        Les sessions différées sont exclues en vérifiant que opened_at n'est pas
+        trop dans le passé (seuil de 90 jours pour couvrir tous les cas d'usage).
+        
+        Pour les sessions différées, utiliser get_deferred_session_by_register() ou
+        get_deferred_session_by_date().
+        
+        Note: Les sessions normales peuvent rester ouvertes plusieurs jours sans limite.
+        On utilise un seuil de 90 jours uniquement pour exclure les sessions différées
+        qui ont été créées avec opened_at explicitement défini dans le passé lointain.
         """
         rid = UUID(str(register_id)) if not isinstance(register_id, UUID) else register_id
         now = datetime.now(timezone.utc)
+        # Seuil de 90 jours : exclure uniquement les sessions différées créées avec
+        # opened_at explicitement défini dans le passé lointain. Les sessions normales
+        # peuvent rester ouvertes indéfiniment.
+        threshold = now - timedelta(days=90)
         return (
             self.db.query(CashSession)
             .filter(
                 and_(
                     CashSession.register_id == rid,
                     CashSession.status == CashSessionStatus.OPEN,
-                    # Exclure les sessions différées : opened_at doit être >= maintenant
-                    # (sessions normales uniquement)
-                    CashSession.opened_at >= now
+                    # Exclure uniquement les sessions différées très anciennes
+                    # (sessions normales peuvent rester ouvertes indéfiniment)
+                    CashSession.opened_at >= threshold
                 )
             )
             .first()
@@ -272,34 +296,46 @@ class CashSessionService:
     def get_deferred_session_by_operator(self, operator_id: str) -> Optional[CashSession]:
         """Récupère la session différée ouverte d'un opérateur.
         
-        Retourne uniquement les sessions différées (opened_at dans le passé).
+        Retourne uniquement les sessions différées (opened_at à plus de 90 jours dans le passé).
+        
+        Note: Cette méthode est principalement utilisée pour le nettoyage. Pour rechercher
+        une session différée par date spécifique, utiliser get_deferred_session_by_date().
         """
         oid = UUID(str(operator_id)) if not isinstance(operator_id, UUID) else operator_id
         now = datetime.now(timezone.utc)
+        # Seuil de 90 jours : identifier les sessions différées créées avec opened_at
+        # explicitement défini dans le passé lointain
+        threshold = now - timedelta(days=90)
         return self.db.query(CashSession).filter(
             and_(
                 CashSession.operator_id == oid,
                 CashSession.status == CashSessionStatus.OPEN,
-                # Inclure uniquement les sessions différées : opened_at < maintenant
-                CashSession.opened_at < now
+                # Inclure uniquement les sessions différées très anciennes
+                CashSession.opened_at < threshold
             )
         ).first()
     
     def get_deferred_session_by_register(self, register_id: str) -> Optional[CashSession]:
         """Récupère la session différée ouverte pour un poste de caisse donné.
         
-        Retourne uniquement les sessions différées (opened_at dans le passé).
+        Retourne uniquement les sessions différées (opened_at à plus de 90 jours dans le passé).
+        
+        Note: Cette méthode est principalement utilisée pour le nettoyage. Pour rechercher
+        une session différée par date spécifique, utiliser get_deferred_session_by_date().
         """
         rid = UUID(str(register_id)) if not isinstance(register_id, UUID) else register_id
         now = datetime.now(timezone.utc)
+        # Seuil de 90 jours : identifier les sessions différées créées avec opened_at
+        # explicitement défini dans le passé lointain
+        threshold = now - timedelta(days=90)
         return (
             self.db.query(CashSession)
             .filter(
                 and_(
                     CashSession.register_id == rid,
                     CashSession.status == CashSessionStatus.OPEN,
-                    # Inclure uniquement les sessions différées : opened_at < maintenant
-                    CashSession.opened_at < now
+                    # Inclure uniquement les sessions différées très anciennes
+                    CashSession.opened_at < threshold
                 )
             )
             .first()
