@@ -112,3 +112,5 @@ class SaleDetail(BaseModel):
 
 **Action requise**: Recharger la page du détail de session pour voir la correction.
 
+
+

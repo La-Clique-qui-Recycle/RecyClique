@@ -145,3 +145,5 @@ def test_cash_session_detail_includes_weight_fields(
   assert pytest.approx(weights_by_sale[str(sale2.id)], rel=1e-5) == 4.25
 
 
+
+

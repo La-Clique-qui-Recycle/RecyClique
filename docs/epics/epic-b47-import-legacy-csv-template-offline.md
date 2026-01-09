@@ -228,6 +228,98 @@ Colonnes requises :
 
 ---
 
+### Story B47-P7 : Validation de Conformité CSV et Nettoyage Automatique
+**Objectif** : Améliorer l'expérience utilisateur en validant automatiquement la conformité du CSV et en proposant un nettoyage automatique si nécessaire
+
+**Critères d'acceptation** :
+- Validation automatique de conformité du CSV (colonnes, format dates, poids, structure)
+- Endpoint API `POST /api/v1/admin/import/legacy/clean` pour nettoyer le CSV côté serveur
+- Interface frontend avec validation automatique et proposition de nettoyage si non conforme
+- Réutilisation de la logique du script `clean_legacy_import.py` dans un service backend
+- Rapport de validation détaillé avec liste des problèmes détectés
+- Statistiques de nettoyage (lignes nettoyées, dates normalisées, etc.)
+
+**Estimation** : 5 points  
+**Prérequis** : B47-P1, B47-P2, B47-P3  
+**Statut** : Draft  
+**Voir** : [Story B47-P7](../stories/story-b47-p7-validation-conformite-nettoyage-automatique.md)
+
+---
+
+### Story B47-P8 : Correction Bug LLM-only et Ajout Sélecteur de Modèles dans Relance
+**Objectif** : Corriger le bug Pydantic de l'endpoint LLM-only et permettre de changer de modèle lors de la relance LLM (catégories restantes ou toutes les catégories)
+
+**Critères d'acceptation** :
+- Correction du bug Pydantic : création d'un schéma `LLMOnlyStatistics` ou rendu optionnel des champs obligatoires
+- Ajout du sélecteur de modèles LLM dans l'étape 2 (Mappings) avec case à cocher pour modèles gratuits
+- Le modèle sélectionné dans l'étape 2 est utilisé pour les relances LLM
+- Le modèle de l'étape 1 est préservé comme valeur par défaut dans l'étape 2
+- Bouton "Relancer LLM pour toutes les catégories" permettant de relancer le LLM sur l'ensemble des catégories avec un autre modèle
+- Fusion intelligente des mappings : préservation des corrections manuelles (confidence = 100)
+- L'endpoint `/api/v1/admin/import/legacy/analyze/llm-only` fonctionne sans erreur
+
+**Estimation** : 5 points  
+**Prérequis** : B47-P6  
+**Statut** : Draft  
+**Voir** : [Story B47-P8](../stories/story-b47-p8-correction-bug-llm-only-selecteur-modeles.md)
+
+---
+
+### Story B47-P9 : Correction Bugs Mapping Manuel
+**Objectif** : Corriger les bugs critiques du mapping manuel : catégories assignées manuellement non enregistrées et bouton "Continuer" toujours grisé
+
+**Critères d'acceptation** :
+- Correction du bug : les catégories assignées manuellement sont retirées de `unmapped` lors de l'assignation
+- Correction du bug : les catégories rejetées sont retirées de `unmapped` et ajoutées à `rejectedCategories`
+- Correction du bouton "Continuer" : s'active quand toutes les catégories sont assignées/rejetées (ou ≤ 5 restantes)
+- Validation de l'export JSON : les catégories assignées manuellement ne doivent pas apparaître dans `unmapped`
+- Les mappings manuels sont correctement enregistrés et pris en compte lors de l'import
+
+**Estimation** : 3 points  
+**Prérequis** : B47-P3  
+**Statut** : Draft  
+**Voir** : [Story B47-P9](../stories/story-b47-p9-correction-bugs-mapping-manuel.md)
+
+---
+
+### Story B47-P10 : Simplification Workflow et Récapitulatif Pré-Import
+**Objectif** : Simplifier le workflow en supprimant l'étape export/import redondante et ajouter un récapitulatif visuel avant l'import
+
+**Critères d'acceptation** :
+- Suppression de l'étape export/import séparée (étape 4 supprimée)
+- Nouvelle étape "Récapitulatif & Import" avec affichage :
+  - Total général (lignes, kilos, dates, catégories)
+  - Répartition par catégorie (tableau avec lignes et totaux kilos)
+  - Répartition par date (optionnel)
+  - Catégories non mappées (si présentes)
+- Import direct depuis l'interface sans étape intermédiaire
+- Option d'export du mapping (bouton optionnel dans l'étape 2, non obligatoire)
+- Calcul du récapitulatif en parsant le CSV et appliquant les mappings validés
+
+**Estimation** : 5 points  
+**Prérequis** : B47-P3, B47-P9  
+**Statut** : Ready for Review  
+**Voir** : [Story B47-P10](../stories/story-b47-p10-simplification-workflow-recapitulatif-pre-import.md)
+
+---
+
+### Story B47-P11 : Sélection Date d'Import Manuelle
+**Objectif** : Permettre à l'utilisateur de choisir une date d'import manuelle pour regrouper toutes les données sous une date unique
+
+**Critères d'acceptation** :
+- Sélecteur de date optionnel dans l'étape 3 (Récapitulatif & Import)
+- Si une date est sélectionnée, toutes les données sont importées avec cette date unique (un seul poste/ticket)
+- Si aucune date n'est sélectionnée, comportement actuel (un poste/ticket par date du CSV)
+- Avertissement visuel quand une date d'import est sélectionnée
+- Validation : la date ne peut pas être dans le futur
+
+**Estimation** : 3 points  
+**Prérequis** : B47-P10  
+**Statut** : Draft  
+**Voir** : [Story B47-P11](../stories/story-b47-p11-selection-date-import-manuelle.md)
+
+---
+
 ## 7. Risques
 
 1. **Mapping incorrect des catégories** → données corrompues en base

@@ -24,3 +24,5 @@ class PaymentTransaction(Base):
     def __repr__(self):
         return f"<PaymentTransaction(id={self.id}, payment_method={self.payment_method}, amount={self.amount})>"
 
+
+

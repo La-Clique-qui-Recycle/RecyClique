@@ -88,3 +88,85 @@ class LLMModelsResponse(BaseModel):
     models: List[LLMModelInfo]
     error: Optional[str] = None
     default_model_id: Optional[str] = None
+
+
+class LegacyImportCleanStatistics(BaseModel):
+    """Statistiques de nettoyage CSV."""
+
+    total_lines: int
+    cleaned_lines: int
+    excluded_lines: int
+    orphan_lines: int
+    dates_normalized: int
+    weights_rounded: int
+    date_distribution: Dict[str, int] = {}
+
+
+class LegacyImportCleanResponse(BaseModel):
+    """Réponse de l'endpoint clean."""
+
+    cleaned_csv_base64: str
+    filename: str
+    statistics: LegacyImportCleanStatistics
+
+
+class LegacyImportValidationStatistics(BaseModel):
+    """Statistiques de validation CSV."""
+
+    total_lines: int
+    valid_lines: int
+    invalid_lines: int
+    missing_columns: List[str] = []
+    extra_columns: List[str] = []
+    date_errors: int
+    weight_errors: int
+    structure_issues: int
+
+
+class LegacyImportValidationResponse(BaseModel):
+    """Réponse de l'endpoint validate."""
+
+    is_valid: bool
+    errors: List[str] = []
+    warnings: List[str] = []
+    statistics: LegacyImportValidationStatistics
+
+
+class LLMOnlyStatistics(BaseModel):
+    """Statistiques LLM uniquement (sans les champs d'analyse CSV complète)."""
+    llm_attempted: bool = False
+    llm_model_used: Optional[str] = None
+    llm_batches_total: int = 0
+    llm_batches_succeeded: int = 0
+    llm_batches_failed: int = 0
+    llm_mapped_categories: int = 0
+    llm_unmapped_after_llm: int = 0
+    llm_last_error: Optional[str] = None
+    llm_avg_confidence: Optional[float] = None
+    llm_provider_used: Optional[str] = None
+
+
+class ImportSummaryByCategory(BaseModel):
+    """Répartition par catégorie dans le récapitulatif."""
+    category_name: str
+    category_id: str
+    line_count: int
+    total_kilos: float
+
+
+class ImportSummaryByDate(BaseModel):
+    """Répartition par date dans le récapitulatif."""
+    date: str
+    line_count: int
+    total_kilos: float
+
+
+class LegacyImportPreviewResponse(BaseModel):
+    """Réponse de l'endpoint preview (récapitulatif pré-import)."""
+    total_lines: int
+    total_kilos: float
+    unique_dates: int
+    unique_categories: int
+    by_category: List[ImportSummaryByCategory]
+    by_date: List[ImportSummaryByDate]
+    unmapped_categories: List[str]

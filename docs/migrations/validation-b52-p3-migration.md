@@ -220,3 +220,5 @@ docker-compose restart api
 - Impact minimal sur les performances
 - Compatible avec le code existant (colonne nullable)
 
+
+

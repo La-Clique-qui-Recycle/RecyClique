@@ -183,3 +183,5 @@ Après déploiement, vérifier:
 - API fonctionne correctement après migration
 - Migration **sûre** et **réversible**
 
+
+

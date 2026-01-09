@@ -47,3 +47,5 @@ recommendations:
     - action: "Considérer rendre sale_date NOT NULL après migration complète en production"
       refs: ["api/migrations/versions/b52_p3_add_sale_date_to_sales.py:38"]
 
+
+

@@ -274,3 +274,5 @@ class TestBackwardCompatibility:
         assert len(sale.payments) == 0
         assert sale.total_amount == 50.0
 
+
+

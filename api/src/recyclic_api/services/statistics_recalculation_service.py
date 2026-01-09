@@ -129,3 +129,5 @@ class StatisticsRecalculationService:
         # TODO: Implémenter l'invalidation de cache si un système de cache est ajouté
         pass
 
+
+
