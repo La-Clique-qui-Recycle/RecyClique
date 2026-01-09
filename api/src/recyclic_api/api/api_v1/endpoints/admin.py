@@ -2257,19 +2257,23 @@ async def fix_blocked_deferred_sessions(
     - Supprimant les sessions vides
     
     Cette opération est sécurisée et ne supprime que les sessions différées ouvertes
-    qui sont dans le passé (opened_at < NOW()).
+    qui sont à plus de 90 jours dans le passé (opened_at < NOW() - 90 jours).
     """
     from recyclic_api.models.cash_session import CashSession, CashSessionStatus
     from recyclic_api.models.sale import Sale
     from sqlalchemy import func
+    from datetime import timedelta
     
     try:
         now = datetime.now(timezone.utc)
+        # Seuil de 90 jours : identifier les sessions différées créées avec opened_at
+        # explicitement défini dans le passé lointain (cohérent avec les autres méthodes)
+        threshold = now - timedelta(days=90)
         
-        # Récupérer toutes les sessions différées ouvertes
+        # Récupérer toutes les sessions différées ouvertes (opened_at à plus de 90 jours dans le passé)
         blocked_sessions = db.query(CashSession).filter(
             CashSession.status == CashSessionStatus.OPEN,
-            CashSession.opened_at < now
+            CashSession.opened_at < threshold
         ).all()
         
         fixed_count = 0

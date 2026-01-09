@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { cashRegisterDashboardService, cashSessionService } from '../../services/cashSessionService';
 import { Card, Badge, Group, Button, SimpleGrid, Title, Container, LoadingOverlay, Text, Menu, ActionIcon } from '@mantine/core';
 import { useCashSessionStoreInjected, useCashStores } from '../../providers/CashStoreProvider';
@@ -49,6 +49,7 @@ const RegisterCard: React.FC<{ reg: RegisterStatus; onOpen: (id: string) => void
 
 const CashRegisterDashboard: React.FC = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const { cashSessionStore, isVirtualMode, isDeferredMode } = useCashStores();
   const { resumeSession } = cashSessionStore;
   const { currentUser, hasPermission, hasVirtualCashAccess, hasDeferredCashAccess } = useAuthStore();  // B50-P4: Pour vérifier les permissions
@@ -80,6 +81,7 @@ const CashRegisterDashboard: React.FC = () => {
   }, [isDeferredMode, navigate]);
 
   // B50-P4: Charger les caisses même en mode virtuel/différé pour trouver la première avec enable_virtual/enable_deferred=true
+  // IMPORTANT: Rafraîchir les données à chaque montage de la page pour avoir l'état réel des caisses
   useEffect(() => {
     const load = async () => {
       // En mode virtuel/différé, on charge quand même les caisses pour trouver la source
@@ -109,6 +111,22 @@ const CashRegisterDashboard: React.FC = () => {
     };
     load();
   }, [isVirtualMode, isDeferredMode]);
+
+  // Rafraîchir les données quand on revient sur la page (changement de route)
+  useEffect(() => {
+    // Ne rafraîchir que si on est en mode réel (pas virtuel/différé)
+    if (!isVirtualMode && !isDeferredMode) {
+      const load = async () => {
+        try {
+          const list = await cashRegisterDashboardService.getRegistersStatus();
+          setRegisters(list);
+        } catch (error) {
+          console.error('Erreur lors du rafraîchissement des caisses:', error);
+        }
+      };
+      load();
+    }
+  }, [location.pathname, isVirtualMode, isDeferredMode]);
 
   // B49-P7: Passer register_id via route params au lieu de state
   const handleOpen = (registerId: string) => {
