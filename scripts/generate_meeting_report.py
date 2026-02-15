@@ -81,7 +81,7 @@ def generate_meeting_report(meeting_id: str):
 
 ---
 
-## Sujet 2 : Point PAECO
+## Sujet 2 : Point Paheko
 
 ### Points discutés
 
