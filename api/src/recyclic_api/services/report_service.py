@@ -397,6 +397,7 @@ def generate_bulk_cash_sessions_excel(
         'Numéro Ticket',
         'Date Vente',
         'Catégorie Principale',
+        'Catégorie Secondaire',
         'Quantité',
         'Poids (kg)',
         'Prix Unitaire (€)',
@@ -433,8 +434,9 @@ def generate_bulk_cash_sessions_excel(
                         # C'est un nom (ex: "EEE-1")
                         category_names.append(item.category)
     
-    # Charger les catégories et créer le mapping code → catégorie principale
+    # Charger les catégories et créer le mapping code → catégorie principale/secondaire
     category_main_mapping = {}
+    category_secondary_mapping = {}  # Mapping value → nom catégorie secondaire (enfant direct du root)
     categories_by_value = {}  # Mapping value (UUID ou name) → Category
     main_categories_set = set()  # Set des noms de catégories principales
     
@@ -480,7 +482,8 @@ def generate_bulk_cash_sessions_excel(
                     pass
             
             if cat:
-                # Si la catégorie a un parent, remonter jusqu'à la catégorie principale
+                # Construire la chaîne de cat → root pour extraire principale et secondaire
+                chain = [cat]
                 main_category = cat
                 visited = set()  # Éviter les boucles infinies
                 while main_category.parent_id is not None and main_category.id not in visited:
@@ -489,10 +492,14 @@ def generate_bulk_cash_sessions_excel(
                         Category.id == main_category.parent_id
                     ).first()
                     if parent:
+                        chain.append(parent)
                         main_category = parent
                     else:
                         break
                 category_main_mapping[value] = main_category.name
+                # Catégorie secondaire = enfant direct du root dans la chaîne
+                # chain[0]=item, chain[-1]=root ; chain[-2] est la secondaire si len≥2
+                category_secondary_mapping[value] = chain[-2].name if len(chain) >= 2 else ''
                 # Stocker les catégories principales dans un set
                 if main_category.parent_id is None:
                     main_categories_set.add(main_category.name)
@@ -533,11 +540,14 @@ def generate_bulk_cash_sessions_excel(
                     # Ce n'est pas une catégorie principale, skip
                     continue
                 
-                # Inclure l'item avec la catégorie principale
+                secondary_category_name = category_secondary_mapping.get(category_code, '')
+
+                # Inclure l'item avec la catégorie principale et secondaire
                 row = [
                     sale_number,
                     sale_date,
                     main_category_name,
+                    secondary_category_name,
                     str(item.quantity),
                     _format_weight(item.weight),
                     _format_amount(item.unit_price),
@@ -549,10 +559,11 @@ def generate_bulk_cash_sessions_excel(
     ws_tickets.column_dimensions['A'].width = 20  # Numéro Ticket
     ws_tickets.column_dimensions['B'].width = 20  # Date Vente
     ws_tickets.column_dimensions['C'].width = 30  # Catégorie Principale
-    ws_tickets.column_dimensions['D'].width = 12  # Quantité
-    ws_tickets.column_dimensions['E'].width = 15  # Poids
-    ws_tickets.column_dimensions['F'].width = 18  # Prix Unitaire
-    ws_tickets.column_dimensions['G'].width = 18  # Prix Total
+    ws_tickets.column_dimensions['D'].width = 30  # Catégorie Secondaire
+    ws_tickets.column_dimensions['E'].width = 12  # Quantité
+    ws_tickets.column_dimensions['F'].width = 15  # Poids
+    ws_tickets.column_dimensions['G'].width = 18  # Prix Unitaire
+    ws_tickets.column_dimensions['H'].width = 18  # Prix Total
     
     # Sauvegarder dans le buffer
     wb.save(buffer)
