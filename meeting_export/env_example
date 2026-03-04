@@ -1,0 +1,9 @@
+# Meeting Transcription - Variables d'environnement
+# Copier ce fichier en .env et renseigner les valeurs.
+
+# AssemblyAI - Transcription de réunions
+# Clé API : https://www.assemblyai.com/app/api-keys
+ASSEMBLYAI_API_KEY=
+
+# Optionnel : utiliser l'API EU (défaut : false)
+# ASSEMBLYAI_USE_EU=false
