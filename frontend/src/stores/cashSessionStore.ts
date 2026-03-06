@@ -428,7 +428,7 @@ export const useCashSessionStore = create<CashSessionState>()(
                 }
                 
                 return {
-                  category: item.category,
+                  category: item.subcategory || item.category,
                   quantity: item.quantity,
                   weight: item.weight,  // Ajout du poids
                   unit_price: item.price,
