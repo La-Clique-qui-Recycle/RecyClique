@@ -135,4 +135,5 @@ test_reception_api.js
 
 # Meetings - Tout le dossier est ignoré
 meetings/
+meeting_export/
 Temp_Audio/
