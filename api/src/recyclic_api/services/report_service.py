@@ -869,11 +869,12 @@ def generate_bulk_reception_tickets_excel(
     # Recharger les tickets avec les lignes et catégories pour éviter N+1
     from recyclic_api.models.ticket_depot import TicketDepot
     from recyclic_api.models.ligne_depot import LigneDepot
+    from recyclic_api.models.category import Category
     
     ticket_ids = [ticket.id for ticket in tickets]
     tickets_with_details = db.query(TicketDepot).options(
         selectinload(TicketDepot.benevole),
-        selectinload(TicketDepot.lignes).selectinload(LigneDepot.category)
+        selectinload(TicketDepot.lignes).selectinload(LigneDepot.category).selectinload(Category.parent)
     ).filter(TicketDepot.id.in_(ticket_ids)).all()
     
     # En-têtes détails - une ligne par ligne de dépôt
@@ -888,7 +889,8 @@ def generate_bulk_reception_tickets_excel(
         'ticket_total_lignes',
         'ligne_id',
         'category_id',
-        'category_label',
+        'category_principale',
+        'category_secondaire',
         'destination',
         'poids_kg',
         'notes'
@@ -926,7 +928,8 @@ def generate_bulk_reception_tickets_excel(
                 str(total_lignes),
                 '',  # ligne_id
                 '',  # category_id
-                '',  # category_label
+                '',  # category_principale
+                '',  # category_secondaire
                 '',  # destination
                 '',  # poids_kg
                 ''   # notes
@@ -935,11 +938,19 @@ def generate_bulk_reception_tickets_excel(
         else:
             # Une ligne par ligne de dépôt
             for ligne in ticket.lignes:
-                category_label = ''
                 category_id = ''
+                category_principale = ''
+                category_secondaire = ''
                 if ligne.category:
-                    category_label = ligne.category.name or ''
                     category_id = str(ligne.category.id) if ligne.category.id else ''
+                    if ligne.category.parent_id is not None and ligne.category.parent:
+                        # La catégorie stockée est une sous-catégorie
+                        category_principale = ligne.category.parent.name or ''
+                        category_secondaire = ligne.category.name or ''
+                    else:
+                        # La catégorie stockée est déjà une racine
+                        category_principale = ligne.category.name or ''
+                        category_secondaire = ''
                 
                 destination_value = ''
                 if ligne.destination:
@@ -958,7 +969,8 @@ def generate_bulk_reception_tickets_excel(
                     str(total_lignes),
                     str(ligne.id),
                     category_id,
-                    category_label,
+                    category_principale,
+                    category_secondaire,
                     destination_value,
                     _format_weight(float(ligne.poids_kg)) if ligne.poids_kg else '',
                     notes
@@ -976,10 +988,11 @@ def generate_bulk_reception_tickets_excel(
     ws_details.column_dimensions['H'].width = 12  # ticket_total_lignes
     ws_details.column_dimensions['I'].width = 38  # ligne_id UUID
     ws_details.column_dimensions['J'].width = 38  # category_id UUID
-    ws_details.column_dimensions['K'].width = 30  # category_label
-    ws_details.column_dimensions['L'].width = 15  # destination
-    ws_details.column_dimensions['M'].width = 12  # poids_kg
-    ws_details.column_dimensions['N'].width = 40  # notes
+    ws_details.column_dimensions['K'].width = 30  # category_principale
+    ws_details.column_dimensions['L'].width = 30  # category_secondaire
+    ws_details.column_dimensions['M'].width = 15  # destination
+    ws_details.column_dimensions['N'].width = 12  # poids_kg
+    ws_details.column_dimensions['O'].width = 40  # notes
     
     # Sauvegarder dans le buffer
     wb.save(buffer)
