@@ -98,7 +98,7 @@ class ReceptionLiveStatsService:
                 weight_in = self._calculate_weight_in(site_id, threshold_24h, start_of_today)
 
                 # 7. Calculate weight sold (from sales in last 24h, exclude deferred sessions)
-                weight_out = self._calculate_weight_out(site_id, threshold_24h, start_of_today)
+                weight_out = self._calculate_weight_out(site_id, threshold_24h, start_of_today, "24h")
 
                 return {
                     "tickets_open": tickets_open,
@@ -240,22 +240,34 @@ class ReceptionLiveStatsService:
 
         return open_weight + closed_weight
 
-    def _calculate_weight_out(self, site_id: Optional[str], threshold: datetime, start_of_today: datetime) -> Decimal:
-        """Calculate total weight sold in kg from sales in the last 24 hours, plus exit lines from reception, excluding deferred sessions."""
+    def _calculate_weight_out(
+        self,
+        site_id: Optional[str],
+        threshold: datetime,
+        start_of_today: datetime,
+        period_type: Literal["24h", "daily"] = "daily",
+    ) -> Decimal:
+        """Calculate total weight sold in kg from sales in the period, plus exit lines from reception, excluding deferred sessions."""
         # Story B48-P3: weight_out = poids des ventes + poids des lignes avec is_exit=true
         
-        # 1. Calculer le poids des ventes (comportement existant)
-        poids_ventes_query = self.db.query(func.coalesce(func.sum(SaleItem.weight), 0)).join(
-            Sale, SaleItem.sale_id == Sale.id
-        ).join(
-            CashSession, Sale.cash_session_id == CashSession.id
-        ).filter(
-            and_(
-                Sale.created_at >= threshold,
-                # Exclude deferred sessions: only include sales from sessions opened today
-                CashSession.opened_at >= start_of_today
+        # 1. Calculer le poids des ventes (même logique daily/24h que _calculate_cash_stats)
+        if period_type == "daily":
+            poids_ventes_query = self.db.query(func.coalesce(func.sum(SaleItem.weight), 0)).join(
+                Sale, SaleItem.sale_id == Sale.id
+            ).join(
+                CashSession, Sale.cash_session_id == CashSession.id
+            ).filter(Sale.created_at >= threshold)
+        else:
+            poids_ventes_query = self.db.query(func.coalesce(func.sum(SaleItem.weight), 0)).join(
+                Sale, SaleItem.sale_id == Sale.id
+            ).join(
+                CashSession, Sale.cash_session_id == CashSession.id
+            ).filter(
+                and_(
+                    Sale.created_at >= threshold,
+                    CashSession.opened_at >= start_of_today
+                )
             )
-        )
         poids_ventes = Decimal(str(poids_ventes_query.scalar() or 0))
         
         # 2. Calculer le poids des sorties depuis réception (lignes avec is_exit=true)
@@ -337,7 +349,7 @@ class ReceptionLiveStatsService:
                 tickets_closed_24h = self._count_closed_tickets_24h(site_id, threshold, start_of_today)
                 items_received = self._count_items_received_24h(site_id, threshold, start_of_today)
                 weight_in = self._calculate_weight_in(site_id, threshold, start_of_today)
-                weight_out = self._calculate_weight_out(site_id, threshold, start_of_today)
+                weight_out = self._calculate_weight_out(site_id, threshold, start_of_today, period_type)
 
                 # Stats Caisse (nouvelle méthode)
                 cash_stats = self._calculate_cash_stats(site_id, threshold, start_of_today, period_type)
@@ -385,15 +397,22 @@ class ReceptionLiveStatsService:
             Dict with cash stats
         """
         # Base query for sales in period
-        sales_query = self.db.query(Sale).join(
-            CashSession, Sale.cash_session_id == CashSession.id
-        ).filter(
-            and_(
-                Sale.created_at >= threshold,
-                # Exclude deferred sessions: only include sales from sessions opened today (or in period for 24h)
-                CashSession.opened_at >= start_of_today
+        # Daily: count all sales created today (UTC). Do not require session opened today,
+        # so a session opened yesterday evening still has its today's sales counted.
+        # 24h: count sales from last 24h whose session was opened in last 24h (exclude old deferred).
+        if period_type == "daily":
+            sales_query = self.db.query(Sale).join(
+                CashSession, Sale.cash_session_id == CashSession.id
+            ).filter(Sale.created_at >= threshold)
+        else:
+            sales_query = self.db.query(Sale).join(
+                CashSession, Sale.cash_session_id == CashSession.id
+            ).filter(
+                and_(
+                    Sale.created_at >= threshold,
+                    CashSession.opened_at >= start_of_today
+                )
             )
-        )
 
         # Filter by site if provided (future multi-site support)
         # Note: Sales don't have direct site relationship, would need to join through CashSession
